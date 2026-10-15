@@ -11,3 +11,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+from app.api import health  # noqa: E402
+
+app.include_router(health.router)

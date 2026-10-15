@@ -1,0 +1,25 @@
+from functools import lru_cache
+
+from google import genai
+from google.genai import types
+
+from app.config import get_settings
+
+
+@lru_cache
+def get_client() -> genai.Client:
+    s = get_settings()
+    return genai.Client(vertexai=True, project=s.google_cloud_project, location=s.google_cloud_location)
+
+
+def generate(prompt: str, tier: str = "fast") -> str:
+    """tier 'fast' or 'pro': same model, different thinking level."""
+    s = get_settings()
+    model = s.gemini_model_pro if tier == "pro" else s.gemini_model_fast
+    level = s.gemini_thinking_pro if tier == "pro" else s.gemini_thinking_fast
+    r = get_client().models.generate_content(
+        model=model,
+        contents=prompt,
+        config=types.GenerateContentConfig(thinking_config=types.ThinkingConfig(thinking_level=level)),
+    )
+    return r.text or ""
