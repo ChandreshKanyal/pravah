@@ -132,7 +132,9 @@ def layer_images(grid: GridSpec, today: date | None = None) -> dict[str, ee.Imag
     annual_max = ee.ImageCollection.fromImages(
         [chirps.filterDate(f"{y}-01-01", f"{y + 1}-01-01").max() for y in range(2001, 2025)])
     rain = annual_max.mean().rename("rain_clim").setDefaultProjection(chirps.first().projection())
-    gfd = ee.ImageCollection(GFD_ID).select("flooded").sum().unmask(0).rename("gfd_count")
+    # GFD `flooded` includes permanent water; count only flood water (flooded and not jrc_perm_water)
+    gfd = (ee.ImageCollection(GFD_ID).map(lambda i: i.select("flooded").And(i.select("jrc_perm_water").Not()))
+           .sum().unmask(0).rename("gfd_count"))
     gsw = ee.Image(GSW_ID).select(["occurrence"], ["gsw_occ"]).unmask(0)
     hazard = resample(rain, "bilinear").addBands(gfd).addBands(resample(gsw, "bilinear"))
 

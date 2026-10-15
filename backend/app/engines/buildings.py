@@ -13,6 +13,12 @@ CLASSES = {
     "new_unplanned_low_rise": 0.80,
     "likely_pukka_multi_storey": 0.20,
     "likely_pukka_low_rise": 0.45,
+    # field-photo verified (S12/S6.3): same fragility as the matching proxy class
+    "verified_pukka_multi_storey": 0.20,
+    "verified_pukka_low_rise": 0.45,
+    "verified_kaccha": 0.80,
+    "verified_makeshift_or_hut": 1.0,
+    "verified_informal_cluster": 0.75,
 }
 
 

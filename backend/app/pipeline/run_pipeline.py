@@ -347,8 +347,17 @@ def _exposure(area: Area, p: ScenarioParams, depth: np.ndarray, lsi_dyn: np.ndar
     ph = ex_engine.per_hour(depth, lsi_dyn, rows, cols, pop_b, pop_un)
     # worst case: flood depth peaks at the last hour (envelope); landslide class can peak earlier, so take its max
     d_w, ls_w = ph["d_b"][-1], ph["ls_b"].max(axis=0)
-    R, risk, _reason = ex_engine.building_risk(d_w, b["fragility"], area.dist_stream_m[rows, cols], ls_w)
-    struct = b["structure_class"]
+    # S6.3: accepted field photos replace the proxy class and fragility (copies; the cached area stays untouched)
+    struct, frag, conf = b["structure_class"].astype(object).copy(), b["fragility"].astype(float).copy(), b["confidence"].astype(float).copy()
+    from app.api.photos import building_overrides
+    ov = building_overrides(area.aoi_id)
+    if ov:
+        from app.engines.buildings import apply_field_overrides
+        src = apply_field_overrides([str(x) for x in b["bid"]], struct, frag, conf, ov)
+        n = int((src == "field_photo").sum())
+        if n:
+            warnings.append(f"{n} building(s) use field-photo verified classes")
+    R, risk, _reason = ex_engine.building_risk(d_w, frag, area.dist_stream_m[rows, cols], ls_w)
     exposed = (d_w >= ex_engine.WET_M) | (ls_w >= 4)
     to_ll = lambda r, c: rowcol_to_lonlat(area.grid, r, c)  # noqa: E731
     cl = ex_engine.clusters(rows, cols, pop_b, R, risk, struct, d_w, exposed, depth[-1], pop_un,
@@ -363,7 +372,7 @@ def _exposure(area: Area, p: ScenarioParams, depth: np.ndarray, lsi_dyn: np.ndar
         clusters=cl,
     )
     tri = [TriageRow(**r) for r in ex_engine.triage(struct, risk, pop_b)]
-    queue = ex_engine.verification_queue(b["bid"], R, b["confidence"], pop_b, b["lon"], b["lat"], struct)
+    queue = ex_engine.verification_queue(b["bid"], R, conf, pop_b, b["lon"], b["lat"], struct)
     ctx = {"rows": rows, "cols": cols, "pop_b": pop_b, "pop_un": pop_un, "d_b": ph["d_b"], "ls_b": ph["ls_b"],
            "clusters": cl}
     return summary, tri, queue, ctx

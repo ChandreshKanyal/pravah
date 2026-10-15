@@ -39,3 +39,12 @@ def set_doc(collection: str, doc_id: str, data: dict) -> None:
 def get_doc(collection: str, doc_id: str) -> dict | None:
     snap = get_db().collection(collection).document(doc_id).get()
     return snap.to_dict() if snap.exists else None
+
+
+def query(collection: str, **equals) -> list[dict]:
+    """Documents whose fields equal the given values (simple AND of equality filters)."""
+    from google.cloud.firestore_v1.base_query import FieldFilter
+    q = get_db().collection(collection)
+    for k, v in equals.items():
+        q = q.where(filter=FieldFilter(k, "==", v))
+    return [d.to_dict() for d in q.stream()]

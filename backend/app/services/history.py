@@ -84,7 +84,13 @@ def _agreement(aoi_id: str) -> dict:
     """S11.5: share of historically flooded cells (GFD, 2000-2018) inside high flood susceptibility (FSI >= 0.6)."""
     hz = storage.load_layers(aoi_id, "hazard_hist")
     sus = storage.load_layers(aoi_id, "susceptibility")
-    gfd_any = np.nan_to_num(hz["gfd_count"]) > 0
+    from app.engines.grid import rowcol_to_lonlat
+    grid = storage.load_grid(aoi_id)
+    w, s, e, n = (fs.get_aoi(aoi_id) or {})["bbox"]
+    rr, cc = np.indices((grid.height, grid.width))
+    lon, lat = rowcol_to_lonlat(grid, rr, cc)
+    inside = (np.asarray(lon) >= w) & (np.asarray(lon) <= e) & (np.asarray(lat) >= s) & (np.asarray(lat) <= n)
+    gfd_any = (np.nan_to_num(hz["gfd_count"]) > 0) & inside  # the grid includes a 3 km buffer; badge is AOI-only
     n = int(gfd_any.sum())
     if n == 0 or "fsi" not in sus:
         return {"agreement_pct": None, "gfd_cells": n}
