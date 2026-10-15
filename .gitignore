@@ -1,0 +1,29 @@
+# python
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+# node
+node_modules/
+# env and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials*.json
+service-account*.json
+application_default_credentials.json
+# build output
+frontend/dist/
+dist/
+build/
+.firebase/
+*.log
+# os / editor
+.DS_Store
+.idea/
+.vscode/
