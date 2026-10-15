@@ -29,3 +29,14 @@ def run_layer_png(run_id: str, name: str):
     except NotFound:
         raise HTTPException(404, "Layer not found")
     return Response(data, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
+
+
+@router.get("/api/runs/{run_id}/files/{name}.geojson")
+def run_geojson(run_id: str, name: str):
+    if not (_SAFE.match(run_id) and name in ("roads", "routes")):
+        raise HTTPException(400, "Bad file name")
+    try:
+        data = storage.get_run(run_id, f"{name}.geojson")
+    except NotFound:
+        raise HTTPException(404, "File not found")
+    return Response(data, media_type="application/geo+json", headers={"Cache-Control": "public, max-age=86400"})

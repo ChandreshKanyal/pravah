@@ -10,7 +10,8 @@ log = logging.getLogger(__name__)
 
 # Public Overpass endpoints, fastest first (measured 2026-10-15: private.coffee 1.5 s, overpass-api.de 39.5 s
 # for the same small query). Each retry moves to the next endpoint.
-OVERPASS_URLS = ["https://overpass.private.coffee/api", "https://overpass-api.de/api"]
+OVERPASS_URLS = ["https://overpass.private.coffee/api", "https://overpass-api.de/api",
+                 "https://maps.mail.ru/osm/tools/overpass/api"]
 ox.settings.overpass_rate_limit = False  # the status probe stalls under load; we back off ourselves
 
 POI_TAGS = {

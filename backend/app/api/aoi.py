@@ -41,9 +41,11 @@ def static_layers(aoi_id: str):
     if not doc:
         raise HTTPException(404, "Unknown AOI")
     grid = make_grid(tuple(doc["bbox"]))
-    layers = {n: f"/api/layers/{aoi_id}/{n}.png" for n in ("hand", "streams", "fsi", "lsi_static") if storage.exists(aoi_id, f"png/{n}.png")}
+    layers = {n: f"/api/layers/{aoi_id}/{n}.png" for n in ("hand", "streams", "fsi", "lsi_static", "crowd") if storage.exists(aoi_id, f"png/{n}.png")}
     hotspots = storage.get_json(aoi_id, "hotspots.json") if storage.exists(aoi_id, "hotspots.json") else []
-    return {"aoi_id": aoi_id, "layers": layers, "hotspots": hotspots, **overlay_payload(grid)}
+    extra = {k: storage.get_json(aoi_id, f"{k}.json") if storage.exists(aoi_id, f"{k}.json") else []
+             for k in ("shelters", "medical", "crowd_hotspots")}
+    return {"aoi_id": aoi_id, "layers": layers, "hotspots": hotspots, **extra, **overlay_payload(grid)}
 
 
 @router.get("/api/aoi/{aoi_id}/flood.png")

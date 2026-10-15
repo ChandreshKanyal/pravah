@@ -21,12 +21,29 @@ class TriageRow(BaseModel):
     people: int
 
 
-class BridgeStatus(BaseModel):  # fields completed in S8
+class BridgeStatus(BaseModel):
     model_config = ConfigDict(extra="allow")
+    id: str
+    name: str
+    lon: float
+    lat: float
+    first_closed_hour: int | None  # None = stays open in this scenario
+    reason: str | None  # flood | bridge | landslide | blocked
 
 
-class ShelterResult(BaseModel):  # fields completed in S7/S8
+class ShelterResult(BaseModel):
     model_config = ConfigDict(extra="allow")
+    id: str
+    name: str
+    kind: str
+    lon: float
+    lat: float
+    capacity: int
+    assigned: int
+    spare: int
+    status: str  # usable | flooded | landslide_risk | disabled | unreachable
+    note: str = ""
+    capacity_confidence: str = "low"
 
 
 class RunResult(BaseModel):
@@ -53,4 +70,7 @@ class RunResult(BaseModel):
     hotspots: list[dict] = []  # confluences / convergence points
     advisory_id: str | None = None
     warnings: list[str] = []  # data gaps, fallbacks used
+    staging_points: list[dict] = []  # S7.8 ambulance/police/medical staging candidates
+    routes: list[dict] = []  # top routes: people, eta_min, passable_until_h, to_shelter, use_now_gone_soon
+    people_to_evacuate: int = 0
     timings_s: dict[str, float] = {}

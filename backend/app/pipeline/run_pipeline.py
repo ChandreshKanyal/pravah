@@ -20,6 +20,7 @@ from app.models.run import ExposureSummary, RunResult, TriageRow
 from app.models.scenario import RainSource, ScenarioParams
 from app.services import firestore as fs
 from app.services import storage
+from app.pipeline import evac
 
 log = logging.getLogger(__name__)
 
@@ -47,6 +48,10 @@ class Area:
     dist_stream_m: np.ndarray
     bld: dict[str, np.ndarray] | None  # building arrays from buildings_proxy.parquet
     pop_unattr: np.ndarray | None
+    lsi_class: np.ndarray | None
+    dist_road_m: np.ndarray
+    shelters: list[dict]
+    networks: dict
     src_cache: dict[float, list[dict]] = field(default_factory=dict)
 
 
@@ -73,6 +78,12 @@ def load_area(aoi_id: str) -> Area:
         dist_stream_m=h30["dist_stream_m"],
         bld=_load_buildings(aoi_id),
         pop_unattr=storage.load_layers(aoi_id, "population").get("pop_unattributed"),
+        lsi_class=sus.get("lsi_class"),
+        dist_road_m=storage.load_layers(aoi_id, "derived")["dist_road_m"],
+        shelters=storage.get_json(aoi_id, "shelters.json") if storage.exists(aoi_id, "shelters.json") else [],
+        networks={m: evac.load_network(storage.load_gdf(aoi_id, f"edges_{m}.parquet"),
+                                       storage.load_gdf(aoi_id, f"nodes_{m}.parquet"))
+                  for m in ("walk", "drive") if storage.exists(aoi_id, f"edges_{m}.parquet")},
     )
 
 
@@ -152,8 +163,12 @@ def run_pipeline(p: ScenarioParams) -> RunResult:
         warnings.append("Landslide susceptibility not prepared for this area")
 
     t2 = time.time()
-    exposure, triage_rows, queue = _exposure(area, p, depth, lsi_dyn, warnings)
+    exposure, triage_rows, queue, ctx = _exposure(area, p, depth, lsi_dyn, warnings)
     timings["exposure"] = round(time.time() - t2, 2)
+
+    t3 = time.time()
+    ev = evac.plan(area, p, depth, lsi_dyn, h, ctx, warnings) if ctx else {}
+    timings["routing"] = round(time.time() - t3, 2)
 
     t1 = time.time()
     pngs = {f"depth_h{t + 1}": to_png_binned(depth[t], DEPTH_EDGES, DEPTH_COLORS, nan_color=WATER_COLOR)
@@ -171,6 +186,10 @@ def run_pipeline(p: ScenarioParams) -> RunResult:
         if lsi_dyn is not None:
             jobs.append(ex.submit(storage.put_run, run_id, "lsi.npz", lbuf.getvalue()))
         jobs.append(ex.submit(storage.put_run, run_id, "verification.json", json.dumps(queue).encode(), "application/json"))
+        for k in ("roads", "routes"):
+            if ev.get(f"{k}_geojson"):
+                jobs.append(ex.submit(storage.put_run, run_id, f"{k}.geojson", ev[f"{k}_geojson"].encode(),
+                                      "application/geo+json"))
         for j in jobs:
             j.result()
     timings["render_upload"] = round(time.time() - t1, 2)
@@ -196,6 +215,12 @@ def run_pipeline(p: ScenarioParams) -> RunResult:
         lsi_png_url=f"/api/runs/{run_id}/layers/lsi_h{len(rain)}.png" if lsi_dyn is not None else "",
         overlay_bounds=lonlat_bounds(area.grid), overlay_corners=corner_lonlats(area.grid),
         hotspots=hotspots, warnings=warnings, exposure=exposure, triage=triage_rows,
+        shelters=ev.get("shelters", []), bridges=ev.get("bridges", []),
+        capacity_gap_people=ev.get("capacity_gap_people", 0), assembly_points=ev.get("assembly_points", []),
+        staging_points=ev.get("staging_points", []), routes=ev.get("routes_summary", []),
+        people_to_evacuate=ev.get("people_to_evacuate", 0),
+        roads_geojson_url=f"/api/runs/{run_id}/files/roads.geojson" if ev else "",
+        routes_geojson_url=f"/api/runs/{run_id}/files/routes.geojson" if ev else "",
     )
     timings["total"] = round(time.time() - t0, 2)
     result.timings_s = timings
@@ -206,11 +231,11 @@ def run_pipeline(p: ScenarioParams) -> RunResult:
 
 
 def _exposure(area: Area, p: ScenarioParams, depth: np.ndarray, lsi_dyn: np.ndarray | None,
-              warnings: list[str]) -> tuple[ExposureSummary, list[TriageRow], list[dict]]:
+              warnings: list[str]) -> tuple[ExposureSummary, list[TriageRow], list[dict], dict]:
     """S6.4-S6.9 at run time: scaled population, per-hour exposure, risk at the worst hour, triage, clusters, queue."""
     if area.bld is None or area.pop_unattr is None:
         warnings.append("Buildings not prepared for this area; exposure unavailable")
-        return ExposureSummary(), [], []
+        return ExposureSummary(), [], [], {}
     b = area.bld
     base_total = float(b["pop_base"].sum() + area.pop_unattr.sum())
     k = population.scale_factor(base_total, p.pop_multiplier, p.pop_total_override)
@@ -239,4 +264,6 @@ def _exposure(area: Area, p: ScenarioParams, depth: np.ndarray, lsi_dyn: np.ndar
     )
     tri = [TriageRow(**r) for r in ex_engine.triage(struct, risk, pop_b)]
     queue = ex_engine.verification_queue(b["bid"], R, b["confidence"], pop_b, b["lon"], b["lat"], struct)
-    return summary, tri, queue
+    ctx = {"rows": rows, "cols": cols, "pop_b": pop_b, "pop_un": pop_un, "d_b": ph["d_b"], "ls_b": ph["ls_b"],
+           "clusters": cl}
+    return summary, tri, queue, ctx

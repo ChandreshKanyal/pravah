@@ -1,5 +1,6 @@
 """S1.12: fetch, align and cache every static layer for one AOI. Idempotent: groups already in GCS are skipped."""
 import logging
+import math
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -11,9 +12,11 @@ from rasterio.transform import Affine
 from scipy.ndimage import binary_dilation, distance_transform_edt
 
 from app.config import get_settings
-from app.engines import buildings as bld, fsi as fsi_engine, hydrology as hy, landslide as ls, population, rainfall
+from app.engines import buildings as bld, crowding, fsi as fsi_engine, hydrology as hy, landslide as ls, population, rainfall
+from app.engines import roads, shelters as shel
 from app.engines.grid import lonlat_bounds, lonlat_to_rowcol, make_grid, rowcol_to_lonlat, terrain, xy_to_rowcol
 from app.engines.render import to_png, to_png_classes
+from scipy.spatial import cKDTree
 from app.models.aoi import AOI
 from app.models.grid import GridSpec
 from app.services import earth_engine as ees
@@ -215,6 +218,92 @@ def _building_proxy(aoi_id: str, grid: GridSpec, meta: dict) -> None:
                          "pop_in_buildings": round(float(pop_b.sum())), "pop_unattributed": round(float(unattr.sum()))}
 
 
+def _network(aoi: AOI, grid: GridSpec, warnings: list[str], meta: dict) -> None:
+    """S7.1-S7.6 + S9: routable edge tables, crowding grid and edge crowding, shelters and medical facilities."""
+    aoi_id = aoi.aoi_id
+    t = storage.load_layers(aoi_id, "terrain")
+    sus = storage.load_layers(aoi_id, "susceptibility")
+    lsi_class = sus.get("lsi_class")
+    hand = storage.load_layers(aoi_id, "hydro30")["hand"]
+    b = storage.load_gdf(aoi_id, "buildings_proxy.parquet")
+    pois = storage.load_gdf(aoi_id, "pois.parquet").to_crs(grid.crs)
+
+    tables = {}
+    for mode in ("walk", "drive"):
+        name = f"G_{mode}.graphml"
+        if not storage.exists(aoi_id, name):
+            warnings.append(f"No OSM {mode} network; {mode} routing unavailable")
+            continue
+        G = storage.load_graph(aoi_id, name)
+        if mode == "drive":
+            G = ox.add_edge_travel_times(ox.add_edge_speeds(G))
+        tables[mode] = roads.edge_table(ox.project_graph(G, to_crs=grid.crs), grid, mode, t["dem"], t["slope_deg"], lsi_class)
+
+    # S9 crowding grid from POI attractors + building density
+    poi_rc, attractors = [], []
+    for _, p in pois.iterrows():
+        w, label = crowding.poi_weight(p.to_dict())
+        if w > 0:
+            r, c = xy_to_rowcol(grid, p.geometry.centroid.x, p.geometry.centroid.y)
+            poi_rc.append((int(r), int(c), w))
+            attractors.append((p.geometry.centroid.x, p.geometry.centroid.y, label, shel.clean(p.get("name"))))
+    crowd, raw = crowding.crowd_grid((grid.height, grid.width), poi_rc, b["row"], b["col"], grid.cell, return_raw=True)
+    raw_max = float(raw.max()) or 1.0
+    sus_c = {"crowd": crowd}
+    storage.save_layers(aoi_id, "crowding", sus_c, grid)
+    storage.save_png(aoi_id, "crowd", to_png(np.where(crowd > 0.05, crowd, np.nan), "risk", 0, 1))
+    order = np.argsort(-raw.ravel())
+    hot: list[dict] = []
+    for f in order[:5000]:
+        r, c = divmod(int(f), grid.width)
+        x, y = grid.x0 + (c + 0.5) * grid.cell, grid.y0 - (r + 0.5) * grid.cell
+        if any(math.hypot(x - h["x"], y - h["y"]) < 300 for h in hot):
+            continue
+        near = [a for a in attractors if math.hypot(a[0] - x, a[1] - y) < 300]
+        lon, lat = rowcol_to_lonlat(grid, r, c)
+        hot.append({"id": f"X{len(hot) + 1}", "x": x, "y": y, "lon": round(float(lon), 6), "lat": round(float(lat), 6),
+                    "score": round(float(raw[r, c]) / raw_max, 3),
+                    "top_attractors": sorted({f"{a[2]}{': ' + a[3] if a[3] else ''}" for a in near})[:3]})
+        if len(hot) >= 10:
+            break
+    storage.put_json(aoi_id, "crowd_hotspots.json", [{k: v for k, v in h.items() if k not in ("x", "y")} for h in hot])
+
+    for mode, (edges, nodes) in tables.items():
+        edges["crowd_e"] = [crowding.edge_crowd(crowd, cells, n) for cells, n in zip(edges["cells"], edges["narrowness"])]
+        storage.save_gdf(aoi_id, f"edges_{mode}.parquet", edges)
+        storage.save_gdf(aoi_id, f"nodes_{mode}.parquet", nodes)
+
+    # S7.5-S7.6 shelters and medical
+    w, s, e, n = aoi.bbox
+    in_aoi = lambda d: ((d["lon"] >= w) & (d["lon"] <= e) & (d["lat"] >= s) & (d["lat"] <= n)).to_numpy()  # noqa: E731
+    sh, med = shel.from_pois(pois, b)
+    n_osm = len(sh)
+    n_proper = sum(1 for x in sh if x["kind"] != shel.WORSHIP)  # halls of worship need confirmation
+    if n_proper < shel.MIN_OSM_SHELTERS:
+        warnings.append(f"Only {n_proper} schools/community halls in OpenStreetMap here ({n_osm - n_proper} places of "
+                        "worship); added unverified large-building candidates. Add or confirm shelters with local authorities.")
+        sh += shel.candidate_large_buildings(b, hand, lsi_class, in_aoi, shel.MAX_CANDIDATES - n_proper)
+    trees = {m: (cKDTree(nodes[["x", "y"]].to_numpy()), nodes["node"].to_numpy()) for m, (_, nodes) in tables.items()}
+    out = []
+    for prefix, lst in (("S", sh), ("M", med)):
+        recs = []
+        for i, rec in enumerate(lst, start=1):
+            r, c = xy_to_rowcol(grid, rec["x"], rec["y"])
+            r, c = int(np.clip(r, 0, grid.height - 1)), int(np.clip(c, 0, grid.width - 1))
+            lon, lat = rowcol_to_lonlat(grid, r, c)
+            nodes_ = {f"node_{m}": int(ids[tr.query([rec["x"], rec["y"]])[1]]) for m, (tr, ids) in trees.items()}
+            recs.append({**rec, "id": f"{prefix}{i}", "lon": round(float(lon), 6), "lat": round(float(lat), 6),
+                         "row": r, "col": c, "hand_m": round(float(hand[r, c]), 1),
+                         "lsi_class": int(lsi_class[r, c]) if lsi_class is not None else 0,
+                         "primary": bool(w <= lon <= e and s <= lat <= n), **nodes_})
+        out.append(recs)
+    storage.put_json(aoi_id, "shelters.json", out[0])
+    storage.put_json(aoi_id, "medical.json", out[1])
+    meta["network"] = {m: {"nodes": int(len(nd)), "edges": int(len(ed)), "bridges": int(ed["bridge"].sum())}
+                       for m, (ed, nd) in tables.items()}
+    meta["shelters"] = {"osm": n_osm, "total": len(out[0]), "medical": len(out[1])}
+
+
 def _overlays(aoi_id: str) -> None:
     hand = storage.load_layers(aoi_id, "hydro30")["hand"]
     storage.save_png(aoi_id, "hand", to_png(np.where(hand <= 20, hand, np.nan), "hand", 0, 20))
@@ -280,6 +369,10 @@ def prepare_area(aoi: AOI) -> dict:
         status["building_proxy"] = "ready"
     elif status.get("buildings") == "ready" and status.get("population") == "ready":
         run("building_proxy", _building_proxy, aoi_id, grid, meta)
+    if storage.exists(aoi_id, "shelters.json"):
+        status["network"] = "ready"
+    elif status.get("building_proxy") == "ready" and status.get("osm") == "ready":
+        run("network", _network, aoi, grid, warnings, meta)
     # Later stages hook in here:, S5 LSI static, S6.1-S6.3, S7.1-S7.6, S9 crowding.
 
     secs = round(time.time() - t0, 1)
