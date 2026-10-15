@@ -18,3 +18,4 @@ networkx
 pillow
 httpx
 pytest
+pyarrow
