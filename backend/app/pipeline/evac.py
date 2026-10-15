@@ -147,7 +147,9 @@ def plan(area, p: ScenarioParams, depth: np.ndarray, lsi_dyn: np.ndarray | None,
         until = None if fc >= routing.NEVER else fc
         geom = _path_geom(net, eidx, node)
         travel_s = float(sum(tt[e] for e in eidx))
-        routes.append({"from_node": int(node), "to_shelter": sid, "people": int(people),
+        nrow = net.nodes.loc[net.nodes["node"] == node].iloc[0]
+        routes.append({"from_node": int(node), "from_lon": round(float(nrow["lon"]), 6),
+                       "from_lat": round(float(nrow["lat"]), 6), "to_shelter": sid, "people": int(people),
                        "eta_min": round((travel_s + access_s.get(node, 0.0)) / 60, 1),
                        "access_min": round(access_s.get(node, 0.0) / 60, 1),
                        "length_km": round(float(sum(E.at[e, "length_m"] for e in eidx)) / 1000, 2),
@@ -193,7 +195,8 @@ def plan(area, p: ScenarioParams, depth: np.ndarray, lsi_dyn: np.ndarray | None,
     roads_fc = {"type": "FeatureCollection", "features": [
         {"type": "Feature", "geometry": mapping(g), "properties": {
             "first_closed_hour": None if first[i] >= routing.NEVER else int(first[i]), "reason": reason[i] or None,
-            "bridge": bool(E.at[i, "bridge"]), "name": E.at[i, "name"], "highway": E.at[i, "highway"]}}
+            "bridge": bool(E.at[i, "bridge"]), "name": E.at[i, "name"], "highway": E.at[i, "highway"],
+            "length_m": round(float(E.at[i, "length_m"]), 1), "lsi_max": int(edge_lsi[i].max()) if H else 0}}
         for i, g in enumerate(net.edges_ll.geometry)]}
     routes_fc = {"type": "FeatureCollection", "features": [
         {"type": "Feature", "geometry": r.pop("geometry"), "properties": r} for r in routes]}
@@ -260,7 +263,7 @@ def _staging(area, p, depth, clusters, first, net: Network, top: int = 5) -> lis
             continue
         used.add(i)
         lon, lat = rowcol_to_lonlat(grid, pts[i][0], pts[i][1])
-        out.append({"id": f"P{len(out) + 1}", "lon": round(float(lon), 6), "lat": round(float(lat), 6),
+        out.append({"id": f"G{len(out) + 1}", "lon": round(float(lon), 6), "lat": round(float(lat), 6),
                     "near_cluster": cl.get("id"), "reason": "ambulance/police/medical staging"})
         if len(out) >= top:
             break
