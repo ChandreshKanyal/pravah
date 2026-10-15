@@ -82,3 +82,14 @@ def terrain(dem: np.ndarray, cell: float) -> dict[str, np.ndarray]:
     d2y = np.gradient(np.gradient(dem, axis=0), axis=0) / cell**2
     curv = -100 * (d2x + d2y)
     return {"slope_deg": slope.astype(np.float32), "aspect_deg": aspect.astype(np.float32), "curv": curv.astype(np.float32)}
+
+
+def terrain_coarse(dem: np.ndarray, cell: float, factor: int = 3) -> dict[str, np.ndarray]:
+    """terrain() computed on a DEM block-averaged by `factor` (e.g. 30 m -> 90 m), repeated back to the input shape.
+    Slope, aspect and curvature are scale dependent; the landslide model is trained at 90 m, so the AOI must match."""
+    h, w = dem.shape
+    H, W = -(-h // factor) * factor, -(-w // factor) * factor
+    d = np.pad(np.asarray(dem, np.float64), ((0, H - h), (0, W - w)), mode="edge")
+    coarse = np.nanmean(d.reshape(H // factor, factor, W // factor, factor), axis=(1, 3))
+    t = terrain(coarse, cell * factor)
+    return {k: np.repeat(np.repeat(v, factor, 0), factor, 1)[:h, :w] for k, v in t.items()}

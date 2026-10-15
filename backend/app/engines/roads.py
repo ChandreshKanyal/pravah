@@ -61,6 +61,33 @@ def sample_cells(geom: LineString, grid: GridSpec) -> list[int]:
     return list(dict.fromkeys(int(f) for f in flat))
 
 
+def tobler_time_s(geom: LineString, grid: GridSpec, dem: np.ndarray, start_xy: tuple[float, float],
+                  length_m: float) -> float:
+    """Walking time along the line, Tobler speed per ~30 m segment from DEM samples (captures climbs and descents
+    that cancel out between the end nodes). The geometry is oriented to start at `start_xy`; time is scaled to the
+    OSM length."""
+    L = geom.length
+    if L <= 0:
+        return length_m / (float(tobler_kmh(0.0)) / 3.6)
+    c0 = geom.coords[0]
+    if math.hypot(c0[0] - start_xy[0], c0[1] - start_xy[1]) > math.hypot(geom.coords[-1][0] - start_xy[0],
+                                                                         geom.coords[-1][1] - start_xy[1]):
+        geom = LineString(list(geom.coords)[::-1])
+    d = np.append(np.arange(0, L, SAMPLE_M), L)
+    pts = [geom.interpolate(x) for x in d]
+    r, c = xy_to_rowcol(grid, [p.x for p in pts], [p.y for p in pts])
+    r = np.clip(r, 0, grid.height - 1)
+    c = np.clip(c, 0, grid.width - 1)
+    z = np.asarray(dem, dtype=float)[r, c]
+    seg = np.diff(d)
+    ok = seg > 0
+    if not ok.any():
+        return length_m / (float(tobler_kmh(0.0)) / 3.6)
+    dz = np.nan_to_num(np.diff(z))
+    t = float(np.sum(seg[ok] / (tobler_kmh(dz[ok] / seg[ok]) / 3.6)))
+    return t * (length_m / L)
+
+
 def edge_table(G: nx.MultiDiGraph, grid: GridSpec, mode: str, dem: np.ndarray, slope_deg: np.ndarray,
                lsi_class: np.ndarray | None) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
     """G must be projected to the grid CRS; for drive it must carry `travel_time` (OSMnx). Returns (edges, nodes)."""
@@ -78,9 +105,7 @@ def edge_table(G: nx.MultiDiGraph, grid: GridSpec, mode: str, dem: np.ndarray, s
         cells = sample_cells(geom, grid)
         length = float(d.get("length", geom.length)) or geom.length or 1.0
         if mode == "walk":
-            dz = z[v] - z[u]
-            tan = dz / length if np.isfinite(dz) else 0.0
-            t0 = length / (float(tobler_kmh(tan)) / 3.6)
+            t0 = tobler_time_s(geom, grid, dem, nodes[u], length)
         else:
             t0 = float(d.get("travel_time", length / (30 / 3.6)))
         rows.append({

@@ -39,6 +39,12 @@ class Settings(BaseSettings):
     lsi_demand_class: int = 5  # buildings/grid people at or above this class need evacuation (spec: 4)
     lsi_shelter_max_class: int = 4  # shelters above this class are ruled out (spec: 3)
     lsi_close_share: float = 0.2  # road closes when this share of its length is class 5 (spec: any cell)
+    # Rainfall I-D threshold for landslide modulation: "auto" = Dahal & Hasegawa (2008) in the Himalayan arc,
+    # Caine (1980) elsewhere; or force "caine" / "dahal_hasegawa" (spec: Caine everywhere)
+    lsi_threshold: str = "auto"
+    # "class_shift": +-1 class by threshold exceedance (17 Oct); "graded_g": score x g (16 Oct); spec: score x clip(R)
+    lsi_modulation: str = "class_shift"
+    apply_arf: bool = True  # TP-29 areal reduction of point rain in the rational method (spec: none)
     cors_origins: str = "http://localhost:5173,http://localhost:4173"
 
 

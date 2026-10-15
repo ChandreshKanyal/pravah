@@ -64,18 +64,21 @@ def plan(area, p: ScenarioParams, depth: np.ndarray, lsi_dyn: np.ndarray | None,
 
     # S8.3 demand: exposed buildings + exposed unattributed grid people, snapped to nodes
     demand_f: dict = {}
+    access_pm: dict = {}  # people x metres from the home cell to the snapped node (access walk)
     rows, cols, pop_b = exposure_ctx["rows"], exposure_ctx["cols"], exposure_ctx["pop_b"]
     cfg = get_settings()
     ex_b = (exposure_ctx["d_b"] >= routing_wet()).any(axis=0) | (exposure_ctx["ls_b"] >= cfg.lsi_demand_class).any(axis=0)
-    watch = int(((exposure_ctx["ls_b"] >= 4).any(axis=0) & ~ex_b).sum())
+    sus = exposure_ctx.get("ls_b_sus", exposure_ctx["ls_b"])  # uncapped susceptibility classes
+    watch = int(((sus >= 4).any(axis=0) & ~ex_b).sum())
     if watch:
-        warnings.append(f"{watch} buildings reach landslide susceptibility class 4 in this scenario: monitor slopes and "
-                        "be ready to move people (not counted as evacuation demand)")
+        warnings.append(f"{watch} buildings sit on landslide susceptibility class 4-5 slopes in this scenario: monitor "
+                        "slopes and be ready to move people (not counted as evacuation demand)")
     if ex_b.any():
         xs, ys = _cell_xy(grid, rows[ex_b], cols[ex_b])
-        _, idx = net.tree.query(np.column_stack([xs, ys]))
-        for node, people in zip(net.node_ids[idx], pop_b[ex_b]):
+        dist, idx = net.tree.query(np.column_stack([xs, ys]))
+        for node, people, dm in zip(net.node_ids[idx], pop_b[ex_b], dist):
             demand_f[node] = demand_f.get(node, 0.0) + float(people)
+            access_pm[node] = access_pm.get(node, 0.0) + float(people) * float(dm)
     pop_un = exposure_ctx["pop_un"]
     wet_un = (np.nan_to_num(depth).max(axis=0) >= routing_wet())
     if lsi_dyn is not None:
@@ -83,10 +86,16 @@ def plan(area, p: ScenarioParams, depth: np.ndarray, lsi_dyn: np.ndarray | None,
     rr, cc = np.nonzero(wet_un & (pop_un > 0))
     if len(rr):
         xs, ys = _cell_xy(grid, rr, cc)
-        _, idx = net.tree.query(np.column_stack([xs, ys]))
-        for node, people in zip(net.node_ids[idx], pop_un[rr, cc]):
+        dist, idx = net.tree.query(np.column_stack([xs, ys]))
+        for node, people, dm in zip(net.node_ids[idx], pop_un[rr, cc], dist):
             demand_f[node] = demand_f.get(node, 0.0) + float(people)
+            access_pm[node] = access_pm.get(node, 0.0) + float(people) * float(dm)
     demand = {n: int(math.ceil(v)) for n, v in demand_f.items() if v >= 0.5}
+    # mean access walk per node (straight line x 1.3 detour factor, flat Tobler speed)
+    access_s = {n: 1.3 * access_pm.get(n, 0.0) / max(demand_f[n], 1e-9) / (routing.WALK_FLAT_KMH / 3.6) for n in demand}
+    # actual travel time per edge: free-flow time slowed by crowding; the landslide/slope factors in `w` are risk
+    # aversion for choosing routes, not time, so ETAs leave them out
+    tt = E["t0_s"].to_numpy() * (1 + 0.3 * E["crowd_e"].to_numpy())
 
     # S8.4 supply: shelters (minus disabled, plus extra) and assembly points
     max_depth = depth.max(axis=0)  # NaN where permanent water
@@ -137,8 +146,12 @@ def plan(area, p: ScenarioParams, depth: np.ndarray, lsi_dyn: np.ndarray | None,
         fc = int(min((first[e] for e in eidx), default=routing.NEVER))
         until = None if fc >= routing.NEVER else fc
         geom = _path_geom(net, eidx, node)
+        travel_s = float(sum(tt[e] for e in eidx))
         routes.append({"from_node": int(node), "to_shelter": sid, "people": int(people),
-                       "eta_min": round(times[sid][node] / 60, 1), "passable_until_h": until,
+                       "eta_min": round((travel_s + access_s.get(node, 0.0)) / 60, 1),
+                       "access_min": round(access_s.get(node, 0.0) / 60, 1),
+                       "length_km": round(float(sum(E.at[e, "length_m"] for e in eidx)) / 1000, 2),
+                       "passable_until_h": until,
                        "use_now_gone_soon": until is not None and until <= p.evac_start_hour + 2, "geometry": geom})
     routes.sort(key=lambda r: -r["people"])
     if gap > 0:

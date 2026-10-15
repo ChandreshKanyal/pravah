@@ -52,7 +52,7 @@ class Area:
     dist_road_m: np.ndarray
     shelters: list[dict]
     networks: dict
-    src_cache: dict[float, list[dict]] = field(default_factory=dict)
+    src_cache: dict = field(default_factory=dict)  # SRC tables by Manning's n, plus the flow path
 
 
 @lru_cache(maxsize=4)
@@ -111,7 +111,10 @@ def get_src(area: Area, n: float) -> list[dict]:
 
 
 def reach_params(area: Area, c_table: list[float]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """C_reach (mean C over hydro cells upstream of the reach end), tc_h and A_loc per reach."""
+    """C_reach (mean C over hydro cells upstream of the reach end), tc_h and A_loc per reach.
+
+    NOTE(spec-drift): tc uses Kirpich on the DEM longest flow path inside the grid with S = relief / L (Kirpich's own
+    definition) instead of Hack's length with the 2 km reach slope; Hack is the fallback for one-cell paths."""
     hg = area.hgrid
     rows, cols = np.indices((hg.height, hg.width))
     lon = hg.lon0 + (cols.ravel() + 0.5) * hg.cell_deg
@@ -129,8 +132,11 @@ def reach_params(area: Area, c_table: list[float]) -> tuple[np.ndarray, np.ndarr
     last = np.array([r["cells"][-1] for r in area.reaches])
     C = np.where(acc_n[last] > 0, acc_c[last] / np.maximum(acc_n[last], 1), grid_mean)
     A_loc = np.array([r["A_loc_km2"] for r in area.reaches])
-    S = np.array([r["S"] for r in area.reaches])
-    return np.clip(C, 0.10, 0.95), rainfall.tc_hours(A_loc, S), A_loc
+    if "flow_path" not in area.src_cache:
+        area.src_cache["flow_path"] = hy.flow_path(down, hg, area.native["elv"])
+    L, head = area.src_cache["flow_path"]
+    z = np.nan_to_num(area.native["elv"].ravel().astype(float))
+    return np.clip(C, 0.10, 0.95), rainfall.tc_hours_path(L[last], head[last] - z[last], A_loc), A_loc
 
 
 def area_centroid(area: Area) -> tuple[float, float]:
@@ -176,8 +182,12 @@ def rain_series(p: ScenarioParams, area: Area) -> tuple[list[float], str, list[s
     elif src == RainSource.historical_extreme:
         try:
             mm = historical_max_mm(area)
-            series = rainfall.distribute_total(mm, H, p.hyetograph)
-            return series, f"Historical extreme: {mm:.0f} mm/day (CHIRPS 2001-2024 max within 5 km) over {H} h", warnings
+            # NOTE(spec-drift): the spec spread the whole daily maximum over H hours (201 mm in 4 h = 50 mm/h);
+            # the wettest H hours of that day follow the IMD reduction formula P_H = P_24 (H/24)^(1/3).
+            depth = rainfall.daily_to_duration_mm(mm, H)
+            series = rainfall.distribute_total(depth, H, p.hyetograph)
+            return series, (f"Historical extreme: wettest {H} h of a {mm:.0f} mm day (CHIRPS 2001-2024 max within 5 km; "
+                            f"{depth:.0f} mm by the IMD 1/3 rule)"), warnings
         except Exception as e:
             warnings.append(f"Historical extreme unavailable ({e.__class__.__name__}); used manual rain instead")
     series = rainfall.manual_series(p.manual_intensity_mm_h, H, p.hyetograph)
@@ -193,7 +203,7 @@ def screening(area: Area, daily: list[dict], hourly: list[dict], duration_h: int
     out = []
     for d in daily:
         win, _ = rainfall.wettest_window(rainfall.day_hours(hourly, d["date"]), duration_h)
-        h, _ = flood.hourly_envelope(win, tc_h[r:r + 1], C[r:r + 1], A_loc[r:r + 1], src)
+        h, _ = flood.hourly_envelope(win, tc_h[r:r + 1], C[r:r + 1], A_loc[r:r + 1], src, arf=get_settings().apply_arf)
         stage = float(h.max())
         badge = "high" if stage >= 3 else "elevated" if stage >= 1 else "low"
         out.append({"date": d["date"], "precip_mm": d["precip_mm"], "max_stage_m": round(stage, 2), "badge": badge})
@@ -206,26 +216,55 @@ def run_pipeline(p: ScenarioParams) -> RunResult:
     area = load_area(p.aoi_id)
     run_id = uuid.uuid4().hex[:12]
 
+    cfg = get_settings()
     rain, rain_label, warnings = rain_series(p, area)
-    C, tc_h, A_loc = reach_params(area, get_settings().runoff_c)
-    h, _Q = flood.hourly_envelope(rain, tc_h, C, A_loc, get_src(area, p.manning_n), p.river_offset_m)
+    C, tc_h, A_loc = reach_params(area, cfg.runoff_c)
+    h, _Q = flood.hourly_envelope(rain, tc_h, C, A_loc, get_src(area, p.manning_n), p.river_offset_m, arf=cfg.apply_arf)
+    if np.any(h >= hy.SRC_STAGES[-1] + p.river_offset_m - 1e-6):
+        warnings.append("Some reaches reach the top of their rating curve (30 m); depths there are capped")
     depth = flood.depth_stack(h, area.reach_id_30, area.hand, area.perm)
     timings["flood"] = round(time.time() - t0, 2)
 
+    lon_c, lat_c = area_centroid(area)
+    thr = rainfall.threshold_name(cfg.lsi_threshold, lon_c, lat_c)
+    methods = {
+        "runoff": "rational method, C by land cover, A = local catchment area"
+                  + (", TP-29 areal reduction (Leclerc & Schaake 1972)" if cfg.apply_arf else ""),
+        "tc": "Kirpich (1940) on the DEM longest flow path, S = relief / length",
+        "stage": "HAND synthetic rating curves (Zheng et al. 2018), worst-case envelope (no recession)",
+        "landslide_threshold": rainfall.LANDSLIDE_THRESHOLDS[thr][2],
+        "landslide_modulation": {"class_shift": "static class -1 below the threshold, +1 at twice it; decisions only in "
+                                                "hours above the threshold (LHASA-style)",
+                                 "graded_g": "score x clip(1 + 0.25 log2 R, 0.75, 1.25)"}.get(cfg.lsi_modulation, cfg.lsi_modulation),
+        "landslide_exceedance_max": None,
+        "damage": "JRC global depth-damage curve, Asia residential (Huizinga et al. 2017)",
+    }
     lsi_dyn = None  # S5.6: rainfall-modulated susceptibility classes per hour
     if area.lsi_static is not None:
-        cfg = get_settings()
         lsi_dyn = ls.lsi_dynamic_classes(area.lsi_static, area.lsi_edges, rain, area.slope_deg, g_slope=cfg.lsi_g_slope,
-                                         g_min=cfg.lsi_g_min, g_max=cfg.lsi_g_max)
+                                         g_min=cfg.lsi_g_min, g_max=cfg.lsi_g_max, threshold=thr,
+                                         mode=cfg.lsi_modulation)
+        R = ls.exceedance(rain, thr)
+        trig = R >= 1.0
+        methods["landslide_exceedance_max"] = round(float(R.max()), 2)
+        methods["landslide_trigger_hours"] = [int(t + 1) for t in np.flatnonzero(trig)]
+        lsi_act = ls.actionable(lsi_dyn, trig)
+        if not trig.any():
+            warnings.append(f"Rain stays below the landslide trigger threshold ({rainfall.LANDSLIDE_THRESHOLDS[thr][2]}; "
+                            f"peak {R.max():.0%} of it): slopes are shown as susceptibility only, no landslide closures "
+                            "or evacuations")
     else:
+        lsi_act = None
         warnings.append("Landslide susceptibility not prepared for this area")
 
     t2 = time.time()
-    exposure, triage_rows, queue, ctx = _exposure(area, p, depth, lsi_dyn, warnings)
+    exposure, triage_rows, queue, ctx = _exposure(area, p, depth, lsi_act, warnings)
+    if ctx and lsi_dyn is not None:
+        ctx["ls_b_sus"] = lsi_dyn[:, ctx["rows"], ctx["cols"]]
     timings["exposure"] = round(time.time() - t2, 2)
 
     t3 = time.time()
-    ev = evac.plan(area, p, depth, lsi_dyn, h, ctx, warnings) if ctx else {}
+    ev = evac.plan(area, p, depth, lsi_act, h, ctx, warnings) if ctx else {}
     timings["routing"] = round(time.time() - t3, 2)
 
     t1 = time.time()
@@ -282,6 +321,7 @@ def run_pipeline(p: ScenarioParams) -> RunResult:
     )
     timings["total"] = round(time.time() - t0, 2)
     result.timings_s = timings
+    result.methods = methods
     fs.set_doc("runs", run_id, result.model_dump(mode="json"))
     fs.update_aoi(p.aoi_id, {"latest_run_id": run_id})
     log.info("run %s: %s", run_id, timings)
@@ -305,13 +345,15 @@ def _exposure(area: Area, p: ScenarioParams, depth: np.ndarray, lsi_dyn: np.ndar
     rows = np.clip(b["row"].astype(int), 0, area.grid.height - 1)
     cols = np.clip(b["col"].astype(int), 0, area.grid.width - 1)
     ph = ex_engine.per_hour(depth, lsi_dyn, rows, cols, pop_b, pop_un)
-    d_w, ls_w = ph["d_b"][-1], ph["ls_b"][-1]
+    # worst case: flood depth peaks at the last hour (envelope); landslide class can peak earlier, so take its max
+    d_w, ls_w = ph["d_b"][-1], ph["ls_b"].max(axis=0)
     R, risk, _reason = ex_engine.building_risk(d_w, b["fragility"], area.dist_stream_m[rows, cols], ls_w)
     struct = b["structure_class"]
     exposed = (d_w >= ex_engine.WET_M) | (ls_w >= 4)
     to_ll = lambda r, c: rowcol_to_lonlat(area.grid, r, c)  # noqa: E731
     cl = ex_engine.clusters(rows, cols, pop_b, R, risk, struct, d_w, exposed, depth[-1], pop_un,
-                            block=10, to_lonlat=to_ll)
+                            block=10, to_lonlat=to_ll, dist_stream_m=area.dist_stream_m,
+                            ls_worst=lsi_dyn.max(axis=0) if lsi_dyn is not None else None)
     summary = ExposureSummary(
         total_pop=int(round(pop_b.sum() + pop_un.sum())),
         exposed_pop_by_hour=ph["exposed_pop_by_hour"],

@@ -35,9 +35,58 @@ def tc_hours(A_loc_km2, S):
     return kirpich_tc_min(L_m, np.clip(S, 0.005, 0.5)) / 60
 
 
+def tc_hours_path(L_m, relief_m, A_loc_km2):
+    """Kirpich tc (h) on the DEM longest flow path L with S = relief / L (Kirpich's definition), slope clamped to
+    [0.005, 0.5]. Falls back to Hack's length and S = 0.005 where the path is shorter than one cell."""
+    L = np.asarray(L_m, dtype=float)
+    hack = 1000 * hack_length_km(A_loc_km2)
+    short = L < 90
+    L = np.where(short, hack, L)
+    S = np.where(short, 0.005, np.asarray(relief_m, dtype=float) / np.maximum(L, 1.0))
+    return kirpich_tc_min(L, np.clip(S, 0.005, 0.5)) / 60
+
+
+def areal_reduction_factor(A_km2, D_h):
+    """Point-to-areal rainfall factor, US Weather Bureau TP-29 curves as fitted by Leclerc & Schaake (1972):
+    ARF = 1 - exp(-1.1 D^0.25) + exp(-1.1 D^0.25 - 0.01 A_mi2). A in km2, D in hours (TP-29 range: <= 1000 km2, <= 24 h)."""
+    A_mi2 = np.asarray(A_km2, dtype=float) * 0.386102
+    k = 1.1 * np.maximum(np.asarray(D_h, dtype=float), 0.5) ** 0.25
+    return np.clip(1 - np.exp(-k) + np.exp(-k - 0.01 * A_mi2), 0.0, 1.0)
+
+
+def daily_to_duration_mm(p24_mm: float, duration_h: int) -> float:
+    """Depth (mm) in the wettest `duration_h` hours of a day with total p24, by the IMD empirical reduction
+    formula P_t = P_24 * (t / 24)^(1/3), used in Indian practice to derive short-duration rain from daily data."""
+    t = min(max(1, int(duration_h)), 24)
+    return float(p24_mm) * (t / 24) ** (1 / 3)
+
+
+# Rainfall intensity-duration landslide thresholds I = a * D^b (I mm/h, D h)
+LANDSLIDE_THRESHOLDS = {
+    "caine": (14.82, -0.39, "Caine (1980), global"),
+    "dahal_hasegawa": (73.90, -0.79, "Dahal & Hasegawa (2008), Nepal Himalaya"),
+}
+
+
+def himalayan(lon: float, lat: float) -> bool:
+    """Rough box for the Himalayan arc (Kashmir to Arunachal), where the regional threshold applies."""
+    return 26.5 <= lat <= 36.5 and 72.5 <= lon <= 97.5
+
+
+def threshold_name(setting: str, lon: float, lat: float) -> str:
+    if setting in LANDSLIDE_THRESHOLDS:
+        return setting
+    return "dahal_hasegawa" if himalayan(lon, lat) else "caine"
+
+
+def landslide_threshold(D_h, name: str = "caine"):
+    a, b, _ = LANDSLIDE_THRESHOLDS[name]
+    return a * np.asarray(D_h, dtype=float) ** b
+
+
 def caine_threshold(D_h):
     """Caine (1980) global rainfall intensity-duration landslide threshold (mm/h)."""
-    return 14.82 * np.asarray(D_h, dtype=float) ** -0.39
+    return landslide_threshold(D_h, "caine")
 
 
 def distribute_total(total_mm: float, duration_h: int, hyetograph: str = "constant") -> list[float]:

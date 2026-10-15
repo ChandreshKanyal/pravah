@@ -3,7 +3,7 @@ import pytest
 
 from app.engines.ahp import ahp_weights
 from app.engines.fr import fr_ratings, frequency_ratio
-from app.engines.landslide import (EXPERT, LSI_MATRIX, aspect_class, learn_ratings, lsi_dynamic_classes,
+from app.engines.landslide import (EXPERT, LSI_MATRIX, aspect_class, learn_ratings, lsi_dynamic_classes, actionable,
                                    rain_modulation)
 
 
@@ -43,6 +43,18 @@ def test_dynamic_classes_shift():
     lsi = np.full((2, 2), 0.5, np.float32)
     edges = [0.3, 0.4, 0.5, 0.6]  # static 0.5 -> class 4
     slope = np.full((2, 2), 30.0)
-    low = lsi_dynamic_classes(lsi, edges, [10], slope)[0, 0, 0]
-    high = lsi_dynamic_classes(lsi, edges, [60] * 4, slope)[-1, 0, 0]
-    assert low < 4 < high
+    for thr in ("caine", "dahal_hasegawa"):  # spec S5 acceptance: 10 mm/h x 1 h lowers, 60 mm/h x 4 h raises
+        low = lsi_dynamic_classes(lsi, edges, [10], slope, threshold=thr)[0, 0, 0]
+        high = lsi_dynamic_classes(lsi, edges, [60] * 4, slope, threshold=thr)[-1, 0, 0]
+        assert low == 3 and high == 5
+        g = lsi_dynamic_classes(lsi, edges, [60] * 4, slope, mode="graded_g", threshold=thr)[-1, 0, 0]
+        assert g == 5
+    # between 1x and 2x the threshold the static class holds; flat ground stays class 1
+    mid = lsi_dynamic_classes(lsi, edges, [12] * 4, np.array([[30.0, 2.0], [30.0, 30.0]]))[-1]
+    assert mid[0, 0] == 4 and mid[0, 1] == 1
+
+
+def test_actionable_caps_untriggered_hours():
+    dyn = np.array([[[5]], [[5]]], np.uint8)
+    act = actionable(dyn, np.array([False, True]))
+    assert act[0, 0, 0] == 3 and act[1, 0, 0] == 5

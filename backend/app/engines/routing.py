@@ -7,6 +7,7 @@ from scipy import ndimage
 
 NEVER = 10**6  # first_closed_hour sentinel
 OVERFLOW_COST = 10_000_000
+WALK_FLAT_KMH = 6 * math.exp(-3.5 * 0.05)  # Tobler on flat ground, 5.04 km/h
 
 
 def edge_states(cells: list[list[int]], bridge: np.ndarray, blocked: np.ndarray, depth: np.ndarray,

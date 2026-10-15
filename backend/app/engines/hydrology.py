@@ -88,6 +88,41 @@ def accumulate(downstream: np.ndarray, weights: np.ndarray) -> np.ndarray:
     return acc
 
 
+def step_lengths(downstream: np.ndarray, grid: HydroGrid) -> np.ndarray:
+    """Distance (m) from each cell to its downstream neighbour (0 where there is none)."""
+    i = np.arange(downstream.size)
+    j = np.where(downstream >= 0, downstream, i)
+    dr = np.abs(j // grid.width - i // grid.width)
+    dc = np.abs(j % grid.width - i % grid.width)
+    return np.where((dr > 0) & (dc > 0), math.hypot(grid.dx, grid.dy),
+                    np.where(dr > 0, grid.dy, np.where(dc > 0, grid.dx, 0.0)))
+
+
+def flow_path(downstream: np.ndarray, grid: HydroGrid, elv: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Longest flow path inside the grid ending at each cell: (length m, elevation of its head cell).
+
+    Kirpich (1940) defines tc on the longest flow path L and its mean slope S = (z_head - z_outlet) / L.
+    """
+    n = downstream.size
+    step = step_lengths(downstream, grid)
+    z = np.nan_to_num(np.asarray(elv, np.float64).ravel())
+    L = np.zeros(n)
+    head = z.copy()
+    indeg = np.bincount(downstream[downstream >= 0], minlength=n)
+    q = deque(np.flatnonzero(indeg == 0).tolist())
+    while q:
+        i = q.popleft()
+        j = downstream[i]
+        if j >= 0:
+            cand = L[i] + step[i]
+            if cand > L[j]:
+                L[j], head[j] = cand, head[i]
+            indeg[j] -= 1
+            if indeg[j] == 0:
+                q.append(j)
+    return L, head
+
+
 def drain_cells(stream: np.ndarray, downstream: np.ndarray, max_iter: int = 20000) -> np.ndarray:
     """First stream cell reached by following downstream (flat index), -1 if none."""
     s = stream.ravel()
@@ -202,6 +237,8 @@ def src_tables(hand: np.ndarray, catch_reach: np.ndarray, slope: np.ndarray, rea
 
 def src_stage(table: dict, Q: float) -> float:
     """Stage (m) for discharge Q from a reach's SRC table, clipped to [0, 30]."""
+    if not Q > 0:
+        return 0.0
     q = np.asarray(table["Q"])
     h = np.asarray(table["h"])
     # flat leading section: interp needs strictly increasing xp to be meaningful; use the last h at each Q

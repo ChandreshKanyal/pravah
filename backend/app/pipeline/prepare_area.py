@@ -14,7 +14,7 @@ from scipy.ndimage import binary_dilation, distance_transform_edt
 from app.config import get_settings
 from app.engines import buildings as bld, crowding, fsi as fsi_engine, hydrology as hy, landslide as ls, population, rainfall
 from app.engines import roads, shelters as shel
-from app.engines.grid import lonlat_bounds, lonlat_to_rowcol, make_grid, rowcol_to_lonlat, terrain, xy_to_rowcol
+from app.engines.grid import lonlat_bounds, lonlat_to_rowcol, make_grid, rowcol_to_lonlat, terrain, terrain_coarse, xy_to_rowcol
 from app.engines.render import to_png, to_png_classes
 from scipy.spatial import cKDTree
 from app.models.aoi import AOI
@@ -165,25 +165,32 @@ def _lsi(aoi: AOI, grid: GridSpec, warnings: list[str], meta: dict) -> None:
     t_stream = np.nan_to_num(T["upa"]) >= cfg.stream_upa_km2
     pts = ees.fetch_landslides(tg, cfg.landslide_max_accuracy_km)
     slides = np.zeros((tg.height, tg.width), bool)
+    n_in = 0
     if pts:
         r, c = lonlat_to_rowcol(tg, [p[0] for p in pts], [p[1] for p in pts])
         ok = (r >= 0) & (r < tg.height) & (c >= 0) & (c < tg.width)
         slides[r[ok], c[ok]] = True
         slides = binary_dilation(slides)  # 1-cell buffer
+        n_in = int(ok.sum())
     rain_edges = ls.rain_quintile_edges(T["rain_clim"])
-    # NOTE: no OSM roads for the 100 km training box; road uses expert ratings and the mean rating in training.
+    # Training-box roads come from GRIP4 (global, major roads); the AOI uses OSM drivable roads. Before 17 Oct the
+    # training road factor was a constant mean rating, which mis-calibrated the AOI near roads.
     t_layers = {**t_terr, "ndvi": T["ndvi"], "soil_clay": T["soil_clay"], "rain_clim": T["rain_clim"],
-                "dist_stream_m": _distance_m(t_stream, tg.cell), "dist_road_m": np.full(slides.shape, np.nan)}
+                "dist_stream_m": _distance_m(t_stream, tg.cell), "dist_road_m": T["dist_road_m"]}
     t_cls = ls.classify(t_layers, rain_edges)
-    ratings, n = ls.learn_ratings(t_cls, slides, [f for f in ls.LSI_FACTORS if f != "road"], n_points=len(pts))
+    ratings, n = ls.learn_ratings(t_cls, slides, ls.LSI_FACTORS, n_points=n_in)
     method = "frequency_ratio" if n >= ls.MIN_SLIDES else "expert"
     if method == "expert":
         warnings.append(f"Only {n} landslide records located to within {cfg.landslide_max_accuracy_km:g} km near this "
                         f"area (< {ls.MIN_SLIDES}); expert ratings used")
     train_raw, _ = ls.lsi_raw(t_cls, ratings, cfg.lsi_ahp_matrix)
+    # Validation: ROC AUC of the training-region score against the landslide cells. With expert ratings this is an
+    # independent check; with FR it is a success rate (fitted on the same points), so it is reported as such.
+    auc = ls.auc(train_raw, slides)
 
     t, h, lc, hz, dv = (storage.load_layers(aoi.aoi_id, g) for g in ("terrain", "hydro30", "landcover", "hazard_hist", "derived"))
-    a_layers = {"slope_deg": t["slope_deg"], "aspect_deg": t["aspect_deg"], "curv": t["curv"], "ndvi": lc["ndvi"],
+    tc = terrain_coarse(t["dem"], grid.cell, factor=round(tg.cell / grid.cell))  # match the 90 m training scale
+    a_layers = {"slope_deg": tc["slope_deg"], "aspect_deg": tc["aspect_deg"], "curv": tc["curv"], "ndvi": lc["ndvi"],
                 "soil_clay": lc["soil_clay"], "rain_clim": hz["rain_clim"], "dist_stream_m": h["dist_stream_m"],
                 "dist_road_m": dv["dist_road_m"]}
     raw, info = ls.lsi_raw(ls.classify(a_layers, rain_edges), ratings, cfg.lsi_ahp_matrix)
@@ -193,6 +200,9 @@ def _lsi(aoi: AOI, grid: GridSpec, warnings: list[str], meta: dict) -> None:
                                                        "lsi_edges": np.asarray(edges, np.float32)}, grid)
     storage.save_png(aoi.aoi_id, "lsi_static", to_png_classes(cls))
     meta["lsi"] = {**info, "method": method, "landslide_records": n, "ratings": ratings,
+                   "auc": None if auc is None else round(auc, 3),
+                   "auc_kind": "success rate (fitted points)" if method == "frequency_ratio" else "validation (independent points)",
+                   "road_source_training": "GRIP4 (Meijer et al. 2018)",
                    "class_edges": [round(e, 4) for e in edges], "training_grid": f"{tg.width}x{tg.height} @ 90 m"}
 
 
@@ -309,24 +319,31 @@ def _overlays(aoi_id: str) -> None:
     storage.save_png(aoi_id, "hand", to_png(np.where(hand <= 20, hand, np.nan), "hand", 0, 20))
 
 
-def prepare_area(aoi: AOI) -> dict:
+def prepare_area(aoi: AOI, force: frozenset[str] = frozenset()) -> dict:
+    """Idempotent: steps whose outputs exist are skipped unless named in `force` (e.g. {"lsi", "network"})."""
     t0 = time.time()
     aoi_id, grid = aoi.aoi_id, make_grid(aoi.bbox)
+    prev = fs.get_aoi(aoi_id) or {}
     warnings: list[str] = []
-    meta: dict = {}
+    meta: dict = {k: v for k, v in (prev.get("meta") or {}).items() if k != "timings_s"}  # keep skipped steps' meta
     status: dict[str, str] = {}
 
     timings: dict[str, float] = {}
 
+    step_warn: dict[str, list[str]] = dict(prev.get("step_warnings") or {})
+
     def run(name: str, fn, *args) -> None:
         t = time.time()
+        mine: list[str] = []  # this step's warnings replace the ones it produced last time
+        args = tuple(mine if a is warnings else a for a in args)
         try:
             fn(*args)
             status[name] = "ready"
         except Exception as e:
             log.exception("prepare_area %s failed", name)
             status[name] = "error"
-            warnings.append(f"{name} failed: {e}")
+            mine.append(f"{name} failed: {e}")
+        step_warn[name] = mine
         timings[name] = round(time.time() - t, 1)
         fs.update_aoi(aoi_id, {f"status.{name}": status[name]})
 
@@ -352,32 +369,34 @@ def prepare_area(aoi: AOI) -> dict:
     else:
         status["derived"] = "ready"
     if status.get("hydro30") == "ready":
-        if storage.exists(aoi_id, "reaches.json"):
+        if storage.exists(aoi_id, "reaches.json") and "hydrology" not in force:
             status["hydrology"] = "ready"
         else:
             run("hydrology", _hydrology, aoi_id, grid, warnings, meta)
         run("overlays", _overlays, aoi_id)
-        if storage.exists(aoi_id, "png/fsi.png"):
+        if storage.exists(aoi_id, "png/fsi.png") and "fsi" not in force:
             status["fsi"] = "ready"
         else:
             run("fsi", _fsi, aoi_id, meta)
-        if storage.exists(aoi_id, "png/lsi_static.png"):
+        if storage.exists(aoi_id, "png/lsi_static.png") and "lsi" not in force:
             status["lsi"] = "ready"
         elif status.get("derived") == "ready":
             run("lsi", _lsi, aoi, grid, warnings, meta)
-    if storage.exists(aoi_id, "buildings_proxy.parquet"):
+    if storage.exists(aoi_id, "buildings_proxy.parquet") and "building_proxy" not in force:
         status["building_proxy"] = "ready"
     elif status.get("buildings") == "ready" and status.get("population") == "ready":
         run("building_proxy", _building_proxy, aoi_id, grid, meta)
-    if storage.exists(aoi_id, "shelters.json"):
+    if storage.exists(aoi_id, "shelters.json") and "network" not in force:
         status["network"] = "ready"
     elif status.get("building_proxy") == "ready" and status.get("osm") == "ready":
         run("network", _network, aoi, grid, warnings, meta)
     # Later stages hook in here:, S5 LSI static, S6.1-S6.3, S7.1-S7.6, S9 crowding.
 
     secs = round(time.time() - t0, 1)
+    warnings = list(dict.fromkeys(w for ws in step_warn.values() for w in ws))
     state = "ready" if all(v == "ready" for v in status.values()) else "partial"
-    fs.update_aoi(aoi_id, {"status": status, "state": state, "warnings": warnings, "meta": {**meta, "timings_s": timings},
+    fs.update_aoi(aoi_id, {"status": status, "state": state, "warnings": warnings, "step_warnings": step_warn,
+                           "meta": {**meta, "timings_s": timings},
                            "prepare_seconds": secs, "prepared_at": datetime.now(timezone.utc)})
     log.info("prepare_area %s: %s in %ss", aoi_id, state, secs)
     return {"state": state, "status": status, "warnings": warnings, "meta": {**meta, "timings_s": timings}, "seconds": secs}

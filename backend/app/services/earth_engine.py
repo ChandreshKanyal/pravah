@@ -22,6 +22,8 @@ GSW_ID = "JRC/GSW1_4/GlobalSurfaceWater"  # GSW1_5 does not exist (verified)
 WORLDPOP_ID = "WorldPop/GP/100m/pop"
 WORLDPOP_YEAR = 2020  # latest year for IND in the catalog (verified)
 LANDSLIDE_ID = "projects/sat-io/open-datasets/events/global_landslide_1970-2019"  # NASA GLC (verified access)
+GRIP_ID = "projects/sat-io/open-datasets/GRIP4/South-East-Asia"  # GRIP4 roads, region 6 (verified access)
+ROAD_SEARCH_M = 5000
 LANDSLIDE_ACCURACY_KM = {"exact": 0, "1km": 1, "5km": 5, "10km": 10, "25km": 25, "50km": 50}  # "unknown" dropped
 OB_ID = "GOOGLE/Research/open-buildings/v3/polygons"
 OBT_ID = "GOOGLE/Research/open-buildings-temporal/v1"
@@ -165,11 +167,14 @@ def fetch_merit_native(hgrid) -> dict[str, np.ndarray]:
 
 
 def fetch_training_layers(train_grid: GridSpec) -> dict[str, np.ndarray]:
-    """dem, ndvi, soil_clay, rain_clim, upa on a coarse grid for the landslide training region (S5.2)."""
+    """dem, ndvi, soil_clay, rain_clim, upa and dist_road_m (GRIP4 global roads) on a coarse grid for the landslide
+    training region (S5.2). OSM is not fetched for the 100 km box; GRIP4 gives the road factor a real distribution."""
     im = layer_images(train_grid)
+    roads = (ee.FeatureCollection(GRIP_ID).filterBounds(grid_region(train_grid))
+             .distance(searchRadius=ROAD_SEARCH_M, maxError=30).unmask(ROAD_SEARCH_M).rename("dist_road_m"))
     img = (im["terrain"].addBands(im["landcover"].select(["ndvi", "soil_clay"]))
-           .addBands(im["hazard_hist"].select(["rain_clim"])).addBands(im["hydro30"].select(["upa"])))
-    return fetch_grid(img, train_grid, ["dem", "ndvi", "soil_clay", "rain_clim", "upa"])
+           .addBands(im["hazard_hist"].select(["rain_clim"])).addBands(im["hydro30"].select(["upa"])).addBands(roads))
+    return fetch_grid(img, train_grid, ["dem", "ndvi", "soil_clay", "rain_clim", "upa", "dist_road_m"])
 
 
 def fetch_landslides(train_grid: GridSpec, max_accuracy_km: float) -> list[tuple[float, float]]:

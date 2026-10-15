@@ -6,7 +6,7 @@ import numpy as np
 
 from app.engines.ahp import ahp_weights
 from app.engines.fr import fr_ratings, frequency_ratio
-from app.engines.rainfall import caine_threshold
+from app.engines.rainfall import LANDSLIDE_THRESHOLDS, landslide_threshold
 
 LSI_FACTORS = ["slope", "rain", "ndvi", "drain", "road", "soil", "curv", "aspect"]
 LSI_MATRIX = [
@@ -103,27 +103,77 @@ def normalise_and_classify(raw: np.ndarray, train_raw: np.ndarray, slope_deg: np
     return val, cls, edges
 
 
-def rain_modulation(rain_mm_h, g_slope: float = 0.25, g_min: float = 0.75, g_max: float = 1.25) -> np.ndarray:
-    """g[t] from R = I_mean(1..t) / I_thr(t) (Caine, D = t hours).
+def exceedance(rain_mm_h, threshold: str = "caine") -> np.ndarray:
+    """R[t] = I_mean(1..t) / I_thr(D = t hours) for an intensity-duration threshold (see rainfall.LANDSLIDE_THRESHOLDS)."""
+    i = np.asarray(rain_mm_h, dtype=float)
+    t = np.arange(1, len(i) + 1)
+    return (np.cumsum(i) / t) / landslide_threshold(t, threshold)
+
+
+def rain_modulation(rain_mm_h, g_slope: float = 0.25, g_min: float = 0.75, g_max: float = 1.25,
+                    threshold: str = "caine") -> np.ndarray:
+    """g[t] from R = I_mean(1..t) / I_thr(t), D = t hours.
 
     NOTE(spec-drift): the spec's g = clip(R, 0.5, 1.5) saturates for any rain above ~13 mm/h over 4 h, so we use a
     graded g = clip(1 + g_slope * log2(R), g_min, g_max): each doubling of R adds g_slope (human decision, 16 Oct).
+    `threshold` picks the I-D curve; Himalayan AOIs default to Dahal & Hasegawa (2008) instead of Caine's global one.
     """
-    i = np.asarray(rain_mm_h, dtype=float)
-    t = np.arange(1, len(i) + 1)
-    R = (np.cumsum(i) / t) / caine_threshold(t)
+    assert threshold in LANDSLIDE_THRESHOLDS
+    R = exceedance(rain_mm_h, threshold)
     with np.errstate(divide="ignore"):
         return np.clip(1 + g_slope * np.log2(np.maximum(R, 1e-9)), g_min, g_max)
 
 
+def auc(score: np.ndarray, positive: np.ndarray) -> float | None:
+    """Area under the ROC curve of `score` for `positive` cells (Mann-Whitney U, ties averaged). None if undefined."""
+    from scipy.stats import rankdata
+    s = np.asarray(score, dtype=float).ravel()
+    y = np.asarray(positive, dtype=bool).ravel()
+    ok = np.isfinite(s)
+    s, y = s[ok], y[ok]
+    n1, n0 = int(y.sum()), int((~y).sum())
+    if n1 == 0 or n0 == 0:
+        return None
+    r = rankdata(s)
+    return float((r[y].sum() - n1 * (n1 + 1) / 2) / (n1 * n0))
+
+
+def class_shift(R) -> np.ndarray:
+    """Per-hour class shift from threshold exceedance R: -1 below the threshold, 0 up to twice it, +1 beyond."""
+    R = np.asarray(R, dtype=float)
+    return np.where(R < 1.0, -1, np.where(R >= 2.0, 1, 0)).astype(np.int16)
+
+
 def lsi_dynamic_classes(lsi_static: np.ndarray, edges: list[float], rain_mm_h, slope_deg: np.ndarray,
-                        **g_kwargs) -> np.ndarray:
-    """uint8 [H, rows, cols] classes of clip(lsi_static * g[t], 0, 1), same thresholds and flat mask."""
-    g = rain_modulation(rain_mm_h, **g_kwargs)
+                        mode: str = "class_shift", threshold: str = "caine", **g_kwargs) -> np.ndarray:
+    """uint8 [H, rows, cols] rainfall-modulated classes, same thresholds and flat mask.
+
+    mode "class_shift" (default): static class + class_shift(R[t]), clipped to 1..5. A decision-matrix modulation in
+    the spirit of LHASA: rain moves a slope by at most one class, so the narrow LSI class bands cannot be jumped.
+    mode "graded_g": classes of clip(lsi_static * g[t], 0, 1) (16 Oct; a x1.25 boost jumped ~2 classes here).
+    """
     flat = np.nan_to_num(slope_deg) < FLAT_SLOPE_DEG
+    if mode == "class_shift":
+        base = (np.digitize(lsi_static, edges) + 1).astype(np.int16)
+        shifts = class_shift(exceedance(rain_mm_h, threshold))
+        out = np.empty((len(shifts),) + lsi_static.shape, np.uint8)
+        for t, d in enumerate(shifts):
+            c = np.clip(base + d, 1, 5).astype(np.uint8)
+            c[flat] = 1
+            out[t] = c
+        return out
+    g = rain_modulation(rain_mm_h, threshold=threshold, **g_kwargs)
     out = np.empty((len(g),) + lsi_static.shape, np.uint8)
     for t, gt in enumerate(g):
         c = (np.digitize(np.clip(lsi_static * gt, 0, 1), edges) + 1).astype(np.uint8)
         c[flat] = 1
         out[t] = c
     return out
+
+
+def actionable(lsi_dyn: np.ndarray, triggered: np.ndarray, cap: int = 3) -> np.ndarray:
+    """Classes used for decisions (closures, evacuation, shelter exclusion, risk raise): hours where rainfall does not
+    exceed the I-D threshold are capped at `cap`, as LHASA (Kirschbaum & Stanley 2018) issues no landslide hazard
+    without the rainfall trigger. The uncapped classes stay on the map as susceptibility."""
+    trig = np.asarray(triggered, bool).reshape(-1, *([1] * (lsi_dyn.ndim - 1)))
+    return np.where(trig, lsi_dyn, np.minimum(lsi_dyn, cap)).astype(lsi_dyn.dtype)

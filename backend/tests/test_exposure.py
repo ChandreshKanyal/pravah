@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from app.engines.buildings import classify, cluster_flags
-from app.engines.exposure import building_risk, per_hour, triage
+from app.engines.exposure import building_risk, depth_damage, per_hour, triage
 from app.engines.population import distribute, scale_factor
 
 
@@ -37,11 +37,16 @@ def test_t14_population_conservation():
     assert (pop_b.sum() + un.sum()) * k == pytest.approx(44, abs=1)
 
 
+def test_depth_damage_jrc_asia_residential():
+    assert depth_damage([0, 0.5, 1.0, 2.0, 6.0, 9.0]) == pytest.approx([0, 0.33, 0.49, 0.72, 1.0, 1.0])
+    assert depth_damage([0.25])[0] == pytest.approx(0.165)
+
+
 def test_building_risk_hand_computed():
-    # d=1.5 m, F=0.8, dist 150 m, ls 2: R = 0.5*0.5 + 0.3*0.8 + 0.2*0.5 = 0.59 -> high
-    # dry, ls 2 -> 0; dry, ls 4 -> R = 0.3*0.45 + 0 = 0.135 -> raised to high (landslide)
+    # d=1.5 m (JRC damage 0.62), F=0.8, dist 150 m, ls 2: R = 0.5*0.62 + 0.3*0.8 + 0.2*0.5 = 0.65 -> high
+    # dry, ls 2 -> 0; dry, ls 4 -> R = 0.3*0.45 = 0.135, raised to high (landslide) so R becomes 0.5
     R, cls, why = building_risk([1.5, 0.0, 0.0], [0.8, 0.8, 0.45], [150, 150, 400], [2, 2, 4])
-    assert R == pytest.approx([0.59, 0.0, 0.135])
+    assert R == pytest.approx([0.65, 0.0, 0.5])
     assert list(cls) == ["high", "low", "high"] and list(why) == ["flood", "", "landslide"]
 
 

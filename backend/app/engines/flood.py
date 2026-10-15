@@ -2,7 +2,7 @@
 import numpy as np
 
 from app.engines.hydrology import src_stage
-from app.engines.rainfall import rational_q
+from app.engines.rainfall import areal_reduction_factor, rational_q
 
 HAND_MAX_M = 30.0
 PERM_WATER_OCC = 90.0  # gsw_occ above this is permanent water, not flood
@@ -24,8 +24,12 @@ def depth_from_stage(hand: np.ndarray, stage, perm: np.ndarray | None = None) ->
 
 
 def hourly_envelope(rain_mm_h, tc_h, C, A_loc_km2, src: list[dict], river_offset_m: float = 0.0,
-                    inflow_m3s=0.0) -> tuple[np.ndarray, np.ndarray]:
-    """Stage h[r, t] and discharge Q[r, t] per reach and hour; stage never recedes (worst-case envelope)."""
+                    inflow_m3s=0.0, arf: bool = False) -> tuple[np.ndarray, np.ndarray]:
+    """Stage h[r, t] and discharge Q[r, t] per reach and hour; stage never recedes (worst-case envelope).
+
+    With `arf`, the point intensity is reduced to a catchment-average one (TP-29 areal reduction factor over the
+    averaging window), as is standard when applying the rational method beyond a few km2.
+    """
     i = np.asarray(rain_mm_h, dtype=float)
     H, R = len(i), len(src)
     tc = np.asarray(tc_h, dtype=float)
@@ -36,6 +40,8 @@ def hourly_envelope(rain_mm_h, tc_h, C, A_loc_km2, src: list[dict], river_offset
     for t in range(1, H + 1):
         W = np.clip(np.round(tc), 1, t).astype(int)
         i_eff = (cs[t] - cs[t - W]) / W
+        if arf:
+            i_eff = i_eff * areal_reduction_factor(A_loc_km2, W)
         ramp = np.minimum(1.0, t / np.maximum(tc, 1e-6))
         q = rational_q(C, i_eff, A_loc_km2) * ramp + inflow_m3s
         stage = np.array([src_stage(src[r], q[r]) for r in range(R)]) + river_offset_m
