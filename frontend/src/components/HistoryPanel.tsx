@@ -11,7 +11,14 @@ export default function HistoryPanel({ aoiId, onFly, onData }: { aoiId: string; 
   useEffect(() => { historyAoi(aoiId).then((x) => { setH(x); onData(x); }).catch((e) => setErr(String(e.message))); }, [aoiId, onData]);
   async function web() {
     setBusy(true);
-    try { const x = await historyAoi(aoiId, true); setH(x); onData(x); } catch (e) { setErr(String((e as Error).message)); } finally { setBusy(false); }
+    try {
+      let x = await historyAoi(aoiId, true);
+      for (let i = 0; i < 40 && (x as any).web_status === "pending"; i++) {  // background job, ~1 min
+        await new Promise((r) => setTimeout(r, 4000));
+        x = await historyAoi(aoiId);
+      }
+      setH(x); onData(x);
+    } catch (e) { setErr(String((e as Error).message)); } finally { setBusy(false); }
   }
   if (err) return <div className="notice error"><Icon name="error" />{err}</div>;
   if (!h) return <div className="stack-s"><div className="shimmer" style={{ height: 72 }} /><div className="shimmer" style={{ height: 120 }} /></div>;
@@ -46,7 +53,7 @@ export default function HistoryPanel({ aoiId, onFly, onData }: { aoiId: string; 
         <div className="section-title"><Icon name="travel_explore" /> From web sources <span className="body-s muted">· unverified leads</span></div>
         {!h.web && <>
           <p className="body-s muted">Gemini with Google Search grounding lists documented floods, cloudbursts and landslides here since 2000, each with a source link.</p>
-          <Button variant="tonal" icon="travel_explore" onClick={web} disabled={busy}>{busy ? "Searching the web…" : "Find web incidents"}</Button>
+          <Button variant="tonal" icon="travel_explore" onClick={web} disabled={busy}>{busy ? "Searching the web (about a minute)…" : "Find web incidents"}</Button>
         </>}
         {h.web?.map((w, i) => (
           <div key={i} className="card outlined stack-s" style={{ padding: 12 }}>
