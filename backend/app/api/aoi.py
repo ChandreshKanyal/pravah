@@ -1,9 +1,11 @@
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Response
 
 from app.engines.grid import make_grid
-from app.engines.render import overlay_payload
+from app.engines.flood import depth_from_stage
+from app.engines.render import DEPTH_COLORS, DEPTH_EDGES, WATER_COLOR, overlay_payload, to_png_binned
 from app.models.aoi import AOIRequest, AOIValidationError, build_aoi
 from app.pipeline.prepare_area import prepare_area
+from app.pipeline.run_pipeline import AreaNotReady, load_area
 from app.services import firestore as fs
 from app.services import storage
 
@@ -42,3 +44,14 @@ def static_layers(aoi_id: str):
     layers = {n: f"/api/layers/{aoi_id}/{n}.png" for n in ("hand", "streams") if storage.exists(aoi_id, f"png/{n}.png")}
     hotspots = storage.get_json(aoi_id, "hotspots.json") if storage.exists(aoi_id, "hotspots.json") else []
     return {"aoi_id": aoi_id, "layers": layers, "hotspots": hotspots, **overlay_payload(grid)}
+
+
+@router.get("/api/aoi/{aoi_id}/flood.png")
+def flood_at_stage(aoi_id: str, stage: float = Query(2.0, ge=0, le=30)):
+    """S3.1 (M1, temporary): uniform stage above drainage -> HAND flood depth overlay."""
+    try:
+        area = load_area(aoi_id)
+    except AreaNotReady as e:
+        raise HTTPException(409, str(e))
+    depth = depth_from_stage(area.hand, stage, area.perm)
+    return Response(to_png_binned(depth, DEPTH_EDGES, DEPTH_COLORS, nan_color=WATER_COLOR), media_type="image/png")

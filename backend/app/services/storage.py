@@ -95,3 +95,11 @@ def save_png(aoi_id: str, name: str, png: bytes) -> str:
     """Store an overlay PNG and return its URL, served through the backend (see api/layers.py)."""
     put_bytes(aoi_id, f"png/{name}.png", png, "image/png")
     return f"/api/layers/{aoi_id}/{name}.png"
+
+
+def put_run(run_id: str, name: str, data: bytes, content_type: str = "application/octet-stream") -> None:
+    _bucket().blob(f"runs/{run_id}/{name}").upload_from_string(data, content_type=content_type)
+
+
+def get_run(run_id: str, name: str) -> bytes:
+    return _bucket().blob(f"runs/{run_id}/{name}").download_as_bytes()

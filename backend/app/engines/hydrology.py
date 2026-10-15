@@ -68,9 +68,14 @@ def downstream_index(d8: np.ndarray) -> np.ndarray:
 
 def local_accumulation_km2(downstream: np.ndarray, cell_area: float) -> np.ndarray:
     """Area inside the grid draining to each cell (incl. itself), via Kahn's topological order."""
+    return accumulate(downstream, np.ones(downstream.size)) * cell_area / 1e6
+
+
+def accumulate(downstream: np.ndarray, weights: np.ndarray) -> np.ndarray:
+    """Sum of `weights` over each cell and everything upstream of it inside the grid (Kahn's order)."""
     n = downstream.size
     indeg = np.bincount(downstream[downstream >= 0], minlength=n)
-    acc = np.ones(n, np.float64)
+    acc = np.asarray(weights, np.float64).ravel().copy()
     q = deque(np.flatnonzero(indeg == 0).tolist())
     while q:
         i = q.popleft()
@@ -80,7 +85,7 @@ def local_accumulation_km2(downstream: np.ndarray, cell_area: float) -> np.ndarr
             indeg[j] -= 1
             if indeg[j] == 0:
                 q.append(j)
-    return acc * cell_area / 1e6
+    return acc
 
 
 def drain_cells(stream: np.ndarray, downstream: np.ndarray, max_iter: int = 20000) -> np.ndarray:

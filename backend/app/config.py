@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     maps_server_key: str = ""  # from Secret Manager `maps-server-key`
     stream_upa_km2: float = 5.0  # D3 default
     manning_n: float = 0.04
+    # S3.2 runoff C by Dynamic World class: water, trees, grass, flooded_veg, crops, shrub_scrub, built, bare, snow_ice
+    runoff_c: list[float] = [1.00, 0.25, 0.35, 0.60, 0.45, 0.40, 0.85, 0.60, 0.50]
     cors_origins: str = "http://localhost:5173,http://localhost:4173"
 
 

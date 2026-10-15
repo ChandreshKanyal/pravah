@@ -18,3 +18,14 @@ def layer_png(aoi_id: str, name: str):
     except NotFound:
         raise HTTPException(404, "Layer not found")
     return Response(data, media_type="image/png", headers={"Cache-Control": "public, max-age=3600"})
+
+
+@router.get("/api/runs/{run_id}/layers/{name}.png")
+def run_layer_png(run_id: str, name: str):
+    if not (_SAFE.match(run_id) and _SAFE.match(name)):
+        raise HTTPException(400, "Bad layer name")
+    try:
+        data = storage.get_run(run_id, f"png/{name}.png")
+    except NotFound:
+        raise HTTPException(404, "Layer not found")
+    return Response(data, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})

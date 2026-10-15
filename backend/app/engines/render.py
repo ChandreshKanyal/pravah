@@ -39,3 +39,40 @@ def to_png(array: np.ndarray, colormap: str = "blues", vmin: float | None = None
 
 def overlay_payload(grid: GridSpec) -> dict:
     return {"corners": corner_lonlats(grid)}
+
+
+DEPTH_EDGES = [0.05, 0.5, 1.0, 1.5, 3.0]  # S16.8
+DEPTH_COLORS = ["#c6dbef", "#9ecae1", "#6baed6", "#3182bd", "#08519c"]
+SUSCEPT_COLORS = ["#ffffb2", "#fecc5c", "#fd8d3c", "#f03b20", "#bd0026"]
+WATER_COLOR = "#1d3557"
+
+
+def _rgb(hex_color: str) -> tuple[int, int, int]:
+    h = hex_color.lstrip("#")
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+def to_png_binned(array: np.ndarray, edges: list[float], colors: list[str], nan_color: str | None = None,
+                  alpha: int = 210) -> bytes:
+    """Bin k covers [edges[k], edges[k+1]); the last bin is open-ended. Below edges[0] is transparent.
+    NaN is transparent unless `nan_color` is given (e.g. permanent water)."""
+    a = np.asarray(array, dtype=np.float64)
+    rgba = np.zeros(a.shape + (4,), np.uint8)
+    k = np.digitize(np.nan_to_num(a, nan=-np.inf), edges) - 1  # -1 below first edge
+    for i, c in enumerate(colors):
+        m = k == i
+        rgba[m, :3] = _rgb(c)
+        rgba[m, 3] = alpha
+    if nan_color:
+        m = np.isnan(a)
+        rgba[m, :3] = _rgb(nan_color)
+        rgba[m, 3] = alpha
+    buf = io.BytesIO()
+    Image.fromarray(rgba, "RGBA").save(buf, "PNG", optimize=True)
+    return buf.getvalue()
+
+
+def to_png_classes(classes: np.ndarray, colors: list[str] = SUSCEPT_COLORS, alpha: int = 170) -> bytes:
+    """Integer classes 1..len(colors); 0 or less is transparent."""
+    edges = [k - 0.5 for k in range(1, len(colors) + 1)]  # class k falls in [k-0.5, k+0.5)
+    return to_png_binned(np.asarray(classes, dtype=float), edges, colors, alpha=alpha)
