@@ -1,7 +1,12 @@
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api import aoi, health, layers
 from app.config import get_settings
+
+logging.basicConfig(level=logging.INFO)
 
 app = FastAPI(title="Pravah API")
 
@@ -12,6 +17,5 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from app.api import health  # noqa: E402
-
-app.include_router(health.router)
+for r in (health.router, aoi.router, layers.router):
+    app.include_router(r)

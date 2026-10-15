@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     ee_project: str = "project-0fd9c4ae-bf90-452f-a80"
     gcs_bucket: str = "pravah-dss-data-project-0fd9c4ae-bf90-452f-a80"
     maps_server_key: str = ""  # from Secret Manager `maps-server-key`
+    stream_upa_km2: float = 5.0  # D3 default
     cors_origins: str = "http://localhost:5173,http://localhost:4173"
 
 
