@@ -11,9 +11,9 @@ from rasterio.transform import Affine
 from scipy.ndimage import distance_transform_edt
 
 from app.config import get_settings
-from app.engines import hydrology as hy
+from app.engines import fsi as fsi_engine, hydrology as hy, rainfall
 from app.engines.grid import lonlat_bounds, make_grid, rowcol_to_lonlat, terrain
-from app.engines.render import to_png
+from app.engines.render import to_png, to_png_classes
 from app.models.aoi import AOI
 from app.models.grid import GridSpec
 from app.services import earth_engine as ees
@@ -138,6 +138,21 @@ def _hydrology(aoi_id: str, grid: GridSpec, warnings: list[str], meta: dict) -> 
                 hydro_grid=f"{hg.width}x{hg.height}")
 
 
+def _fsi(aoi_id: str, meta: dict) -> None:
+    """S4: static flood susceptibility (AHP), saved in the `susceptibility` group."""
+    t, h, lc, hz = (storage.load_layers(aoi_id, g) for g in ("terrain", "hydro30", "landcover", "hazard_hist"))
+    scores = fsi_engine.factor_scores(
+        hand=h["hand"], gfd_count=hz["gfd_count"], gsw_occ=hz["gsw_occ"], dist_stream_m=h["dist_stream_m"],
+        upa=h["upa"], rain_clim=hz["rain_clim"], slope_deg=t["slope_deg"],
+        C=rainfall.runoff_c(lc["lc_class"], get_settings().runoff_c))
+    val, cls, info = fsi_engine.fsi(scores, get_settings().fsi_ahp_matrix)
+    grid = storage.load_grid(aoi_id)
+    sus = storage.load_layers(aoi_id, "susceptibility") if storage.exists(aoi_id, "susceptibility.npz") else {}
+    storage.save_layers(aoi_id, "susceptibility", {**sus, "fsi": val, "fsi_class": cls}, grid)
+    storage.save_png(aoi_id, "fsi", to_png_classes(cls))
+    meta["fsi"] = info
+
+
 def _overlays(aoi_id: str) -> None:
     hand = storage.load_layers(aoi_id, "hydro30")["hand"]
     storage.save_png(aoi_id, "hand", to_png(np.where(hand <= 20, hand, np.nan), "hand", 0, 20))
@@ -191,7 +206,11 @@ def prepare_area(aoi: AOI) -> dict:
         else:
             run("hydrology", _hydrology, aoi_id, grid, warnings, meta)
         run("overlays", _overlays, aoi_id)
-    # Later stages hook in here: S4 FSI, S5 LSI static, S6.1-S6.3, S7.1-S7.6, S9 crowding.
+        if storage.exists(aoi_id, "png/fsi.png"):
+            status["fsi"] = "ready"
+        else:
+            run("fsi", _fsi, aoi_id, meta)
+    # Later stages hook in here:, S5 LSI static, S6.1-S6.3, S7.1-S7.6, S9 crowding.
 
     secs = round(time.time() - t0, 1)
     state = "ready" if all(v == "ready" for v in status.values()) else "partial"

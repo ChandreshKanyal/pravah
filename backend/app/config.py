@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     manning_n: float = 0.04
     # S3.2 runoff C by Dynamic World class: water, trees, grass, flooded_veg, crops, shrub_scrub, built, bare, snow_ice
     runoff_c: list[float] = [1.00, 0.25, 0.35, 0.60, 0.45, 0.40, 0.85, 0.60, 0.50]
+    # S4.3 flood AHP matrix, order [hand, hist, dist_stream, upa, rain, slope, C]; editable by experts
+    fsi_ahp_matrix: list[list[float]] = [
+        [1, 1, 2, 2, 2, 2, 3], [1, 1, 1, 1, 1, 2, 2], [0.5, 1, 1, 1, 1, 2, 2], [0.5, 1, 1, 1, 1, 2, 2],
+        [0.5, 1, 1, 1, 1, 1, 2], [0.5, 0.5, 0.5, 0.5, 1, 1, 1], [1 / 3, 0.5, 0.5, 0.5, 0.5, 1, 1]]
     cors_origins: str = "http://localhost:5173,http://localhost:4173"
 
 
