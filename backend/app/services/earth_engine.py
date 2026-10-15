@@ -21,6 +21,8 @@ GFD_ID = "GLOBAL_FLOOD_DB/MODIS_EVENTS/V1"
 GSW_ID = "JRC/GSW1_4/GlobalSurfaceWater"  # GSW1_5 does not exist (verified)
 WORLDPOP_ID = "WorldPop/GP/100m/pop"
 WORLDPOP_YEAR = 2020  # latest year for IND in the catalog (verified)
+LANDSLIDE_ID = "projects/sat-io/open-datasets/events/global_landslide_1970-2019"  # NASA GLC (verified access)
+LANDSLIDE_ACCURACY_KM = {"exact": 0, "1km": 1, "5km": 5, "10km": 10, "25km": 25, "50km": 50}  # "unknown" dropped
 OB_ID = "GOOGLE/Research/open-buildings/v3/polygons"
 OBT_ID = "GOOGLE/Research/open-buildings-temporal/v1"
 
@@ -160,6 +162,23 @@ def fetch_merit_native(hgrid) -> dict[str, np.ndarray]:
                  width=hgrid.width, height=hgrid.height)
     img = ee.Image(MERIT_ID).select(["hnd", "elv", "upa", "dir"], ["hnd", "elv", "upa", "d8"])
     return fetch_grid(img, g, ["hnd", "elv", "upa", "d8"])
+
+
+def fetch_training_layers(train_grid: GridSpec) -> dict[str, np.ndarray]:
+    """dem, ndvi, soil_clay, rain_clim, upa on a coarse grid for the landslide training region (S5.2)."""
+    im = layer_images(train_grid)
+    img = (im["terrain"].addBands(im["landcover"].select(["ndvi", "soil_clay"]))
+           .addBands(im["hazard_hist"].select(["rain_clim"])).addBands(im["hydro30"].select(["upa"])))
+    return fetch_grid(img, train_grid, ["dem", "ndvi", "soil_clay", "rain_clim", "upa"])
+
+
+def fetch_landslides(train_grid: GridSpec, max_accuracy_km: float) -> list[tuple[float, float]]:
+    """NASA Global Landslide Catalog points (lon, lat) in the training region with location accuracy <= max_accuracy_km."""
+    init_ee()
+    fc = ee.FeatureCollection(LANDSLIDE_ID).filterBounds(grid_region(train_grid))
+    d = ee.Dictionary({k: fc.aggregate_array(k) for k in ("longitude", "latitude", "location_a")}).getInfo()
+    return [(float(lo), float(la)) for lo, la, acc in zip(d["longitude"], d["latitude"], d["location_a"])
+            if LANDSLIDE_ACCURACY_KM.get(str(acc), 1e9) <= max_accuracy_km]
 
 
 def worldpop_total(grid: GridSpec) -> float:

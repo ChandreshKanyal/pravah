@@ -11,9 +11,9 @@ from functools import lru_cache
 import numpy as np
 
 from app.config import get_settings
-from app.engines import flood, hydrology as hy, rainfall
+from app.engines import flood, hydrology as hy, landslide as ls, rainfall
 from app.engines.grid import lonlat_bounds, lonlat_to_rowcol, corner_lonlats
-from app.engines.render import DEPTH_COLORS, DEPTH_EDGES, WATER_COLOR, to_png_binned
+from app.engines.render import DEPTH_COLORS, DEPTH_EDGES, WATER_COLOR, to_png_binned, to_png_classes
 from app.models.grid import GridSpec
 from app.models.run import RunResult
 from app.models.scenario import RainSource, ScenarioParams
@@ -40,6 +40,9 @@ class Area:
     reaches: list[dict]
     native: dict[str, np.ndarray]
     hotspots: list[dict]
+    slope_deg: np.ndarray
+    lsi_static: np.ndarray | None
+    lsi_edges: list[float] | None
     src_cache: dict[float, list[dict]] = field(default_factory=dict)
 
 
@@ -48,6 +51,7 @@ def load_area(aoi_id: str) -> Area:
     if not storage.exists(aoi_id, "reaches.json"):
         raise AreaNotReady(f"AOI {aoi_id} is not prepared yet")
     h30 = storage.load_layers(aoi_id, "hydro30")
+    sus = storage.load_layers(aoi_id, "susceptibility") if storage.exists(aoi_id, "susceptibility.npz") else {}
     return Area(
         aoi_id=aoi_id,
         grid=storage.load_grid(aoi_id),
@@ -59,6 +63,9 @@ def load_area(aoi_id: str) -> Area:
         reaches=storage.get_json(aoi_id, "reaches.json"),
         native=storage.load_layers(aoi_id, "hydro_native"),
         hotspots=storage.get_json(aoi_id, "hotspots.json"),
+        slope_deg=storage.load_layers(aoi_id, "terrain")["slope_deg"],
+        lsi_static=sus.get("lsi_static"),
+        lsi_edges=sus["lsi_edges"].tolist() if "lsi_edges" in sus else None,
     )
 
 
@@ -123,14 +130,27 @@ def run_pipeline(p: ScenarioParams) -> RunResult:
     depth = flood.depth_stack(h, area.reach_id_30, area.hand, area.perm)
     timings["flood"] = round(time.time() - t0, 2)
 
+    lsi_dyn = None  # S5.6: rainfall-modulated susceptibility classes per hour
+    if area.lsi_static is not None:
+        lsi_dyn = ls.lsi_dynamic_classes(area.lsi_static, area.lsi_edges, rain, area.slope_deg)
+    else:
+        warnings.append("Landslide susceptibility not prepared for this area")
+
     t1 = time.time()
     pngs = {f"depth_h{t + 1}": to_png_binned(depth[t], DEPTH_EDGES, DEPTH_COLORS, nan_color=WATER_COLOR)
             for t in range(depth.shape[0])}
+    if lsi_dyn is not None:
+        pngs.update({f"lsi_h{t + 1}": to_png_classes(lsi_dyn[t]) for t in range(lsi_dyn.shape[0])})
     buf = io.BytesIO()
     np.savez_compressed(buf, depth=depth.astype(np.float16))
+    lbuf = io.BytesIO()
+    if lsi_dyn is not None:
+        np.savez_compressed(lbuf, lsi_dyn_class=lsi_dyn)
     with ThreadPoolExecutor(8) as ex:
         jobs = [ex.submit(storage.put_run, run_id, f"png/{k}.png", v, "image/png") for k, v in pngs.items()]
         jobs.append(ex.submit(storage.put_run, run_id, "depth.npz", buf.getvalue()))
+        if lsi_dyn is not None:
+            jobs.append(ex.submit(storage.put_run, run_id, "lsi.npz", lbuf.getvalue()))
         for j in jobs:
             j.result()
     timings["render_upload"] = round(time.time() - t1, 2)
@@ -152,7 +172,8 @@ def run_pipeline(p: ScenarioParams) -> RunResult:
         rain_series_mm_h=rain, rain_label=rain_label,
         stage_by_reach_m={str(r["reach_id"]): h[i].round(2).tolist() for i, r in enumerate(area.reaches)},
         flooded_area_km2_by_hour=[round(flood.flooded_area_km2(depth[t], area.grid.cell), 3) for t in range(len(rain))],
-        depth_png_urls=[f"/api/runs/{run_id}/layers/{k}.png" for k in pngs],
+        depth_png_urls=[f"/api/runs/{run_id}/layers/{k}.png" for k in pngs if k.startswith("depth_")],
+        lsi_png_url=f"/api/runs/{run_id}/layers/lsi_h{len(rain)}.png" if lsi_dyn is not None else "",
         overlay_bounds=lonlat_bounds(area.grid), overlay_corners=corner_lonlats(area.grid),
         hotspots=hotspots, warnings=warnings,
     )

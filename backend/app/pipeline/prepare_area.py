@@ -8,11 +8,11 @@ import numpy as np
 import osmnx as ox
 from rasterio.features import rasterize
 from rasterio.transform import Affine
-from scipy.ndimage import distance_transform_edt
+from scipy.ndimage import binary_dilation, distance_transform_edt
 
 from app.config import get_settings
-from app.engines import fsi as fsi_engine, hydrology as hy, rainfall
-from app.engines.grid import lonlat_bounds, make_grid, rowcol_to_lonlat, terrain
+from app.engines import fsi as fsi_engine, hydrology as hy, landslide as ls, rainfall
+from app.engines.grid import lonlat_bounds, lonlat_to_rowcol, make_grid, rowcol_to_lonlat, terrain
 from app.engines.render import to_png, to_png_classes
 from app.models.aoi import AOI
 from app.models.grid import GridSpec
@@ -153,6 +153,46 @@ def _fsi(aoi_id: str, meta: dict) -> None:
     meta["fsi"] = info
 
 
+def _lsi(aoi: AOI, grid: GridSpec, warnings: list[str], meta: dict) -> None:
+    """S5 static: FR ratings learned on a 90 m grid over the AOI + 50 km, AHP weights, training-region scaling."""
+    cfg = get_settings()
+    tg = make_grid(aoi.bbox, buffer_m=50_000, cell=90, snap=90)
+    T = ees.fetch_training_layers(tg)
+    t_terr = terrain(T["dem"], tg.cell)
+    t_stream = np.nan_to_num(T["upa"]) >= cfg.stream_upa_km2
+    pts = ees.fetch_landslides(tg, cfg.landslide_max_accuracy_km)
+    slides = np.zeros((tg.height, tg.width), bool)
+    if pts:
+        r, c = lonlat_to_rowcol(tg, [p[0] for p in pts], [p[1] for p in pts])
+        ok = (r >= 0) & (r < tg.height) & (c >= 0) & (c < tg.width)
+        slides[r[ok], c[ok]] = True
+        slides = binary_dilation(slides)  # 1-cell buffer
+    rain_edges = ls.rain_quintile_edges(T["rain_clim"])
+    # NOTE: no OSM roads for the 100 km training box; road uses expert ratings and the mean rating in training.
+    t_layers = {**t_terr, "ndvi": T["ndvi"], "soil_clay": T["soil_clay"], "rain_clim": T["rain_clim"],
+                "dist_stream_m": _distance_m(t_stream, tg.cell), "dist_road_m": np.full(slides.shape, np.nan)}
+    t_cls = ls.classify(t_layers, rain_edges)
+    ratings, n = ls.learn_ratings(t_cls, slides, [f for f in ls.LSI_FACTORS if f != "road"], n_points=len(pts))
+    method = "frequency_ratio" if n >= ls.MIN_SLIDES else "expert"
+    if method == "expert":
+        warnings.append(f"Only {n} landslide records located to within {cfg.landslide_max_accuracy_km:g} km near this "
+                        f"area (< {ls.MIN_SLIDES}); expert ratings used")
+    train_raw, _ = ls.lsi_raw(t_cls, ratings, cfg.lsi_ahp_matrix)
+
+    t, h, lc, hz, dv = (storage.load_layers(aoi.aoi_id, g) for g in ("terrain", "hydro30", "landcover", "hazard_hist", "derived"))
+    a_layers = {"slope_deg": t["slope_deg"], "aspect_deg": t["aspect_deg"], "curv": t["curv"], "ndvi": lc["ndvi"],
+                "soil_clay": lc["soil_clay"], "rain_clim": hz["rain_clim"], "dist_stream_m": h["dist_stream_m"],
+                "dist_road_m": dv["dist_road_m"]}
+    raw, info = ls.lsi_raw(ls.classify(a_layers, rain_edges), ratings, cfg.lsi_ahp_matrix)
+    val, cls, edges = ls.normalise_and_classify(raw, train_raw, t["slope_deg"])
+    sus = storage.load_layers(aoi.aoi_id, "susceptibility") if storage.exists(aoi.aoi_id, "susceptibility.npz") else {}
+    storage.save_layers(aoi.aoi_id, "susceptibility", {**sus, "lsi_static": val, "lsi_class": cls,
+                                                       "lsi_edges": np.asarray(edges, np.float32)}, grid)
+    storage.save_png(aoi.aoi_id, "lsi_static", to_png_classes(cls))
+    meta["lsi"] = {**info, "method": method, "landslide_records": n, "ratings": ratings,
+                   "class_edges": [round(e, 4) for e in edges], "training_grid": f"{tg.width}x{tg.height} @ 90 m"}
+
+
 def _overlays(aoi_id: str) -> None:
     hand = storage.load_layers(aoi_id, "hydro30")["hand"]
     storage.save_png(aoi_id, "hand", to_png(np.where(hand <= 20, hand, np.nan), "hand", 0, 20))
@@ -210,6 +250,10 @@ def prepare_area(aoi: AOI) -> dict:
             status["fsi"] = "ready"
         else:
             run("fsi", _fsi, aoi_id, meta)
+        if storage.exists(aoi_id, "png/lsi_static.png"):
+            status["lsi"] = "ready"
+        elif status.get("derived") == "ready":
+            run("lsi", _lsi, aoi, grid, warnings, meta)
     # Later stages hook in here:, S5 LSI static, S6.1-S6.3, S7.1-S7.6, S9 crowding.
 
     secs = round(time.time() - t0, 1)

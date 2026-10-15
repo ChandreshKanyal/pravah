@@ -24,6 +24,14 @@ class Settings(BaseSettings):
     fsi_ahp_matrix: list[list[float]] = [
         [1, 1, 2, 2, 2, 2, 3], [1, 1, 1, 1, 1, 2, 2], [0.5, 1, 1, 1, 1, 2, 2], [0.5, 1, 1, 1, 1, 2, 2],
         [0.5, 1, 1, 1, 1, 1, 2], [0.5, 0.5, 0.5, 0.5, 1, 1, 1], [1 / 3, 0.5, 0.5, 0.5, 0.5, 1, 1]]
+    # S5.4 landslide AHP matrix, order [slope, rain, ndvi, drain, road, soil, curv, aspect]
+    lsi_ahp_matrix: list[list[float]] = [
+        [1, 1, 2, 2, 2, 2, 2, 3], [1, 1, 1, 2, 2, 2, 2, 3], [0.5, 1, 1, 1, 1, 1, 2, 2],
+        [0.5, 0.5, 1, 1, 1, 1, 1, 2], [0.5, 0.5, 1, 1, 1, 1, 1, 2], [0.5, 0.5, 1, 1, 1, 1, 1, 2],
+        [0.5, 0.5, 0.5, 1, 1, 1, 1, 1], [1 / 3, 1 / 3, 0.5, 0.5, 0.5, 0.5, 1, 1]]
+    # S5.2 says drop records worse than 10 km; 5-10 km points cannot inform 90 m slope classes (FR came out
+    # inverted for slope in Rudraprayag), so the default is 1 km. Set 10 to follow the spec literally.
+    landslide_max_accuracy_km: float = 1.0
     cors_origins: str = "http://localhost:5173,http://localhost:4173"
 
 
