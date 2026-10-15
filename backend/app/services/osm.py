@@ -8,11 +8,14 @@ import osmnx as ox
 
 log = logging.getLogger(__name__)
 
-# Public Overpass endpoints, fastest first (measured 2026-10-15: private.coffee 1.5 s, overpass-api.de 39.5 s
-# for the same small query). Each retry moves to the next endpoint.
-OVERPASS_URLS = ["https://overpass.private.coffee/api", "https://overpass-api.de/api",
-                 "https://maps.mail.ru/osm/tools/overpass/api"]
+# Public Overpass endpoints; each retry moves to the next. private.coffee was fastest on 15 Oct but on 16 Oct began
+# refusing automated clients, so it is tried last. Demo areas are prepared once and cached (S18), so live demos
+# never depend on Overpass.
+OVERPASS_URLS = ["https://overpass-api.de/api", "https://maps.mail.ru/osm/tools/overpass/api",
+                 "https://overpass.kumi.systems/api", "https://overpass.private.coffee/api"]
 ox.settings.overpass_rate_limit = False  # the status probe stalls under load; we back off ourselves
+ox.settings.http_user_agent = "Pravah/0.1 (flood and landslide decision-support research prototype; non-commercial)"
+ox.settings.requests_timeout = 240
 
 POI_TAGS = {
     "amenity": True, "shop": True, "tourism": ["hotel", "guest_house", "hostel"],
@@ -24,7 +27,7 @@ KEEP_COLS = ["name", "amenity", "shop", "tourism", "building", "public_transport
              "waterway", "tunnel", "width", "capacity", "beds"]
 
 
-def _retry(fn, *args, attempts: int = 3, **kwargs):
+def _retry(fn, *args, attempts: int = 4, **kwargs):
     for i in range(attempts):
         ox.settings.overpass_url = OVERPASS_URLS[i % len(OVERPASS_URLS)]
         try:

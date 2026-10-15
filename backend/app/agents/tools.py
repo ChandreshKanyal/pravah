@@ -81,6 +81,7 @@ def get_forecast_summary(tool_context: ToolContext) -> dict:
 def run_scenario(tool_context: ToolContext, rain_source: str | None = None, manual_intensity_mm_h: float | None = None,
                  duration_h: int | None = None, hyetograph: str | None = None, forecast_day_index: int | None = None,
                  worst_multiplier: float | None = None, river_offset_m: float | None = None,
+                 upstream_inflow_m3s: float | None = None,
                  pop_multiplier: float | None = None, travel_mode: str | None = None, evac_start_hour: int | None = None,
                  disable_shelter_ids: list[str] | None = None, enable_shelter_ids: list[str] | None = None,
                  bridge_cut_stage_m: float | None = None) -> dict:
@@ -94,6 +95,7 @@ def run_scenario(tool_context: ToolContext, rain_source: str | None = None, manu
         forecast_day_index: forecast day 0-9 (for forecast/worst/best).
         worst_multiplier: multiplier for the worst case (e.g. 1.5).
         river_offset_m: extra river level already present (-1 to 5 m).
+        upstream_inflow_m3s: river flow entering the area from upstream in m3/s (e.g. from a CWC flood forecast).
         pop_multiplier: population multiplier (0.5-2).
         travel_mode: walk or drive.
         evac_start_hour: hour the evacuation starts (1-based).
@@ -110,7 +112,7 @@ def run_scenario(tool_context: ToolContext, rain_source: str | None = None, manu
     p = dict(base)
     for k, v in dict(rain_source=rain_source, manual_intensity_mm_h=manual_intensity_mm_h, duration_h=duration_h,
                      hyetograph=hyetograph, forecast_day_index=forecast_day_index, worst_multiplier=worst_multiplier,
-                     river_offset_m=river_offset_m, pop_multiplier=pop_multiplier, travel_mode=travel_mode,
+                     river_offset_m=river_offset_m, upstream_inflow_m3s=upstream_inflow_m3s, pop_multiplier=pop_multiplier, travel_mode=travel_mode,
                      evac_start_hour=evac_start_hour, bridge_cut_stage_m=bridge_cut_stage_m).items():
         if v is not None:
             p[k] = v

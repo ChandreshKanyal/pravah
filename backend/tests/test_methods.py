@@ -90,3 +90,14 @@ def test_src_stage_zero_flow_is_zero_stage():
     table = {"h": [0, 0.25, 0.5], "Q": [0, 0, 5.0]}
     assert src_stage(table, 0.0) == 0.0
     assert src_stage(table, 5.0) == pytest.approx(0.5)
+
+
+def test_external_inflow_shares_by_outside_area():
+    from types import SimpleNamespace
+    from app.pipeline.run_pipeline import external_inflow
+    area = SimpleNamespace(reaches=[{"A_up_km2": 1000.0, "A_loc_km2": 100.0},   # main stem: 900 km2 outside
+                                    {"A_up_km2": 460.0, "A_loc_km2": 10.0},     # tributary entering: 450 outside
+                                    {"A_up_km2": 20.0, "A_loc_km2": 20.0}])     # local stream
+    q = external_inflow(area, 900.0)
+    assert list(q) == pytest.approx([900.0, 450.0, 0.0])
+    assert external_inflow(area, 0.0) == 0.0

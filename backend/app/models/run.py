@@ -74,4 +74,6 @@ class RunResult(BaseModel):
     routes: list[dict] = []  # top routes: people, eta_min, passable_until_h, to_shelter, use_now_gone_soon
     people_to_evacuate: int = 0
     timings_s: dict[str, float] = {}
-    methods: dict = {}  # which formulas/thresholds this run used (shown on Methods and in the advisory)
+    methods: dict = {}
+    drains: list[dict] = []  # S13 urban: ranked drain/culvert inspection points (D1..)
+    ponding_png_url: str = ""  # S13 urban: ponding likelihood at the last hour  # which formulas/thresholds this run used (shown on Methods and in the advisory)

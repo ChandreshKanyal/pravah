@@ -52,6 +52,7 @@ export interface ScenarioParams {
   worst_multiplier: number;
   best_multiplier: number;
   river_offset_m: number;
+  upstream_inflow_m3s: number;
   manning_n: number;
   pop_multiplier: number;
   pop_total_override: number | null;
@@ -69,7 +70,7 @@ export interface ScenarioParams {
 
 export const defaultParams = (aoi_id: string): ScenarioParams => ({
   aoi_id, rain_source: "historical_extreme", forecast_day_index: null, manual_intensity_mm_h: 50, duration_h: 4,
-  hyetograph: "constant", worst_multiplier: 1.5, best_multiplier: 0.5, river_offset_m: 0, manning_n: 0.04,
+  hyetograph: "constant", worst_multiplier: 1.5, best_multiplier: 0.5, river_offset_m: 0, upstream_inflow_m3s: 0, manning_n: 0.04,
   pop_multiplier: 1, pop_total_override: null, disabled_shelter_ids: [], extra_shelters: [], blocked_polygons: [],
   travel_mode: "walk", evac_start_hour: 1, vehicle_depth_limit_m: 0.3, walk_depth_limit_m: 0.5,
   bridge_cut_stage_m: 3, max_travel_min: 60, sqm_per_person: 3.5,
@@ -112,7 +113,11 @@ export interface RunResult {
   timings_s: Record<string, number>;
   methods?: Record<string, any>;
   advisory_id?: string | null;
+  drains?: DrainPoint[];
+  ponding_png_url?: string;
 }
+export interface DrainPoint { id: string; lon: number; lat: number; type: string; name: string; priority: number; photo_condition: string | null;
+  exposed_people_300m: number; ponding: number; fsi: number; waterway_id: string }
 
 export interface Forecast {
   hourly: { time: string; local_date: string; local_hour: number; precip_mm: number }[];

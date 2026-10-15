@@ -67,7 +67,13 @@ def plan(area, p: ScenarioParams, depth: np.ndarray, lsi_dyn: np.ndarray | None,
     access_pm: dict = {}  # people x metres from the home cell to the snapped node (access walk)
     rows, cols, pop_b = exposure_ctx["rows"], exposure_ctx["cols"], exposure_ctx["pop_b"]
     cfg = get_settings()
-    ex_b = (exposure_ctx["d_b"] >= routing_wet()).any(axis=0) | (exposure_ctx["ls_b"] >= cfg.lsi_demand_class).any(axis=0)
+    urban = getattr(area, "mode", "river") == "urban"
+    if urban:  # still-water hazard to people (DEFRA FD2321); see config
+        thr_b = np.where(exposure_ctx["frag"] >= 0.75, cfg.urban_evac_depth_fragile_m, cfg.urban_evac_depth_m)
+        thr_un = cfg.urban_evac_depth_fragile_m  # unknown structure: assume fragile
+    else:
+        thr_b, thr_un = routing_wet(), routing_wet()
+    ex_b = (exposure_ctx["d_b"] >= thr_b).any(axis=0) | (exposure_ctx["ls_b"] >= cfg.lsi_demand_class).any(axis=0)
     sus = exposure_ctx.get("ls_b_sus", exposure_ctx["ls_b"])  # uncapped susceptibility classes
     watch = int(((sus >= 4).any(axis=0) & ~ex_b).sum())
     if watch:
@@ -80,7 +86,7 @@ def plan(area, p: ScenarioParams, depth: np.ndarray, lsi_dyn: np.ndarray | None,
             demand_f[node] = demand_f.get(node, 0.0) + float(people)
             access_pm[node] = access_pm.get(node, 0.0) + float(people) * float(dm)
     pop_un = exposure_ctx["pop_un"]
-    wet_un = (np.nan_to_num(depth).max(axis=0) >= routing_wet())
+    wet_un = (np.nan_to_num(depth).max(axis=0) >= thr_un)
     if lsi_dyn is not None:
         wet_un |= lsi_dyn.max(axis=0) >= cfg.lsi_demand_class
     rr, cc = np.nonzero(wet_un & (pop_un > 0))

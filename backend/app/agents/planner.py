@@ -27,6 +27,7 @@ class PlanOverrides(BaseModel):
     hyetograph: Literal["constant", "triangular_front"] | None = None
     worst_multiplier: float | None = None
     river_offset_m: float | None = Field(None, description="-1..5 m")
+    upstream_inflow_m3s: float | None = Field(None, description="river flow entering from upstream, m3/s (0..20000)")
     pop_multiplier: float | None = Field(None, description="0.5..2")
     pop_total_override: int | None = None
     travel_mode: Literal["walk", "drive"] | None = None
@@ -45,7 +46,7 @@ including ones already closed unless the request reopens them). Keep values with
 mm per hour means rain_source=manual with manual_intensity_mm_h. If the request is ambiguous, keep current values
 (leave fields null). Output only the schema."""
 
-RANGES = {"manual_intensity_mm_h": (0, 300), "duration_h": (1, 24), "river_offset_m": (-1, 5), "pop_multiplier": (0.5, 2),
+RANGES = {"upstream_inflow_m3s": (0, 20000), "manual_intensity_mm_h": (0, 300), "duration_h": (1, 24), "river_offset_m": (-1, 5), "pop_multiplier": (0.5, 2),
           "forecast_day_index": (0, 9), "evac_start_hour": (1, 24), "worst_multiplier": (1, 5)}
 
 

@@ -10,7 +10,7 @@ const SOURCES: { value: RainSource; label: string; icon: string }[] = [
 ];
 const FIELD_LABEL: Record<string, string> = {
   rain_source: "Rain source", manual_intensity_mm_h: "Intensity (mm/h)", duration_h: "Duration (h)", hyetograph: "Rain shape",
-  forecast_day_index: "Forecast day", worst_multiplier: "Worst-case ×", river_offset_m: "River already high (m)", pop_multiplier: "Population ×",
+  forecast_day_index: "Forecast day", worst_multiplier: "Worst-case ×", river_offset_m: "River already high (m)", upstream_inflow_m3s: "Upstream river flow (m³/s)", pop_multiplier: "Population ×",
   pop_total_override: "Population total", travel_mode: "Travel", evac_start_hour: "Evacuation starts (hour)", disabled_shelter_ids: "Closed shelters",
   bridge_cut_stage_m: "Bridge closes at (m)", walk_depth_limit_m: "Walk depth limit (m)", vehicle_depth_limit_m: "Vehicle depth limit (m)", max_travel_min: "Max travel (min)",
 };
@@ -92,6 +92,9 @@ export default function ScenarioPanel({ p, set, replace, shelters, drawMode, set
         <Segmented label="Rain shape" block value={p.hyetograph} onChange={(v) => set({ hyetograph: v })}
           options={[{ value: "constant", label: "Steady" }, { value: "triangular_front", label: "Early peak" }]} />
         <Slider label="River already high by" unit="m" value={p.river_offset_m} min={-1} max={5} step={0.5} onChange={(v) => set({ river_offset_m: v })} />
+        <Slider label="Upstream river flow" value={p.upstream_inflow_m3s} min={0} max={15000} step={250}
+          format={(v) => (v ? `${v.toLocaleString("en-IN")} m³/s` : "local rain only")} onChange={(v) => set({ upstream_inflow_m3s: v })}
+          hint="Flow arriving from outside the area, e.g. a CWC flood forecast" />
       </section>
 
       <section className="group" aria-label="People and movement">

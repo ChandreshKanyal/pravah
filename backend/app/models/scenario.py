@@ -22,6 +22,7 @@ class ScenarioParams(BaseModel):
     worst_multiplier: float = 1.5  # worst = forecast x this
     best_multiplier: float = 0.5
     river_offset_m: float = 0.0  # added to every reach stage (pre-existing high water)
+    upstream_inflow_m3s: float = 0.0  # river flow entering the area from outside (e.g. a CWC forecast), main stem total
     manning_n: float = 0.04
     pop_multiplier: float = 1.0
     pop_total_override: int | None = None

@@ -14,6 +14,7 @@ const LIMIT_KM = { river: 15, urban: 4 } as const;
 type BBox = [number, number, number, number];
 const DEMOS: { name: string; bbox: BBox; mode: "river" | "urban"; note: string }[] = [
   { name: "Rudraprayag", bbox: [78.93, 30.24, 79.03, 30.33], mode: "river", note: "Alaknanda–Mandakini confluence, Uttarakhand" },
+  { name: "Mumbai Kurla–Mithi", bbox: [72.865, 19.06, 72.895, 19.09], mode: "urban", note: "Mithi river and Kurla waterlogging, Maharashtra" },
 ];
 
 function Fly({ to }: { to: { bbox?: BBox | null; lat?: number; lng?: number; zoom?: number } | null }) {
@@ -148,8 +149,8 @@ export default function Explore() {
           ))}
           <div className="section-title" style={{ marginTop: 4 }}><Icon name="star" /> Demo areas</div>
           {DEMOS.map((d) => (
-            <button key={d.name} className="area-card sl" onClick={() => { setFly({ bbox: d.bbox }); setDraft({ bbox: d.bbox, name: d.name, mode: d.mode }); }}>
-              <span className="thumb"><Icon name="water" /></span>
+            <button key={d.name} className="area-card sl" onClick={() => { setFly({ bbox: d.bbox }); setDraft({ bbox: d.bbox, name: d.name === "Rudraprayag" ? "Rudraprayag 10km" : d.name, mode: d.mode }); }}>
+              <span className="thumb"><Icon name={d.mode === "urban" ? "location_city" : "water"} /></span>
               <span className="grow"><span className="title-s" style={{ display: "block" }}>{d.name}</span><span className="body-s muted">{d.note}</span></span>
               <Icon name="chevron_right" className="muted" />
             </button>

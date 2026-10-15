@@ -42,7 +42,7 @@ function Chart({ data, unit, title, color }: { data: { h: number; v: number }[];
 }
 
 export default function Results({ run, hour, onFly, previous }: { run: RunResult; hour: number; onFly: (lon: number, lat: number) => void; previous?: RunResult | null }) {
-  const [tab, setTab] = useState<"shelters" | "routes" | "bridges" | "buildings">("shelters");
+  const [tab, setTab] = useState<"shelters" | "routes" | "bridges" | "buildings" | "drains">(run.drains?.length ? "drains" : "shelters");
   const e = run.exposure;
   const H = run.rain_series_mm_h.length;
   const peak = Math.max(0, ...e.exposed_pop_by_hour);
@@ -89,7 +89,8 @@ export default function Results({ run, hour, onFly, previous }: { run: RunResult
       <div className="card outlined" style={{ padding: 0 }}>
         <Tabs value={tab} onChange={setTab} tabs={[
           { value: "shelters", label: "Shelters" }, { value: "routes", label: "Routes", badge: run.routes.filter((r) => r.use_now_gone_soon).length || undefined },
-          { value: "bridges", label: "Bridges" }, { value: "buildings", label: "Buildings" },
+          ...(run.drains?.length ? [{ value: "drains" as const, label: "Drains" }] : [{ value: "bridges" as const, label: "Bridges" }]),
+          { value: "buildings", label: "Buildings" },
         ]} />
         <div style={{ padding: "8px 0" }}>
           {tab === "shelters" && (
@@ -135,6 +136,19 @@ export default function Results({ run, hour, onFly, previous }: { run: RunResult
                 </div>
               ))}
               {!run.bridges.length && <p className="body-m muted" style={{ padding: 16 }}>No bridges mapped in OpenStreetMap here.</p>}
+            </div>
+          )}
+          {tab === "drains" && (
+            <div className="list">
+              <p className="body-s muted" style={{ padding: "4px 16px 8px" }}>Inspect and clear before the monsoon, highest priority first (flow, ponding, people within 300 m).</p>
+              {(run.drains ?? []).map((d) => (
+                <div key={d.id} className="li dense clickable sl" onClick={() => onFly(d.lon, d.lat)} role="button" tabIndex={0}>
+                  <span className="label-l" style={{ width: 28, color: "var(--primary)" }}>{d.id}</span>
+                  <span className="txt"><span className="t" style={{ fontSize: 14 }}>{d.name || d.type}</span>
+                    <span className="s" style={{ display: "block" }}>{d.type} · {nf(d.exposed_people_300m)} exposed within 300 m{d.photo_condition ? ` · photo: ${d.photo_condition.replace("_", " ")}` : ""}</span></span>
+                  <span className={`tag ${d.priority >= 0.6 ? "crit" : d.priority >= 0.4 ? "high" : ""}`}>{d.priority.toFixed(2)}</span>
+                </div>
+              ))}
             </div>
           )}
           {tab === "buildings" && (triage.length ? (

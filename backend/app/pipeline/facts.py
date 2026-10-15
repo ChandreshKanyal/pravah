@@ -137,7 +137,9 @@ def build_facts(run: dict, area_extra: dict | None = None) -> dict:
         "landslide_roads": lsr,
         "crowding": [{"id": x["id"], "score": x["score"], "attractors": x.get("top_attractors", []),
                       "lonlat": [x["lon"], x["lat"]]} for x in area_extra.get("crowding", [])[:5]],
-        "drains": area_extra.get("drains", [])[:10],
+        "drains": [{"id": d["id"], "type": d["type"], "name": d.get("name", ""), "priority": d["priority"],
+                    "exposed_people_300m": d.get("exposed_people_300m"), "photo_condition": d.get("photo_condition"),
+                    "lonlat": [d["lon"], d["lat"]]} for d in (run.get("drains") or area_extra.get("drains", []))[:10]],
         "verification_queue": [{"id": f"V{k}", "bid": v["bid"], "current_class": v["current_class"], "people": v["people"],
                                 "lonlat": [v["lon"], v["lat"]]} for k, v in enumerate(area_extra.get("verification", [])[:10], 1)],
         "forecast": area_extra.get("forecast", {}),
@@ -268,8 +270,9 @@ def rules_advisory(facts: dict) -> list[Recommendation]:
                                   why="Dry, flat ground next to a road that stays open all scenario.", confidence="medium"))
     for d in facts["drains"][:3]:
         out.append(Recommendation(horizon="seasonal", priority="P2", action=f"Inspect and clear drain {d['id']} before monsoon",
-                                  location_label=d.get("type", "drain"), evidence_ids=[d["id"]],
-                                  why=f"Priority score {d.get('priority')}.", confidence="medium"))
+                                  location_label=(d.get("name") or d.get("type", "drain")), evidence_ids=[d["id"]],
+                                  why=f"Priority score {d.get('priority')}; {d.get('exposed_people_300m', 0)} exposed people within 300 m.",
+                                  confidence="medium"))
     for L in facts["landslide_roads"][:3]:
         out.append(Recommendation(horizon="seasonal", priority="P2", action=f"Inspect slope protection on {L['name']}",
                                   location_label=L["name"], evidence_ids=[L["id"]],

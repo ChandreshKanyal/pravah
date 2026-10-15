@@ -11,8 +11,10 @@
   "dependencies": {
     "@deck.gl/aggregation-layers": "9.4.0",
     "@deck.gl/core": "9.4.0",
+    "@deck.gl/geo-layers": "9.4.0",
     "@deck.gl/google-maps": "9.4.0",
     "@deck.gl/layers": "9.4.0",
+    "@deck.gl/mesh-layers": "9.4.0",
     "@loaders.gl/core": "4.5.4",
     "@luma.gl/core": "9.4.0",
     "@luma.gl/engine": "9.4.0",

@@ -12,7 +12,7 @@ from functools import lru_cache
 import numpy as np
 
 from app.config import get_settings
-from app.engines import exposure as ex_engine, flood, hydrology as hy, landslide as ls, population, rainfall
+from app.engines import drains as drn, exposure as ex_engine, flood, hydrology as hy, landslide as ls, pluvial, population, rainfall
 from app.engines.grid import corner_lonlats, lonlat_bounds, lonlat_to_rowcol, rowcol_to_lonlat
 from app.engines.render import DEPTH_COLORS, DEPTH_EDGES, WATER_COLOR, to_png_binned, to_png_classes
 from app.models.grid import GridSpec
@@ -52,7 +52,19 @@ class Area:
     dist_road_m: np.ndarray
     shelters: list[dict]
     networks: dict
-    src_cache: dict = field(default_factory=dict)  # SRC tables by Manning's n, plus the flow path
+    mode: str = "river"
+    pluvial: dict | None = None  # S13 static depression analysis (urban mode)
+    dem: np.ndarray | None = None
+    drain_cands: list[dict] = field(default_factory=list)
+    fsi: np.ndarray | None = None
+    aoi_mask: np.ndarray | None = None  # cells inside the drawn bbox; the grid adds a 3 km hydrology buffer
+    src_cache: dict = field(default_factory=dict)
+
+    def with_urban_dem(self, surface_dem: np.ndarray) -> "Area":
+        """Urban ponding levels use the same DEM the depressions were built from (FABDEM when available)."""
+        if self.pluvial is not None:
+            self.dem = self.pluvial.get("dem_bare", surface_dem)
+        return self  # SRC tables by Manning's n, plus the flow path
 
 
 @lru_cache(maxsize=4)
@@ -61,9 +73,14 @@ def load_area(aoi_id: str) -> Area:
         raise AreaNotReady(f"AOI {aoi_id} is not prepared yet")
     h30 = storage.load_layers(aoi_id, "hydro30")
     sus = storage.load_layers(aoi_id, "susceptibility") if storage.exists(aoi_id, "susceptibility.npz") else {}
+    doc = fs.get_aoi(aoi_id) or {}
+    mode = doc.get("mode", "river")
+    grid = storage.load_grid(aoi_id)
+    urban = mode == "urban" and storage.exists(aoi_id, "pluvial.npz")
+    terr = storage.load_layers(aoi_id, "terrain")
     return Area(
         aoi_id=aoi_id,
-        grid=storage.load_grid(aoi_id),
+        grid=grid,
         hgrid=hy.HydroGrid(**storage.get_json(aoi_id, "hydro_grid.json")),
         hand=h30["hand"],
         perm=flood.permanent_water(storage.load_layers(aoi_id, "hazard_hist")["gsw_occ"]),
@@ -72,7 +89,7 @@ def load_area(aoi_id: str) -> Area:
         reaches=storage.get_json(aoi_id, "reaches.json"),
         native=storage.load_layers(aoi_id, "hydro_native"),
         hotspots=storage.get_json(aoi_id, "hotspots.json"),
-        slope_deg=storage.load_layers(aoi_id, "terrain")["slope_deg"],
+        slope_deg=terr["slope_deg"],
         lsi_static=sus.get("lsi_static"),
         lsi_edges=sus["lsi_edges"].tolist() if "lsi_edges" in sus else None,
         dist_stream_m=h30["dist_stream_m"],
@@ -84,7 +101,22 @@ def load_area(aoi_id: str) -> Area:
         networks={m: evac.load_network(storage.load_gdf(aoi_id, f"edges_{m}.parquet"),
                                        storage.load_gdf(aoi_id, f"nodes_{m}.parquet"))
                   for m in ("walk", "drive") if storage.exists(aoi_id, f"edges_{m}.parquet")},
-    )
+        mode=mode,
+        pluvial=storage.load_layers(aoi_id, "pluvial") if urban else None,
+        dem=None,
+        drain_cands=storage.get_json(aoi_id, "drain_candidates.json") if urban and storage.exists(aoi_id, "drain_candidates.json") else [],
+        fsi=sus.get("fsi"),
+        aoi_mask=_bbox_mask(grid, doc.get("bbox")),
+    ).with_urban_dem(terr["dem"])
+
+
+def _bbox_mask(grid: GridSpec, bbox) -> np.ndarray:
+    rr, cc = np.indices((grid.height, grid.width))
+    if not bbox:
+        return np.ones((grid.height, grid.width), bool)
+    lon, lat = (np.asarray(x) for x in rowcol_to_lonlat(grid, rr, cc))
+    w, s, e, n = bbox
+    return (lon >= w) & (lon <= e) & (lat >= s) & (lat <= n)
 
 
 def _load_buildings(aoi_id: str) -> dict[str, np.ndarray] | None:
@@ -137,6 +169,16 @@ def reach_params(area: Area, c_table: list[float]) -> tuple[np.ndarray, np.ndarr
     L, head = area.src_cache["flow_path"]
     z = np.nan_to_num(area.native["elv"].ravel().astype(float))
     return np.clip(C, 0.10, 0.95), rainfall.tc_hours_path(L[last], head[last] - z[last], A_loc), A_loc
+
+
+def external_inflow(area: Area, total_m3s: float) -> np.ndarray | float:
+    """Upstream inflow per reach: the scenario's main-stem flow entering the grid, shared in proportion to each
+    reach's upstream area outside the grid (A_up - A_loc), so the main stem carries all of it and mass is conserved
+    downstream. Zero for reaches whose whole catchment lies inside the grid."""
+    if not total_m3s:
+        return 0.0
+    ext = np.array([max(0.0, r["A_up_km2"] - r["A_loc_km2"]) for r in area.reaches])
+    return total_m3s * ext / ext.max() if ext.max() > 0 else 0.0
 
 
 def area_centroid(area: Area) -> tuple[float, float]:
@@ -219,10 +261,20 @@ def run_pipeline(p: ScenarioParams) -> RunResult:
     cfg = get_settings()
     rain, rain_label, warnings = rain_series(p, area)
     C, tc_h, A_loc = reach_params(area, cfg.runoff_c)
-    h, _Q = flood.hourly_envelope(rain, tc_h, C, A_loc, get_src(area, p.manning_n), p.river_offset_m, arf=cfg.apply_arf)
+    h, _Q = flood.hourly_envelope(rain, tc_h, C, A_loc, get_src(area, p.manning_n), p.river_offset_m,
+                                  inflow_m3s=external_inflow(area, p.upstream_inflow_m3s), arf=cfg.apply_arf)
     if np.any(h >= hy.SRC_STAGES[-1] + p.river_offset_m - 1e-6):
         warnings.append("Some reaches reach the top of their rating curve (30 m); depths there are capped")
     depth = flood.depth_stack(h, area.reach_id_30, area.hand, area.perm)
+    pond_fill = None
+    if area.pluvial is not None:
+        # S13 urban mode is a pluvial screening: HAND is ~0 across flat coastal plains, so river-stage mapping would
+        # flood whole districts. Depth = ponding only; river overflow and tides are listed as limitations.
+        pond, pond_fill = pluvial.ponding(area.pluvial, area.dem, rain, area.grid.cell, cfg.urban_drain_capacity_mm_h)
+        depth = np.where(area.perm[None], np.nan, pond).astype(np.float32)
+        warnings.append("Urban mode: water-logging (ponding) screening only; Mithi-type river overflow and tides are not modelled")
+        if not pond.any():
+            warnings.append(f"Rain stays within the storm-drain capacity ({cfg.urban_drain_capacity_mm_h:g} mm/h); no ponding estimated")
     timings["flood"] = round(time.time() - t0, 2)
 
     lon_c, lat_c = area_centroid(area)
@@ -263,6 +315,14 @@ def run_pipeline(p: ScenarioParams) -> RunResult:
         ctx["ls_b_sus"] = lsi_dyn[:, ctx["rows"], ctx["cols"]]
     timings["exposure"] = round(time.time() - t2, 2)
 
+    drains_out, pond_png = [], None
+    if pond_fill is not None:
+        drains_out = _drains(area, depth, pond_fill, ctx)
+        lab = area.pluvial["dep_label"]
+        pond_png = to_png_binned(np.where(lab > 0, pond_fill[-1][lab], np.nan), [0.01, 0.3, 0.7], ["#9ecae1", "#3182bd", "#08306b"])
+        methods["urban"] = (f"Priority-Flood depressions (Barnes et al. 2014) filled to level by rain above the "
+                            f"{cfg.urban_drain_capacity_mm_h:g} mm/h drain capacity; screening, not hydrodynamics")
+
     t3 = time.time()
     ev = evac.plan(area, p, depth, lsi_act, h, ctx, warnings) if ctx else {}
     timings["routing"] = round(time.time() - t3, 2)
@@ -272,6 +332,8 @@ def run_pipeline(p: ScenarioParams) -> RunResult:
             for t in range(depth.shape[0])}
     if lsi_dyn is not None:
         pngs.update({f"lsi_h{t + 1}": to_png_classes(lsi_dyn[t]) for t in range(lsi_dyn.shape[0])})
+    if pond_png is not None:
+        pngs["ponding"] = pond_png
     buf = io.BytesIO()
     np.savez_compressed(buf, depth=depth.astype(np.float16))
     lbuf = io.BytesIO()
@@ -283,6 +345,10 @@ def run_pipeline(p: ScenarioParams) -> RunResult:
         if lsi_dyn is not None:
             jobs.append(ex.submit(storage.put_run, run_id, "lsi.npz", lbuf.getvalue()))
         jobs.append(ex.submit(storage.put_run, run_id, "verification.json", json.dumps(queue).encode(), "application/json"))
+        if ctx:  # per-building risk (0 critical .. 3 low) for the 3D view
+            rb = io.BytesIO()
+            np.save(rb, ctx["risk_codes"])
+            jobs.append(ex.submit(storage.put_run, run_id, "bld_risk.npy", rb.getvalue()))
         for k in ("roads", "routes"):
             if ev.get(f"{k}_geojson"):
                 jobs.append(ex.submit(storage.put_run, run_id, f"{k}.geojson", ev[f"{k}_geojson"].encode(),
@@ -307,7 +373,8 @@ def run_pipeline(p: ScenarioParams) -> RunResult:
         run_id=run_id, aoi_id=p.aoi_id, params=p, created_at=datetime.now(timezone.utc),
         rain_series_mm_h=rain, rain_label=rain_label,
         stage_by_reach_m={str(r["reach_id"]): h[i].round(2).tolist() for i, r in enumerate(area.reaches)},
-        flooded_area_km2_by_hour=[round(flood.flooded_area_km2(depth[t], area.grid.cell), 3) for t in range(len(rain))],
+        flooded_area_km2_by_hour=[round(flood.flooded_area_km2(np.where(area.aoi_mask, depth[t], 0), area.grid.cell), 3)
+                                  for t in range(len(rain))],
         depth_png_urls=[f"/api/runs/{run_id}/layers/{k}.png" for k in pngs if k.startswith("depth_")],
         lsi_png_url=f"/api/runs/{run_id}/layers/lsi_h{len(rain)}.png" if lsi_dyn is not None else "",
         overlay_bounds=lonlat_bounds(area.grid), overlay_corners=corner_lonlats(area.grid),
@@ -317,6 +384,7 @@ def run_pipeline(p: ScenarioParams) -> RunResult:
         staging_points=ev.get("staging_points", []), routes=ev.get("routes_summary", []),
         people_to_evacuate=ev.get("people_to_evacuate", 0),
         roads_geojson_url=f"/api/runs/{run_id}/files/roads.geojson" if ev else "",
+        drains=drains_out, ponding_png_url=f"/api/runs/{run_id}/layers/ponding.png" if pond_png is not None else "",
         routes_geojson_url=f"/api/runs/{run_id}/files/routes.geojson" if ev else "",
     )
     timings["total"] = round(time.time() - t0, 2)
@@ -335,9 +403,10 @@ def _exposure(area: Area, p: ScenarioParams, depth: np.ndarray, lsi_dyn: np.ndar
         warnings.append("Buildings not prepared for this area; exposure unavailable")
         return ExposureSummary(), [], [], {}
     b = area.bld
-    base_total = float(b["pop_base"].sum() + area.pop_unattr.sum())
+    base_total = float(b["pop_base"].sum() + (area.pop_unattr * area.aoi_mask).sum())
     k = population.scale_factor(base_total, p.pop_multiplier, p.pop_total_override)
-    pop_b, pop_un = b["pop_base"] * k, area.pop_unattr * k
+    # exposure counts only people inside the drawn area (the 3 km buffer is for hydrology, and has no buildings)
+    pop_b, pop_un = b["pop_base"] * k, area.pop_unattr * area.aoi_mask * k
     share = float(b["pop_base"].sum()) / base_total if base_total else 0.0
     if share < 0.5:
         warnings.append(f"Only {share:.0%} of residents could be placed in mapped buildings (Open Buildings coverage); "
@@ -374,5 +443,35 @@ def _exposure(area: Area, p: ScenarioParams, depth: np.ndarray, lsi_dyn: np.ndar
     tri = [TriageRow(**r) for r in ex_engine.triage(struct, risk, pop_b)]
     queue = ex_engine.verification_queue(b["bid"], R, conf, pop_b, b["lon"], b["lat"], struct)
     ctx = {"rows": rows, "cols": cols, "pop_b": pop_b, "pop_un": pop_un, "d_b": ph["d_b"], "ls_b": ph["ls_b"],
+           "risk_codes": np.array([ex_engine.RISK_ORDER.index(r) for r in risk], np.uint8), "frag": frag,
            "clusters": cl}
     return summary, tri, queue, ctx
+
+
+def _drains(area: Area, depth: np.ndarray, pond_fill: np.ndarray, ctx: dict) -> list[dict]:
+    """S13.4: rank drain/culvert candidates by accumulation, ponding/FSI and exposed people within 300 m."""
+    if not area.drain_cands:
+        return []
+    shape = (area.grid.height, area.grid.width)
+    wet = np.nan_to_num(depth[-1]) >= ex_engine.WET_M
+    exposed = np.zeros(shape)
+    if ctx:
+        exposed += np.where(wet, ctx["pop_un"], 0.0)
+        m = ctx["d_b"][-1] >= ex_engine.WET_M
+        np.add.at(exposed, (ctx["rows"][m], ctx["cols"][m]), ctx["pop_b"][m])
+    lab = area.pluvial["dep_label"]
+    like = np.where(lab > 0, pond_fill[-1][lab], 0.0)
+    cond: dict[str, str] = {}
+    try:
+        for d in sorted(fs.query("photos", aoi_id=area.aoi_id, kind="drain", accepted=True), key=lambda d: d.get("created_at", "")):
+            cond[str(d["linked_drain_id"])] = d["result"]["condition"]
+    except Exception as e:
+        log.info("drain photos unavailable: %s", e)
+    cands = [c for c in area.drain_cands if area.aoi_mask[c["row"], c["col"]]]
+    if not cands:
+        return []
+    rows = [c["row"] for c in cands]
+    cols = [c["col"] for c in cands]
+    fsi = area.fsi if area.fsi is not None else np.zeros(shape)
+    out = drn.priority(cands, rows, cols, area.pluvial["acc_cells"], fsi, like, exposed, cond, area.grid.cell)
+    return [{k: v for k, v in d.items() if k not in ("x", "y", "row", "col")} for d in out]

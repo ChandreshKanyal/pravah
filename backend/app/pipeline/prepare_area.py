@@ -13,7 +13,7 @@ from scipy.ndimage import binary_dilation, distance_transform_edt
 
 from app.config import get_settings
 from app.engines import buildings as bld, crowding, fsi as fsi_engine, hydrology as hy, landslide as ls, population, rainfall
-from app.engines import roads, shelters as shel
+from app.engines import drains as drn, pluvial, roads, shelters as shel
 from app.engines.grid import lonlat_bounds, lonlat_to_rowcol, make_grid, rowcol_to_lonlat, terrain, terrain_coarse, xy_to_rowcol
 from app.engines.render import to_png, to_png_classes
 from scipy.spatial import cKDTree
@@ -160,7 +160,7 @@ def _lsi(aoi: AOI, grid: GridSpec, warnings: list[str], meta: dict) -> None:
     """S5 static: FR ratings learned on a 90 m grid over the AOI + 50 km, AHP weights, training-region scaling."""
     cfg = get_settings()
     tg = make_grid(aoi.bbox, buffer_m=50_000, cell=90, snap=90)
-    T = ees.fetch_training_layers(tg)
+    T = ees.fetch_training_layers(tg, bare_earth=aoi.mode == "urban")
     t_terr = terrain(T["dem"], tg.cell)
     t_stream = np.nan_to_num(T["upa"]) >= cfg.stream_upa_km2
     pts = ees.fetch_landslides(tg, cfg.landslide_max_accuracy_km)
@@ -314,6 +314,36 @@ def _network(aoi: AOI, grid: GridSpec, warnings: list[str], meta: dict) -> None:
     meta["shelters"] = {"osm": n_osm, "total": len(out[0]), "medical": len(out[1])}
 
 
+def _urban(aoi: AOI, grid: GridSpec, warnings: list[str], meta: dict) -> None:
+    """S13 static part (urban mode): depression analysis on the filled DEM and drain/culvert candidates."""
+    aoi_id = aoi.aoi_id
+    try:
+        dem = ees.fetch_fabdem(grid)
+        dem_src = "FABDEM (bare earth)"
+    except Exception as e:  # fall back to the surface model, with a warning
+        dem = storage.load_layers(aoi_id, "terrain")["dem"]
+        dem_src = "Copernicus GLO-30 (surface model)"
+        warnings.append(f"Bare-earth DEM unavailable ({e.__class__.__name__}); ponding uses the surface model, which includes buildings")
+    C = rainfall.runoff_c(storage.load_layers(aoi_id, "landcover")["lc_class"], get_settings().runoff_c)
+    st = pluvial.prepare(dem, grid.cell, C)
+    st["dem_bare"] = dem.astype(np.float32)
+    storage.save_layers(aoi_id, "pluvial", st, grid)
+    water = storage.load_gdf(aoi_id, "waterways.parquet").to_crs(grid.crs) if storage.exists(aoi_id, "waterways.parquet") else None
+    roads_g = storage.load_gdf(aoi_id, "edges_drive.parquet") if storage.exists(aoi_id, "edges_drive.parquet") else None
+    cands = drn.candidates(water, roads_g) if water is not None and len(water) else []
+    for cd in cands:
+        r, c = xy_to_rowcol(grid, cd["x"], cd["y"])
+        lon, lat = rowcol_to_lonlat(grid, r, c)
+        cd.update(row=int(np.clip(r, 0, grid.height - 1)), col=int(np.clip(c, 0, grid.width - 1)),
+                  lon=round(float(lon), 6), lat=round(float(lat), 6))
+    storage.put_json(aoi_id, "drain_candidates.json", cands)
+    if not cands:
+        warnings.append("No OSM drains, canals or culverts here; drain priority list unavailable")
+    meta["urban"] = {"depressions": int(len(st["v_dep"]) - 1), "depression_volume_m3": round(float(st["v_dep"].sum())),
+                     "drain_candidates": len(cands),
+                     "dem": dem_src, "note": "ponding is a screening estimate (no pipes, no merging of overflowing depressions)"}
+
+
 def _overlays(aoi_id: str) -> None:
     hand = storage.load_layers(aoi_id, "hydro30")["hand"]
     storage.save_png(aoi_id, "hand", to_png(np.where(hand <= 20, hand, np.nan), "hand", 0, 20))
@@ -349,11 +379,11 @@ def prepare_area(aoi: AOI, force: frozenset[str] = frozenset()) -> dict:
 
     storage.save_grid(aoi_id, grid)
     fs.update_aoi(aoi_id, {"grid": grid.to_dict(), "state": "preparing"})
-    images = ees.layer_images(grid)
+    images = ees.layer_images(grid, bare_earth=aoi.mode == "urban")
     tasks = []
     with ThreadPoolExecutor(max_workers=8) as ex:
         for g in EE_GROUPS:
-            if storage.exists(aoi_id, f"{g}.npz"):
+            if storage.exists(aoi_id, f"{g}.npz") and g not in force:
                 status[g] = "ready"
             else:
                 tasks.append(ex.submit(run, g, _ee_group, aoi_id, grid, images, g, warnings, meta))
@@ -364,7 +394,7 @@ def prepare_area(aoi: AOI, force: frozenset[str] = frozenset()) -> dict:
         tasks.append(ex.submit(run, "osm", _osm, aoi_id, grid, warnings))
         for t in tasks:
             t.result()
-    if not storage.exists(aoi_id, "derived.npz"):
+    if not storage.exists(aoi_id, "derived.npz") or "derived" in force:
         run("derived", _derived, aoi_id, grid, warnings)
     else:
         status["derived"] = "ready"
@@ -390,7 +420,11 @@ def prepare_area(aoi: AOI, force: frozenset[str] = frozenset()) -> dict:
         status["network"] = "ready"
     elif status.get("building_proxy") == "ready" and status.get("osm") == "ready":
         run("network", _network, aoi, grid, warnings, meta)
-    # Later stages hook in here:, S5 LSI static, S6.1-S6.3, S7.1-S7.6, S9 crowding.
+    if aoi.mode == "urban":
+        if storage.exists(aoi_id, "pluvial.npz") and "urban" not in force:
+            status["urban"] = "ready"
+        elif status.get("network") == "ready":
+            run("urban", _urban, aoi, grid, warnings, meta)
 
     secs = round(time.time() - t0, 1)
     warnings = list(dict.fromkeys(w for ws in step_warn.values() for w in ws))

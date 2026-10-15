@@ -23,6 +23,7 @@ WORLDPOP_ID = "WorldPop/GP/100m/pop"
 WORLDPOP_YEAR = 2020  # latest year for IND in the catalog (verified)
 LANDSLIDE_ID = "projects/sat-io/open-datasets/events/global_landslide_1970-2019"  # NASA GLC (verified access)
 GRIP_ID = "projects/sat-io/open-datasets/GRIP4/South-East-Asia"  # GRIP4 roads, region 6 (verified access)
+FABDEM_ID = "projects/sat-io/open-datasets/FABDEM"  # Copernicus DEM with forests and buildings removed (verified access)
 ROAD_SEARCH_M = 5000
 LANDSLIDE_ACCURACY_KM = {"exact": 0, "1km": 1, "5km": 5, "10km": 10, "25km": 25, "50km": 50}  # "unknown" dropped
 OB_ID = "GOOGLE/Research/open-buildings/v3/polygons"
@@ -106,13 +107,17 @@ def _last_dry_season(today: date) -> tuple[str, str]:
     return f"{end_year - 1}-10-01", f"{end_year}-04-01"
 
 
-def layer_images(grid: GridSpec, today: date | None = None) -> dict[str, ee.Image]:
-    """One ee.Image per layer group; band names are the §4.2 keys."""
+def layer_images(grid: GridSpec, today: date | None = None, bare_earth: bool = False) -> dict[str, ee.Image]:
+    """One ee.Image per layer group; band names are the §4.2 keys.
+
+    bare_earth (urban mode): terrain from FABDEM instead of Copernicus GLO-30, whose buildings would turn streets into
+    pits and building edges into "slopes" (wrong ponding, landslide classes and walking times)."""
     today = today or date.today()
     r = grid_region(grid)
 
-    dem_col = ee.ImageCollection(DEM_ID)
-    dem = dem_col.filterBounds(r).select("DEM").mosaic().setDefaultProjection(dem_col.first().projection())
+    dem_col = ee.ImageCollection(FABDEM_ID if bare_earth else DEM_ID)
+    band = "b1" if bare_earth else "DEM"
+    dem = dem_col.filterBounds(r).select([band], ["DEM"]).mosaic().setDefaultProjection(dem_col.first().projection())
 
     merit = ee.Image(MERIT_ID)
     hydro = resample(merit.select(["hnd", "elv"], ["hand", "elv_hydro"]), "bilinear").addBands(
@@ -168,10 +173,10 @@ def fetch_merit_native(hgrid) -> dict[str, np.ndarray]:
     return fetch_grid(img, g, ["hnd", "elv", "upa", "d8"])
 
 
-def fetch_training_layers(train_grid: GridSpec) -> dict[str, np.ndarray]:
+def fetch_training_layers(train_grid: GridSpec, bare_earth: bool = False) -> dict[str, np.ndarray]:
     """dem, ndvi, soil_clay, rain_clim, upa and dist_road_m (GRIP4 global roads) on a coarse grid for the landslide
     training region (S5.2). OSM is not fetched for the 100 km box; GRIP4 gives the road factor a real distribution."""
-    im = layer_images(train_grid)
+    im = layer_images(train_grid, bare_earth=bare_earth)  # same DEM family as the AOI terrain
     roads = (ee.FeatureCollection(GRIP_ID).filterBounds(grid_region(train_grid))
              .distance(searchRadius=ROAD_SEARCH_M, maxError=30).unmask(ROAD_SEARCH_M).rename("dist_road_m"))
     img = (im["terrain"].addBands(im["landcover"].select(["ndvi", "soil_clay"]))
@@ -261,3 +266,11 @@ def fetch_buildings(bbox: tuple[float, float, float, float], grid: GridSpec) -> 
     gdf["bid"] = [f"b{i}" for i in range(len(gdf))]
     log.info("buildings: %d", len(gdf))
     return gdf[cols].reset_index(drop=True), []
+
+
+def fetch_fabdem(grid: GridSpec) -> np.ndarray:
+    """Bare-earth DEM (FABDEM, Hawker et al. 2022) on the analysis grid, for urban ponding: GLO-30 is a surface model
+    whose buildings turn streets into deep artificial pits."""
+    col = ee.ImageCollection(FABDEM_ID)
+    img = col.filterBounds(grid_region(grid)).mosaic().setDefaultProjection(col.first().projection()).rename("dem_bare")
+    return fetch_grid(resample(img, "bilinear"), grid, ["dem_bare"])["dem_bare"]

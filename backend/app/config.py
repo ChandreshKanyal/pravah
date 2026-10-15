@@ -45,6 +45,14 @@ class Settings(BaseSettings):
     # "class_shift": +-1 class by threshold exceedance (17 Oct); "graded_g": score x g (16 Oct); spec: score x clip(R)
     lsi_modulation: str = "class_shift"
     apply_arf: bool = True  # TP-29 areal reduction of point rain in the rational method (spec: none)
+    # S13 urban: rain up to this intensity is carried by storm drains (Mumbai's historical design standard is 25 mm/h;
+    # BRIMSTOWAD upgrades target 50 mm/h). Only the excess ponds.
+    urban_drain_capacity_mm_h: float = 25.0
+    # Urban evacuation demand (still water): DEFRA/EA FD2321 hazard rating HR = d(v + 0.5) + DF with v = 0, DF = 0.5
+    # reaches "danger for some" (0.75) at d = 0.5 m; fragile single-storey homes (F >= 0.75) at 0.3 m (water inside).
+    # River mode keeps the spec's 0.05 m (fast flash floods in hill valleys).
+    urban_evac_depth_m: float = 0.5
+    urban_evac_depth_fragile_m: float = 0.3
     cors_origins: str = "http://localhost:5173,http://localhost:4173"
 
 

@@ -124,6 +124,8 @@ async def upload_photo(file: UploadFile = File(...), aoi_id: str = Form(...),
             doc["message"] = f"Low confidence ({res['confidence']:.2f}) or unclear; saved for review, not applied."
         else:
             doc["accepted"] = True
+            if kind == "drain" and cls == "unclear":
+                doc["accepted"] = False
             if kind == "building":
                 doc["override_class"] = PHOTO_TO_BUILDING[cls]
                 doc["message"] = (f"Building {linked} reclassified from {doc.get('previous_class', 'proxy')} to "

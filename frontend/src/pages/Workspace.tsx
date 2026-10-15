@@ -64,7 +64,7 @@ export default function Workspace() {
   const [mapType, setMapType] = useState<MapType>("hybrid");
   const [pending, setPending] = useState<{ lng: number; lat: number } | null>(null);
   const [cap, setCap] = useState("200");
-  const [on, setOn] = useState<Set<LayerKey>>(new Set(["depth", "roads", "routes", "shelters", "assembly", "bridges", "medical", "streams"]));
+  const [on, setOn] = useState<Set<LayerKey>>(new Set(["depth", "roads", "routes", "shelters", "assembly", "bridges", "medical", "streams", "drains"]));
 
   const set = useCallback((patch: Partial<ScenarioParams>) => setP((x) => ({ ...x, ...patch })), []);
   const toggle = (k: LayerKey) => setOn((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
@@ -135,6 +135,8 @@ export default function Workspace() {
       const oc = run.overlay_corners.length ? run.overlay_corners : c;
       if (on.has("lsi") && run.lsi_png_url) L.push(bitmap(`lsi-${run.run_id}-${hour}`, run.lsi_png_url.replace(/lsi_h\d+/, `lsi_h${hour}`), oc, 0.55));
       if (on.has("depth")) L.push(bitmap(`depth-${run.run_id}-${hour}`, run.depth_png_urls[hour - 1], oc, 0.9));
+      if (on.has("ponding") && run.ponding_png_url) L.push(bitmap(`pond-${run.run_id}`, run.ponding_png_url, oc, 0.75));
+      if (on.has("drains") && run.drains?.length) L.push(...points("drains", run.drains, [161, 66, 244, 255], 6, (d) => d.id));
       if (on.has("roads") && roads) L.push(roadsLayer("roads", roads, hour));
       if (on.has("routes") && routes) L.push(routesLayer("routes", routes));
       if (on.has("bridges")) L.push(...points("bridges", run.bridges, (b) => b.first_closed_hour == null ? COLORS.open : b.first_closed_hour <= hour ? COLORS.closed : COLORS.closesLater, 6));
@@ -231,7 +233,7 @@ export default function Workspace() {
         )}
 
         <div className="bottom">
-          <LayerPanel on={on} toggle={toggle} hasRun={!!run} mapType={mapType} setMapType={setMapType} />
+          <LayerPanel on={on} toggle={toggle} hasRun={!!run} mapType={mapType} setMapType={setMapType} urban={status?.mode === "urban"} />
           {run ? <TimeSlider hours={run.rain_series_mm_h.length} hour={hour} setHour={setHour} rain={run.rain_series_mm_h} /> : <span className="spacer" />}
           <div style={{ marginRight: 56 }}><Fab icon="auto_awesome" label="Ask Pravah" variant="gemini" onClick={() => setChatOpen(true)} /></div>
         </div>

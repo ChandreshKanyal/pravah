@@ -4,11 +4,13 @@ import { Icon, IconButton, Switch } from "./m3";
 
 export type LayerKey =
   | "depth" | "lsi" | "fsi" | "lsi_static" | "hand" | "streams" | "crowd"
-  | "roads" | "bridges" | "routes" | "shelters" | "assembly" | "medical" | "hotspots" | "traffic" | "history";
+  | "roads" | "bridges" | "routes" | "shelters" | "assembly" | "medical" | "hotspots" | "traffic" | "history" | "ponding" | "drains";
 
 const SUS = ["var(--sus-1)", "var(--sus-2)", "var(--sus-3)", "var(--sus-4)", "var(--sus-5)"];
 export const LAYERS: { key: LayerKey; label: string; icon: string; group: "scenario" | "area"; legend?: string[]; note?: string; needsRun?: boolean }[] = [
   { key: "depth", label: "Flood depth", icon: "water", group: "scenario", legend: ["var(--depth-1)", "var(--depth-2)", "var(--depth-3)", "var(--depth-4)", "var(--depth-5)"], note: "0.05 · 0.5 · 1 · 1.5 · 3+ m at the selected hour", needsRun: true },
+  { key: "ponding", label: "Ponding likelihood (urban)", icon: "water_drop", group: "scenario", legend: ["#9ecae1", "#3182bd", "#08306b"], note: "low · medium (fill ≥ 30%) · high (≥ 70%)", needsRun: true },
+  { key: "drains", label: "Drains to inspect (urban)", icon: "plumbing", group: "scenario", legend: ["#a142f4"], note: "D1 = highest priority", needsRun: true },
   { key: "lsi", label: "Landslide susceptibility", icon: "landslide", group: "scenario", legend: SUS, note: "very low → very high at the selected hour", needsRun: true },
   { key: "roads", label: "Road status", icon: "road", group: "scenario", legend: ["#8c8c8c", "#f58c1e", "#d7191c"], note: "open · closes later · closed now", needsRun: true },
   { key: "routes", label: "Evacuation routes", icon: "directions_walk", group: "scenario", legend: ["#00897b"], note: "line width = people", needsRun: true },
@@ -32,8 +34,8 @@ const TYPES: { t: MapType; label: string; bg: string }[] = [
 ];
 
 /** Google Maps-style layer picker: a thumbnail button opening a sheet with map types and layer switches. */
-export default function LayerPanel({ on, toggle, hasRun, mapType, setMapType }: {
-  on: Set<LayerKey>; toggle: (k: LayerKey) => void; hasRun: boolean; mapType: MapType; setMapType: (t: MapType) => void;
+export default function LayerPanel({ on, toggle, hasRun, mapType, setMapType, urban }: {
+  on: Set<LayerKey>; toggle: (k: LayerKey) => void; hasRun: boolean; mapType: MapType; setMapType: (t: MapType) => void; urban?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -65,7 +67,7 @@ export default function LayerPanel({ on, toggle, hasRun, mapType, setMapType }: 
           </div>
           <hr className="divider" style={{ margin: "16px 0 8px" }} />
           <div className="title-s muted" style={{ margin: "4px 0" }}>Scenario</div>
-          {LAYERS.filter((l) => l.group === "scenario").map(row)}
+          {LAYERS.filter((l) => l.group === "scenario" && (urban || !["ponding", "drains"].includes(l.key))).map(row)}
           <hr className="divider" style={{ margin: "8px 0" }} />
           <div className="title-s muted" style={{ margin: "4px 0" }}>Area</div>
           {LAYERS.filter((l) => l.group === "area").map(row)}

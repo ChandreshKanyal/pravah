@@ -47,6 +47,7 @@ export default function App() {
                   <NavLink end to={`/area/${aoiId}`} className={({ isActive }) => `navpill sl ${isActive ? "active" : ""}`}><Icon name="map" /><span className="lbl">Map</span></NavLink>
                   <NavLink to={`/area/${aoiId}/advisory`} className={({ isActive }) => `navpill sl ${isActive ? "active" : ""}`}><Icon name="assignment" /><span className="lbl">Advisory</span></NavLink>
                   <NavLink to={`/area/${aoiId}/verify`} className={({ isActive }) => `navpill sl ${isActive ? "active" : ""}`}><Icon name="photo_camera" /><span className="lbl">Verify</span></NavLink>
+                  <NavLink to={`/area/${aoiId}/3d`} className={({ isActive }) => `navpill sl ${isActive ? "active" : ""}`}><Icon name="view_in_ar" /><span className="lbl">3D</span></NavLink>
                 </nav>
               </>
             ) : (

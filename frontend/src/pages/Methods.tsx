@@ -19,7 +19,8 @@ const FLOW = [
 ];
 
 const DATA: [string, string, string][] = [
-  ["Copernicus DEM GLO-30 (2024)", "Terrain, slope", "Copernicus DEM licence: free with attribution (© DLR / Airbus, ESA)"],
+  ["Copernicus DEM GLO-30 (2024)", "Terrain, slope (river mode), 3D view", "Copernicus DEM licence: free with attribution (© DLR / Airbus, ESA)"],
+  ["FABDEM (Hawker et al. 2022)", "Bare-earth terrain in urban mode (buildings and forest removed)", "CC BY-NC-SA 4.0 (non-commercial)"],
   ["MERIT Hydro v1.0.1 (Yamazaki et al. 2019)", "Flow direction, upstream area, HAND", "CC BY-NC 4.0 (non-commercial)"],
   ["Global Flood Database (Tellman et al. 2021)", "Observed floods 2000–2018", "CC BY-NC 4.0 (non-commercial)"],
   ["JRC Global Surface Water 1.4", "Permanent and seasonal water", "Free of charge, without restriction (© EC JRC / Google)"],
@@ -142,6 +143,10 @@ export default function Methods() {
               <li><b>Custom</b>: a steady or early-peak storm you set.</li>
             </ul>
             <p>The 10-day strip screens each day with a one-reach model; run the full scenario for detail. The past 90 days come from NASA GPM IMERG.</p>
+            <p><b>Upstream river flow</b> adds water that enters the area from outside (for example a CWC flood forecast for a main river): it is shared across reaches by their upstream area outside the box, so the main stem carries all of it.</p>
+            <h3>Urban mode (water-logging screening)</h3>
+            <F>{"filled = PriorityFlood+ε(FABDEM)   (Barnes et al. 2014)\nV_in = C_ws · Σ max(0, i − drain capacity) · A_ws   → fill each depression to the level that holds V_in"}</F>
+            <p>Rain up to the storm-drain design capacity (25 mm/h, Mumbai's historical standard; configurable) is carried away; the rest ponds in depressions of the bare-earth terrain. People move when still water reaches 0.5 m (DEFRA/EA FD2321 hazard rating “danger for some”), or 0.3 m in fragile single-storey homes. Drains and culverts are ranked for pre-monsoon clearing by flow accumulation, ponding or flood susceptibility, and exposed people within 300 m; field photos marked blocked raise the priority. River overflow and tides are not modelled in urban mode.</p>
           </section>
 
           <section id="ai">
@@ -157,6 +162,10 @@ export default function Methods() {
 
           <section id="limits">
             <h2>Limitations</h2>
+            {meta?.backtest && (
+              <div className="notice info"><Icon name="fact_check" />
+                <span><b>Backtest for {meta._name}</b> ({meta.backtest.scenario}): {meta.backtest.result} {meta.backtest.note}.</span></div>
+            )}
             <ol style={{ margin: 0, paddingLeft: 22, display: "flex", flexDirection: "column", gap: 8 }}>{LIMITS.map((l, i) => <li key={i} className="body-m">{l}</li>)}</ol>
           </section>
 

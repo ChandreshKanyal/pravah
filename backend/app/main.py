@@ -3,7 +3,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import agents, aoi, forecast, health, history, layers, photos, runs
+from app.api import agents, aoi, forecast, health, history, layers, photos, runs, view3d
 from app.config import get_settings
 
 logging.basicConfig(level=logging.INFO)
@@ -19,5 +19,5 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-for r in (health.router, aoi.router, layers.router, runs.router, forecast.router, agents.router, history.router, photos.router):
+for r in (health.router, aoi.router, layers.router, runs.router, forecast.router, agents.router, history.router, photos.router, view3d.router):
     app.include_router(r)
