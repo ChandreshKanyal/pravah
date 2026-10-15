@@ -181,6 +181,41 @@ def fetch_landslides(train_grid: GridSpec, max_accuracy_km: float) -> list[tuple
             if LANDSLIDE_ACCURACY_KM.get(str(acc), 1e9) <= max_accuracy_km]
 
 
+IMERG_ID = "NASA/GPM_L3/IMERG_V07"  # V06 deprecated (verified); half-hourly mm/h
+
+
+def chirps_max_daily_mm(lon: float, lat: float) -> float:
+    """Max daily CHIRPS total 2001-2024 within 5 km of the point (S10.5 historical extreme)."""
+    init_ee()
+    g = ee.Geometry.Point([lon, lat]).buffer(5000)
+    img = ee.ImageCollection(CHIRPS_ID).filterDate("2001-01-01", "2025-01-01").select("precipitation").max()
+    v = img.reduceRegion(ee.Reducer.max(), g, scale=5566, maxPixels=1e8).get("precipitation")
+    return float(ee.Number(v).getInfo() or 0.0)
+
+
+def imerg_daily(lon: float, lat: float, end: date, days: int = 90) -> list[dict]:
+    """Daily rain totals (mm) for the `days` before `end`, mean over 5 km; one server-side sequence, one getInfo."""
+    init_ee()
+    g = ee.Geometry.Point([lon, lat]).buffer(5000)
+    col = ee.ImageCollection(IMERG_ID).select("precipitation")
+    start = ee.Date(end.isoformat()).advance(-days, "day")
+
+    def day(i):
+        d = start.advance(i, "day")
+        day_col = col.filterDate(d, d.advance(1, "day"))
+        total = ee.Image(ee.Algorithms.If(day_col.size().gt(0), day_col.sum().multiply(0.5),
+                                          ee.Image.constant(-1).rename("precipitation")))  # -1 = not yet published
+        return ee.Feature(None, {"date": d.format("YYYY-MM-dd"),
+                                 "mm": total.reduceRegion(ee.Reducer.mean(), g, 10000).get("precipitation")})
+    fc = ee.FeatureCollection(ee.List.sequence(0, days - 1).map(day)).getInfo()
+    out = []
+    for f in fc["features"]:
+        mm = f["properties"].get("mm")
+        out.append({"date": f["properties"]["date"],
+                    "precip_mm": None if mm is None or mm < 0 else round(float(mm), 2)})
+    return out
+
+
 def worldpop_total(grid: GridSpec) -> float:
     """WorldPop people inside the grid extent, summed at native resolution."""
     init_ee()

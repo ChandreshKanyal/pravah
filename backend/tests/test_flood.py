@@ -53,5 +53,14 @@ def test_more_rain_more_flood():
 
 def test_runoff_c_and_manual_series():
     assert runoff_c(np.array([6, -1]))[0] == pytest.approx(0.85) and np.isnan(runoff_c(np.array([6, -1]))[1])
-    tri = manual_series(30, 4, "triangular_front")
-    assert sum(tri) == pytest.approx(120, abs=0.05) and tri[0] > tri[-1]
+    tri = manual_series(30, 6, "triangular_front")
+    assert sum(tri) == pytest.approx(180) and int(np.argmax(tri)) == 1  # peak at hour ceil(6/3) = 2
+
+
+def test_series_builders():
+    from app.engines.rainfall import day_hours, wettest_window, worst_day_index
+    win, k = wettest_window([0, 1, 5, 7, 2, 0], 3)
+    assert win == [5, 7, 2] and k == 2
+    hourly = [{"local_date": "2026-10-16", "local_hour": 3, "precip_mm": 4.0}]
+    assert day_hours(hourly, "2026-10-16")[3] == 4.0
+    assert worst_day_index([{"precip_mm": 1}, {"precip_mm": 9}, {"precip_mm": 2}]) == 1

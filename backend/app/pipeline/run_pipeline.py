@@ -133,15 +133,71 @@ def reach_params(area: Area, c_table: list[float]) -> tuple[np.ndarray, np.ndarr
     return np.clip(C, 0.10, 0.95), rainfall.tc_hours(A_loc, S), A_loc
 
 
-def rain_series(p: ScenarioParams) -> tuple[list[float], str, list[str]]:
-    """S10 builds forecast/worst/best/historical series; until then only manual rain is available."""
-    warnings = []
-    if p.rain_source != RainSource.manual:
-        warnings.append(f"Rain source '{p.rain_source.value}' is not available yet; used manual "
-                        f"{p.manual_intensity_mm_h:g} mm/h instead")
-    series = rainfall.manual_series(p.manual_intensity_mm_h, p.duration_h, p.hyetograph)
-    label = f"Manual {p.manual_intensity_mm_h:g} mm/h for {p.duration_h} h ({p.hyetograph})"
+def area_centroid(area: Area) -> tuple[float, float]:
+    w, s, e, n = lonlat_bounds(area.grid)
+    return (w + e) / 2, (s + n) / 2
+
+
+def historical_max_mm(area: Area) -> float:
+    """CHIRPS max daily total near the AOI (Earth Engine data, cached per AOI in GCS)."""
+    if storage.exists(area.aoi_id, "chirps_max.json"):
+        return float(storage.get_json(area.aoi_id, "chirps_max.json")["mm"])
+    lon, lat = area_centroid(area)
+    from app.services import earth_engine as ees
+    mm = ees.chirps_max_daily_mm(lon, lat)
+    storage.put_json(area.aoi_id, "chirps_max.json", {"mm": mm})
+    return mm
+
+
+def rain_series(p: ScenarioParams, area: Area) -> tuple[list[float], str, list[str]]:
+    """S10.5: forecast / worst / best / historical_extreme / manual hourly series (mm/h) and a human label."""
+    from datetime import date as _date
+    from app.services.weather import get_provider
+    H, warnings = p.duration_h, []
+    src = p.rain_source
+    if src in (RainSource.forecast, RainSource.worst, RainSource.best):
+        try:
+            lon, lat = area_centroid(area)
+            prov = get_provider()
+            daily, hourly = prov.daily(lat, lon, 10), prov.hourly(lat, lon, 240)
+            k = p.forecast_day_index if p.forecast_day_index is not None else rainfall.worst_day_index(daily, hourly)
+            day = daily[min(k, len(daily) - 1)]["date"]
+            series, start = rainfall.wettest_window(rainfall.day_hours(hourly, day), H)
+            mult = {RainSource.worst: p.worst_multiplier, RainSource.best: p.best_multiplier}.get(src, 1.0)
+            series = [v * mult for v in series]
+            label = f"Forecast {_date.fromisoformat(day).strftime('%a %d %b')}, wettest {H} h from {start:02d}:00"
+            if src != RainSource.forecast:
+                label += f", {src.value} case x{mult:g}"
+            if sum(series) == 0:
+                warnings.append("The forecast shows no rain for this window; try historical extreme or manual rain")
+            return series, label, warnings
+        except Exception as e:  # provider down or no key: fall back, never fail the run
+            warnings.append(f"Forecast unavailable ({e.__class__.__name__}); used manual rain instead")
+    elif src == RainSource.historical_extreme:
+        try:
+            mm = historical_max_mm(area)
+            series = rainfall.distribute_total(mm, H, p.hyetograph)
+            return series, f"Historical extreme: {mm:.0f} mm/day (CHIRPS 2001-2024 max within 5 km) over {H} h", warnings
+        except Exception as e:
+            warnings.append(f"Historical extreme unavailable ({e.__class__.__name__}); used manual rain instead")
+    series = rainfall.manual_series(p.manual_intensity_mm_h, H, p.hyetograph)
+    label = f"Manual {p.manual_intensity_mm_h:g} mm/h for {H} h ({p.hyetograph.replace('_', ' ')})"
     return series, label, warnings
+
+
+def screening(area: Area, daily: list[dict], hourly: list[dict], duration_h: int) -> list[dict]:
+    """S10.6: per forecast day, one-reach (largest A_loc) envelope on the wettest window -> badge."""
+    C, tc_h, A_loc = reach_params(area, get_settings().runoff_c)
+    r = int(np.argmax(A_loc))
+    src = [get_src(area, get_settings().manning_n)[r]]
+    out = []
+    for d in daily:
+        win, _ = rainfall.wettest_window(rainfall.day_hours(hourly, d["date"]), duration_h)
+        h, _ = flood.hourly_envelope(win, tc_h[r:r + 1], C[r:r + 1], A_loc[r:r + 1], src)
+        stage = float(h.max())
+        badge = "high" if stage >= 3 else "elevated" if stage >= 1 else "low"
+        out.append({"date": d["date"], "precip_mm": d["precip_mm"], "max_stage_m": round(stage, 2), "badge": badge})
+    return out
 
 
 def run_pipeline(p: ScenarioParams) -> RunResult:
@@ -150,7 +206,7 @@ def run_pipeline(p: ScenarioParams) -> RunResult:
     area = load_area(p.aoi_id)
     run_id = uuid.uuid4().hex[:12]
 
-    rain, rain_label, warnings = rain_series(p)
+    rain, rain_label, warnings = rain_series(p, area)
     C, tc_h, A_loc = reach_params(area, get_settings().runoff_c)
     h, _Q = flood.hourly_envelope(rain, tc_h, C, A_loc, get_src(area, p.manning_n), p.river_offset_m)
     depth = flood.depth_stack(h, area.reach_id_30, area.hand, area.perm)
