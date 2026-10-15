@@ -11,8 +11,8 @@ from rasterio.transform import Affine
 from scipy.ndimage import binary_dilation, distance_transform_edt
 
 from app.config import get_settings
-from app.engines import fsi as fsi_engine, hydrology as hy, landslide as ls, rainfall
-from app.engines.grid import lonlat_bounds, lonlat_to_rowcol, make_grid, rowcol_to_lonlat, terrain
+from app.engines import buildings as bld, fsi as fsi_engine, hydrology as hy, landslide as ls, population, rainfall
+from app.engines.grid import lonlat_bounds, lonlat_to_rowcol, make_grid, rowcol_to_lonlat, terrain, xy_to_rowcol
 from app.engines.render import to_png, to_png_classes
 from app.models.aoi import AOI
 from app.models.grid import GridSpec
@@ -193,6 +193,28 @@ def _lsi(aoi: AOI, grid: GridSpec, warnings: list[str], meta: dict) -> None:
                    "class_edges": [round(e, 4) for e in edges], "training_grid": f"{tg.width}x{tg.height} @ 90 m"}
 
 
+def _building_proxy(aoi_id: str, grid: GridSpec, meta: dict) -> None:
+    """S6.1-S6.4 static part: proxy structure class per building and base population per building."""
+    b = storage.load_gdf(aoi_id, "buildings.parquet")
+    cen = b.geometry.centroid
+    x, y = cen.x.to_numpy(), cen.y.to_numpy()
+    rows, cols = xy_to_rowcol(grid, x, y)
+    area, height = b["area_m2"].to_numpy(float), b["height_m"].to_numpy(float)
+    cluster = bld.cluster_flags(x, y, area)
+    cls, F, conf, floors = bld.classify(area, height, b["presence_2016"].to_numpy(float),
+                                        b["presence_2023"].to_numpy(float), cluster)
+    source = bld.apply_field_overrides(b["bid"].tolist(), cls, F, conf, {})  # S12 photo results plug in here
+    pop = storage.load_layers(aoi_id, "population")
+    pop_b, unattr = population.distribute(pop["pop30"], rows, cols, area, height, block=3)
+    ll = cen.to_crs("EPSG:4326")
+    b = b.assign(lon=ll.x.to_numpy(), lat=ll.y.to_numpy(), row=rows, col=cols, structure_class=cls.astype(str),
+                 fragility=F, confidence=conf, floors=floors, source=source.astype(str), pop_base=pop_b)
+    storage.save_gdf(aoi_id, "buildings_proxy.parquet", b)
+    storage.save_layers(aoi_id, "population", {**pop, "pop_unattributed": unattr.astype(np.float32)}, grid)
+    meta["buildings"] = {"count": int(len(b)), "by_class": b["structure_class"].value_counts().to_dict(),
+                         "pop_in_buildings": round(float(pop_b.sum())), "pop_unattributed": round(float(unattr.sum()))}
+
+
 def _overlays(aoi_id: str) -> None:
     hand = storage.load_layers(aoi_id, "hydro30")["hand"]
     storage.save_png(aoi_id, "hand", to_png(np.where(hand <= 20, hand, np.nan), "hand", 0, 20))
@@ -254,6 +276,10 @@ def prepare_area(aoi: AOI) -> dict:
             status["lsi"] = "ready"
         elif status.get("derived") == "ready":
             run("lsi", _lsi, aoi, grid, warnings, meta)
+    if storage.exists(aoi_id, "buildings_proxy.parquet"):
+        status["building_proxy"] = "ready"
+    elif status.get("buildings") == "ready" and status.get("population") == "ready":
+        run("building_proxy", _building_proxy, aoi_id, grid, meta)
     # Later stages hook in here:, S5 LSI static, S6.1-S6.3, S7.1-S7.6, S9 crowding.
 
     secs = round(time.time() - t0, 1)

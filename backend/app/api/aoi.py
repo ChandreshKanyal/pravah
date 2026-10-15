@@ -55,3 +55,16 @@ def flood_at_stage(aoi_id: str, stage: float = Query(2.0, ge=0, le=30)):
         raise HTTPException(409, str(e))
     depth = depth_from_stage(area.hand, stage, area.perm)
     return Response(to_png_binned(depth, DEPTH_EDGES, DEPTH_COLORS, nan_color=WATER_COLOR), media_type="image/png")
+
+
+@router.get("/api/aoi/{aoi_id}/verification-queue")
+def verification_queue(aoi_id: str):
+    """Buildings ranked for field inspection (S6.9), from the AOI's latest run."""
+    doc = fs.get_aoi(aoi_id)
+    if not doc:
+        raise HTTPException(404, "Unknown AOI")
+    run_id = doc.get("latest_run_id")
+    if not run_id:
+        return {"aoi_id": aoi_id, "run_id": None, "queue": []}
+    import json
+    return {"aoi_id": aoi_id, "run_id": run_id, "queue": json.loads(storage.get_run(run_id, "verification.json"))}

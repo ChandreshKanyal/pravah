@@ -1,5 +1,6 @@
 """run_pipeline(params): fixed order S10 -> S3 -> S5 -> S6 -> S8 -> S15 (stages are added as they are built)."""
 import io
+import json
 import logging
 import time
 import uuid
@@ -11,11 +12,11 @@ from functools import lru_cache
 import numpy as np
 
 from app.config import get_settings
-from app.engines import flood, hydrology as hy, landslide as ls, rainfall
-from app.engines.grid import lonlat_bounds, lonlat_to_rowcol, corner_lonlats
+from app.engines import exposure as ex_engine, flood, hydrology as hy, landslide as ls, population, rainfall
+from app.engines.grid import corner_lonlats, lonlat_bounds, lonlat_to_rowcol, rowcol_to_lonlat
 from app.engines.render import DEPTH_COLORS, DEPTH_EDGES, WATER_COLOR, to_png_binned, to_png_classes
 from app.models.grid import GridSpec
-from app.models.run import RunResult
+from app.models.run import ExposureSummary, RunResult, TriageRow
 from app.models.scenario import RainSource, ScenarioParams
 from app.services import firestore as fs
 from app.services import storage
@@ -43,6 +44,9 @@ class Area:
     slope_deg: np.ndarray
     lsi_static: np.ndarray | None
     lsi_edges: list[float] | None
+    dist_stream_m: np.ndarray
+    bld: dict[str, np.ndarray] | None  # building arrays from buildings_proxy.parquet
+    pop_unattr: np.ndarray | None
     src_cache: dict[float, list[dict]] = field(default_factory=dict)
 
 
@@ -66,7 +70,18 @@ def load_area(aoi_id: str) -> Area:
         slope_deg=storage.load_layers(aoi_id, "terrain")["slope_deg"],
         lsi_static=sus.get("lsi_static"),
         lsi_edges=sus["lsi_edges"].tolist() if "lsi_edges" in sus else None,
+        dist_stream_m=h30["dist_stream_m"],
+        bld=_load_buildings(aoi_id),
+        pop_unattr=storage.load_layers(aoi_id, "population").get("pop_unattributed"),
     )
+
+
+def _load_buildings(aoi_id: str) -> dict[str, np.ndarray] | None:
+    if not storage.exists(aoi_id, "buildings_proxy.parquet"):
+        return None
+    b = storage.load_gdf(aoi_id, "buildings_proxy.parquet")
+    cols = ["bid", "lon", "lat", "row", "col", "structure_class", "fragility", "confidence", "pop_base"]
+    return {c: b[c].to_numpy() for c in cols}
 
 
 def get_src(area: Area, n: float) -> list[dict]:
@@ -136,6 +151,10 @@ def run_pipeline(p: ScenarioParams) -> RunResult:
     else:
         warnings.append("Landslide susceptibility not prepared for this area")
 
+    t2 = time.time()
+    exposure, triage_rows, queue = _exposure(area, p, depth, lsi_dyn, warnings)
+    timings["exposure"] = round(time.time() - t2, 2)
+
     t1 = time.time()
     pngs = {f"depth_h{t + 1}": to_png_binned(depth[t], DEPTH_EDGES, DEPTH_COLORS, nan_color=WATER_COLOR)
             for t in range(depth.shape[0])}
@@ -151,6 +170,7 @@ def run_pipeline(p: ScenarioParams) -> RunResult:
         jobs.append(ex.submit(storage.put_run, run_id, "depth.npz", buf.getvalue()))
         if lsi_dyn is not None:
             jobs.append(ex.submit(storage.put_run, run_id, "lsi.npz", lbuf.getvalue()))
+        jobs.append(ex.submit(storage.put_run, run_id, "verification.json", json.dumps(queue).encode(), "application/json"))
         for j in jobs:
             j.result()
     timings["render_upload"] = round(time.time() - t1, 2)
@@ -175,10 +195,48 @@ def run_pipeline(p: ScenarioParams) -> RunResult:
         depth_png_urls=[f"/api/runs/{run_id}/layers/{k}.png" for k in pngs if k.startswith("depth_")],
         lsi_png_url=f"/api/runs/{run_id}/layers/lsi_h{len(rain)}.png" if lsi_dyn is not None else "",
         overlay_bounds=lonlat_bounds(area.grid), overlay_corners=corner_lonlats(area.grid),
-        hotspots=hotspots, warnings=warnings,
+        hotspots=hotspots, warnings=warnings, exposure=exposure, triage=triage_rows,
     )
     timings["total"] = round(time.time() - t0, 2)
     result.timings_s = timings
     fs.set_doc("runs", run_id, result.model_dump(mode="json"))
+    fs.update_aoi(p.aoi_id, {"latest_run_id": run_id})
     log.info("run %s: %s", run_id, timings)
     return result
+
+
+def _exposure(area: Area, p: ScenarioParams, depth: np.ndarray, lsi_dyn: np.ndarray | None,
+              warnings: list[str]) -> tuple[ExposureSummary, list[TriageRow], list[dict]]:
+    """S6.4-S6.9 at run time: scaled population, per-hour exposure, risk at the worst hour, triage, clusters, queue."""
+    if area.bld is None or area.pop_unattr is None:
+        warnings.append("Buildings not prepared for this area; exposure unavailable")
+        return ExposureSummary(), [], []
+    b = area.bld
+    base_total = float(b["pop_base"].sum() + area.pop_unattr.sum())
+    k = population.scale_factor(base_total, p.pop_multiplier, p.pop_total_override)
+    pop_b, pop_un = b["pop_base"] * k, area.pop_unattr * k
+    share = float(b["pop_base"].sum()) / base_total if base_total else 0.0
+    if share < 0.5:
+        warnings.append(f"Only {share:.0%} of residents could be placed in mapped buildings (Open Buildings coverage); "
+                        "the rest are counted from the population grid")
+    rows = np.clip(b["row"].astype(int), 0, area.grid.height - 1)
+    cols = np.clip(b["col"].astype(int), 0, area.grid.width - 1)
+    ph = ex_engine.per_hour(depth, lsi_dyn, rows, cols, pop_b, pop_un)
+    d_w, ls_w = ph["d_b"][-1], ph["ls_b"][-1]
+    R, risk, _reason = ex_engine.building_risk(d_w, b["fragility"], area.dist_stream_m[rows, cols], ls_w)
+    struct = b["structure_class"]
+    exposed = (d_w >= ex_engine.WET_M) | (ls_w >= 4)
+    to_ll = lambda r, c: rowcol_to_lonlat(area.grid, r, c)  # noqa: E731
+    cl = ex_engine.clusters(rows, cols, pop_b, R, risk, struct, d_w, exposed, depth[-1], pop_un,
+                            block=10, to_lonlat=to_ll)
+    summary = ExposureSummary(
+        total_pop=int(round(pop_b.sum() + pop_un.sum())),
+        exposed_pop_by_hour=ph["exposed_pop_by_hour"],
+        exposed_by_depth_band=ph["exposed_by_depth_band"],
+        landslide_exposed_pop_by_hour=ph["landslide_exposed_pop_by_hour"],
+        buildings_by_risk={c: int(np.count_nonzero(risk == c)) for c in ex_engine.RISK_ORDER},
+        clusters=cl,
+    )
+    tri = [TriageRow(**r) for r in ex_engine.triage(struct, risk, pop_b)]
+    queue = ex_engine.verification_queue(b["bid"], R, b["confidence"], pop_b, b["lon"], b["lat"], struct)
+    return summary, tri, queue
