@@ -9,7 +9,9 @@ from app.config import get_settings
 @lru_cache
 def get_client() -> genai.Client:
     s = get_settings()
-    return genai.Client(vertexai=True, project=s.google_cloud_project, location=s.google_cloud_location)
+    # 120 s per request: a hung call must fail over to the deterministic fallbacks instead of blocking a job
+    return genai.Client(vertexai=True, project=s.google_cloud_project, location=s.google_cloud_location,
+                        http_options=types.HttpOptions(timeout=120_000))
 
 
 def generate(prompt: str, tier: str = "fast") -> str:

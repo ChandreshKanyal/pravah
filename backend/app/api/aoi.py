@@ -31,7 +31,7 @@ def aoi_status(aoi_id: str):
     doc = fs.get_aoi(aoi_id)
     if not doc:
         raise HTTPException(404, "Unknown AOI")
-    keys = ("state", "status", "warnings", "meta", "prepare_seconds", "prepared_at")
+    keys = ("state", "status", "warnings", "meta", "prepare_seconds", "prepared_at", "name", "bbox", "mode", "latest_run_id")
     return {"aoi_id": aoi_id, **{k: doc.get(k) for k in keys}}
 
 
@@ -70,3 +70,31 @@ def verification_queue(aoi_id: str):
         return {"aoi_id": aoi_id, "run_id": None, "queue": []}
     import json
     return {"aoi_id": aoi_id, "run_id": run_id, "queue": json.loads(storage.get_run(run_id, "verification.json"))}
+
+
+@router.get("/api/aois")
+def list_aois(limit: int = Query(12, ge=1, le=50)):
+    """Recently prepared areas for the Explore page (name, bbox, state)."""
+    docs = fs.get_db().collection("aois").limit(200).stream()
+    rows = [d.to_dict() for d in docs]
+    rows = [{k: r.get(k) for k in ("aoi_id", "name", "bbox", "mode", "state", "prepared_at", "latest_run_id")} for r in rows
+            if r.get("bbox")]
+    rows.sort(key=lambda r: str(r.get("prepared_at") or ""), reverse=True)
+    return rows[:limit]
+
+
+@router.get("/api/geocode")
+def geocode(q: str = Query(..., min_length=2, max_length=200)):
+    """Search box (Maps Geocoding API, display/navigation only; never stored or used as analysis input)."""
+    import requests
+    from app.services.weather import maps_server_key
+    r = requests.get("https://maps.googleapis.com/maps/api/geocode/json", timeout=10,
+                     params={"address": q, "region": "in", "key": maps_server_key()})
+    out = []
+    for res in (r.json().get("results") or [])[:5]:
+        g = res["geometry"]
+        vp = g.get("viewport", {})
+        out.append({"label": res.get("formatted_address", ""), "lat": g["location"]["lat"], "lng": g["location"]["lng"],
+                    "viewport": [vp.get("southwest", {}).get("lng"), vp.get("southwest", {}).get("lat"),
+                                 vp.get("northeast", {}).get("lng"), vp.get("northeast", {}).get("lat")] if vp else None})
+    return out

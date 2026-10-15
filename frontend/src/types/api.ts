@@ -17,7 +17,11 @@ export interface AoiStatus {
   warnings: string[] | null;
   meta: Record<string, any> | null;
   prepare_seconds?: number | null;
+  name?: string; bbox?: [number, number, number, number]; mode?: "river" | "urban"; latest_run_id?: string | null;
 }
+
+export interface AoiListItem { aoi_id: string; name: string; bbox: [number, number, number, number]; mode: string; state: string; latest_run_id: string | null }
+export interface GeocodeResult { label: string; lat: number; lng: number; viewport: [number, number, number, number] | null }
 
 export interface Shelter {
   id: string; name: string; kind: string; lon: number; lat: number;
@@ -83,7 +87,10 @@ export interface ExposureSummary {
 export interface TriageRow { structure_class: string; risk_class: string; buildings: number; people: number }
 export interface ShelterResult { id: string; name: string; kind: string; lon: number; lat: number; capacity: number; assigned: number; spare: number; status: string; note: string; capacity_confidence: string }
 export interface BridgeStatus { id: string; name: string; lon: number; lat: number; first_closed_hour: number | null; reason: string | null }
-export interface RouteSummary { from_node: number; to_shelter: string; people: number; eta_min: number; passable_until_h: number | null; use_now_gone_soon: boolean }
+export interface RouteSummary {
+  from_node: number; from_lon?: number; from_lat?: number; to_shelter: string; people: number; eta_min: number;
+  access_min?: number; length_km?: number; passable_until_h: number | null; use_now_gone_soon: boolean;
+}
 
 export interface RunResult {
   run_id: string; aoi_id: string; params: ScenarioParams; created_at: string;
@@ -103,6 +110,8 @@ export interface RunResult {
   hotspots: Hotspot[];
   warnings: string[];
   timings_s: Record<string, number>;
+  methods?: Record<string, any>;
+  advisory_id?: string | null;
 }
 
 export interface Forecast {
@@ -117,3 +126,32 @@ export interface Forecast {
   attribution: string;
   warnings: string[];
 }
+
+export interface Recommendation {
+  id: string; horizon: "immediate" | "seasonal" | "structural"; priority: "P1" | "P2" | "P3"; action: string;
+  location_label: string; evidence_ids: string[]; why: string; confidence: "low" | "medium" | "high"; lonlat?: LonLat | null;
+}
+export interface Advisory {
+  status?: "pending" | "ready" | "error"; error?: string;
+  advisory_id: string; run_id: string; headline: string;
+  key_numbers: { label: string; value: number; unit: string; evidence_id: string }[];
+  recommendations: Recommendation[]; limitations: string[]; disclaimer: string;
+  generated_by: "gemini" | "rules_fallback"; dropped: { action: string; reason: string }[]; model: string;
+}
+export interface PlanResponse { params: ScenarioParams; diff: Record<string, [unknown, unknown]>; explanation: string }
+export interface ChatResponse { reply: string; new_run_id: string | null; tools_called: string[] }
+export interface HistoryAoi {
+  gfd_events: { start: string; end: string; cause: string; dead: number; displaced: number; severity: number; flooded_km2_in_area: number }[];
+  landslides: { lon: number; lat: number; date: string; title: string; type: string; trigger: string; fatalities: number | null; location_accuracy: string; source_url: string }[];
+  agreement_pct: number | null; gfd_cells: number; note?: string;
+  web?: { type: string; date: string; place: string; summary: string; source_urls: string[]; marker: { lat: number; lng: number } | null }[];
+  web_sources?: { title: string; uri: string }[]; search_entry_point?: string; web_label?: string;
+  labels?: Record<string, string>;
+}
+export interface HistoryIndia { gfd_tiles: string; landslides: { lon: number; lat: number; date: string; fatalities: number; type: string }[]; labels: Record<string, string>; note: string }
+export interface PhotoDoc {
+  photo_id: string; aoi_id: string; kind: "building" | "drain"; lon: number; lat: number; result: Record<string, any>;
+  accepted: boolean; message: string; linked_bid?: string; previous_class?: string; override_class?: string; created_at: string;
+  link_distance_m?: number | null; model?: string;
+}
+export interface VerificationItem { bid: string; lon: number; lat: number; current_class: string; score: number; people: number }

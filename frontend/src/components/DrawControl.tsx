@@ -26,8 +26,8 @@ export default function DrawControl({ mode, onFinish, onPoint }: {
     const draw = new TerraDraw({
       adapter: new TerraDrawGoogleMapsAdapter({ lib: google.maps, map, coordinatePrecision: 6 }),
       modes: [
-        new TerraDrawRectangleMode({ styles: { fillColor: "#ffffff", fillOpacity: 0.15, outlineColor: "#ffd60a", outlineWidth: 2 } }),
-        new TerraDrawPolygonMode({ styles: { fillColor: "#d7191c", fillOpacity: 0.2, outlineColor: "#d7191c", outlineWidth: 2 } }),
+        new TerraDrawRectangleMode({ styles: { fillColor: "#1a73e8", fillOpacity: 0.12, outlineColor: "#1a73e8", outlineWidth: 2 } }),
+        new TerraDrawPolygonMode({ styles: { fillColor: "#d93025", fillOpacity: 0.18, outlineColor: "#d93025", outlineWidth: 2 } }),
         new TerraDrawRenderMode({ modeName: "idle", styles: {} }),
       ],
     });

@@ -7,6 +7,8 @@ from app.api import agents, aoi, forecast, health, history, layers, photos, runs
 from app.config import get_settings
 
 logging.basicConfig(level=logging.INFO)
+# httpx logs full request URLs at INFO, and Maps/Weather calls carry the API key as a query parameter
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 app = FastAPI(title="Pravah API")
 

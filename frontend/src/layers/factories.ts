@@ -5,18 +5,18 @@ import { apiUrl } from "../api/client";
 import type { LonLat } from "../types/api";
 
 type RGBA = [number, number, number, number];
-export const COLORS = {
-  open: [140, 140, 140, 200] as RGBA,
-  closesLater: [245, 140, 30, 230] as RGBA,
-  closed: [215, 25, 28, 230] as RGBA,
-  route: [0, 150, 136, 220] as RGBA,
-  shelter: [33, 102, 172, 255] as RGBA,
-  shelterOff: [120, 120, 120, 255] as RGBA,
-  assembly: [77, 175, 74, 255] as RGBA,
-  medical: [228, 26, 28, 255] as RGBA,
-  staging: [152, 78, 163, 255] as RGBA,
+export const COLORS = {  // Google palette
+  open: [154, 160, 166, 210] as RGBA,
+  closesLater: [242, 153, 0, 235] as RGBA,
+  closed: [217, 48, 37, 235] as RGBA,
+  route: [0, 137, 123, 225] as RGBA,
+  shelter: [26, 115, 232, 255] as RGBA,
+  shelterOff: [128, 134, 139, 255] as RGBA,
+  assembly: [52, 168, 83, 255] as RGBA,
+  medical: [234, 67, 53, 255] as RGBA,
+  staging: [147, 52, 230, 255] as RGBA,
   hotspot: [255, 255, 255, 255] as RGBA,
-  crowd: [255, 127, 0, 255] as RGBA,
+  crowd: [251, 188, 4, 255] as RGBA,
 };
 
 export function bitmap(id: string, url: string, corners: LonLat[], opacity = 0.85): Layer {
@@ -55,7 +55,8 @@ export function points<T extends { lon: number; lat: number }>(id: string, data:
   if (label) {
     layers.push(new TextLayer<T>({
       id: `${id}-label`, data, getPosition: (d) => [d.lon, d.lat], getText: label, getSize: 12, getPixelOffset: [0, -16],
-      getColor: [255, 255, 255, 255], outlineWidth: 3, outlineColor: [0, 0, 0, 220], fontSettings: { sdf: true },
+      fontFamily: "Google Sans, Roboto, Arial", fontWeight: 500,
+      getColor: [255, 255, 255, 255], outlineWidth: 3, outlineColor: [32, 33, 36, 230], fontSettings: { sdf: true },
       characterSet: "auto",
     }));
   }
