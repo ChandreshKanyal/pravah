@@ -239,7 +239,16 @@ def rain_series(p: ScenarioParams, area: Area) -> tuple[list[float], str, list[s
 
 def screening(area: Area, daily: list[dict], hourly: list[dict], duration_h: int) -> list[dict]:
     """S10.6: per forecast day, one-reach (largest A_loc) envelope on the wettest window -> badge."""
-    C, tc_h, A_loc = reach_params(area, get_settings().runoff_c)
+    cfg = get_settings()
+    if area.mode == "urban":  # water-logging screening: wettest window vs storm-drain capacity
+        out = []
+        for d in daily:
+            win, _ = rainfall.wettest_window(rainfall.day_hours(hourly, d["date"]), duration_h)
+            peak = max(win) if win else 0.0
+            badge = "high" if peak >= 2 * cfg.urban_drain_capacity_mm_h else "elevated" if peak >= cfg.urban_drain_capacity_mm_h else "low"
+            out.append({"date": d["date"], "precip_mm": d["precip_mm"], "max_stage_m": 0.0, "peak_mm_h": round(peak, 1), "badge": badge})
+        return out
+    C, tc_h, A_loc = reach_params(area, cfg.runoff_c)
     r = int(np.argmax(A_loc))
     src = [get_src(area, get_settings().manning_n)[r]]
     out = []
@@ -324,7 +333,9 @@ def run_pipeline(p: ScenarioParams) -> RunResult:
                             f"{cfg.urban_drain_capacity_mm_h:g} mm/h drain capacity; screening, not hydrodynamics")
 
     t3 = time.time()
-    ev = evac.plan(area, p, depth, lsi_act, h, ctx, warnings) if ctx else {}
+    # urban mode does not model river stage, so bridges close only on flooded approaches
+    stage_for_bridges = np.zeros_like(h) if area.pluvial is not None else h
+    ev = evac.plan(area, p, depth, lsi_act, stage_for_bridges, ctx, warnings) if ctx else {}
     timings["routing"] = round(time.time() - t3, 2)
 
     t1 = time.time()

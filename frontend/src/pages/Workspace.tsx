@@ -144,11 +144,16 @@ export default function Workspace() {
       if (on.has("medical")) L.push(...points("staging", run.staging_points, COLORS.staging, 7, (s) => s.id));
     }
     if (on.has("shelters")) {
-      if (run) L.push(...points("shelters", run.shelters.filter((s) => s.kind !== "assembly_point"),
-        (s) => (s.status === "usable" ? COLORS.shelter : COLORS.shelterOff), (s) => 6 + 10 * Math.min(1, s.assigned / Math.max(1, s.capacity)), (s) => s.id));
-      else L.push(...points("shelters", st.shelters, COLORS.shelter, 8, (s) => s.id));
+      // label only shelters in use (or all when there are few), so dense cities stay readable
+      const sh = run ? run.shelters.filter((s) => s.kind !== "assembly_point") : [];
+      const few = (run ? sh.length : st.shelters.length) <= 40;
+      if (run) {
+        L.push(...points("shelters", sh, (s) => (s.status === "usable" ? COLORS.shelter : COLORS.shelterOff),
+          (s) => (s.assigned > 0 ? 6 + 10 * Math.min(1, s.assigned / Math.max(1, s.capacity)) : few ? 6 : 3)));
+        L.push(...points("shelters-used", sh.filter((s) => few || s.assigned > 0), COLORS.shelter, 0.1, (s) => s.id));
+      } else L.push(...points("shelters", st.shelters, COLORS.shelter, few ? 8 : 3, few ? (s) => s.id : undefined));
     }
-    if (on.has("medical")) L.push(...points("medical", st.medical, COLORS.medical, 7, () => "+"));
+    if (on.has("medical")) L.push(...points("medical", st.medical, COLORS.medical, st.medical.length > 30 ? 4 : 7, st.medical.length > 30 ? undefined : () => "+"));
     if (on.has("streams")) L.push(...points("hotspots", st.hotspots.slice(0, 8), COLORS.hotspot, 5));
     if (on.has("crowd")) L.push(...points("crowdhs", st.crowd_hotspots, COLORS.crowd, 6, (x) => x.id));
     if (on.has("history") && hist) {
