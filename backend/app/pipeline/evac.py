@@ -8,6 +8,7 @@ import numpy as np
 from scipy.spatial import cKDTree
 from shapely.geometry import LineString, mapping, shape
 
+from app.config import get_settings
 from app.engines import routing
 from app.engines.grid import rowcol_to_lonlat
 from app.engines.shelters import capacity
@@ -50,7 +51,8 @@ def plan(area, p: ScenarioParams, depth: np.ndarray, lsi_dyn: np.ndarray | None,
         blocked = np.array([any(geom.intersects(b) for b in blk) for geom in net.edges_ll.geometry])
     limit = p.walk_depth_limit_m if p.travel_mode == "walk" else p.vehicle_depth_limit_m
     first, reason, edge_lsi = routing.edge_states(E["cells"].tolist(), E["bridge"].to_numpy(), blocked, depth,
-                                                  lsi_dyn, stage, area.reach_id_30, limit, p.bridge_cut_stage_m)
+                                                  lsi_dyn, stage, area.reach_id_30, limit, p.bridge_cut_stage_m,
+                                                  get_settings().lsi_close_share)
     # S8.2 adjusted network at the evaluation hour
     t_eval = min(H, p.evac_start_hour + 1)
     w = routing.edge_weight(E["t0_s"].to_numpy(), edge_lsi[:, t_eval - 1], E["crowd_e"].to_numpy(),
@@ -63,7 +65,12 @@ def plan(area, p: ScenarioParams, depth: np.ndarray, lsi_dyn: np.ndarray | None,
     # S8.3 demand: exposed buildings + exposed unattributed grid people, snapped to nodes
     demand_f: dict = {}
     rows, cols, pop_b = exposure_ctx["rows"], exposure_ctx["cols"], exposure_ctx["pop_b"]
-    ex_b = (exposure_ctx["d_b"] >= routing_wet()).any(axis=0) | (exposure_ctx["ls_b"] >= 4).any(axis=0)
+    cfg = get_settings()
+    ex_b = (exposure_ctx["d_b"] >= routing_wet()).any(axis=0) | (exposure_ctx["ls_b"] >= cfg.lsi_demand_class).any(axis=0)
+    watch = int(((exposure_ctx["ls_b"] >= 4).any(axis=0) & ~ex_b).sum())
+    if watch:
+        warnings.append(f"{watch} buildings reach landslide susceptibility class 4 in this scenario: monitor slopes and "
+                        "be ready to move people (not counted as evacuation demand)")
     if ex_b.any():
         xs, ys = _cell_xy(grid, rows[ex_b], cols[ex_b])
         _, idx = net.tree.query(np.column_stack([xs, ys]))
@@ -72,7 +79,7 @@ def plan(area, p: ScenarioParams, depth: np.ndarray, lsi_dyn: np.ndarray | None,
     pop_un = exposure_ctx["pop_un"]
     wet_un = (np.nan_to_num(depth).max(axis=0) >= routing_wet())
     if lsi_dyn is not None:
-        wet_un |= lsi_dyn.max(axis=0) >= 4
+        wet_un |= lsi_dyn.max(axis=0) >= cfg.lsi_demand_class
     rr, cc = np.nonzero(wet_un & (pop_un > 0))
     if len(rr):
         xs, ys = _cell_xy(grid, rr, cc)
@@ -109,7 +116,7 @@ def plan(area, p: ScenarioParams, depth: np.ndarray, lsi_dyn: np.ndarray | None,
             status[s["id"]] = "disabled"
         elif np.isnan(d_here).any() or np.nanmax(d_here) > 0:
             status[s["id"]] = "flooded"
-        elif lsi_dyn is not None and lsi_dyn[:, r, c].max() > 3:
+        elif lsi_dyn is not None and lsi_dyn[:, r, c].max() > cfg.lsi_shelter_max_class:
             status[s["id"]] = "landslide_risk"
         elif s["node"] not in G:
             status[s["id"]] = "unreachable"

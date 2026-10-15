@@ -158,7 +158,9 @@ def run_pipeline(p: ScenarioParams) -> RunResult:
 
     lsi_dyn = None  # S5.6: rainfall-modulated susceptibility classes per hour
     if area.lsi_static is not None:
-        lsi_dyn = ls.lsi_dynamic_classes(area.lsi_static, area.lsi_edges, rain, area.slope_deg)
+        cfg = get_settings()
+        lsi_dyn = ls.lsi_dynamic_classes(area.lsi_static, area.lsi_edges, rain, area.slope_deg, g_slope=cfg.lsi_g_slope,
+                                         g_min=cfg.lsi_g_min, g_max=cfg.lsi_g_max)
     else:
         warnings.append("Landslide susceptibility not prepared for this area")
 

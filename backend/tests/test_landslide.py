@@ -34,13 +34,15 @@ def test_aspect_classes():
 
 def test_rain_modulation_caine():
     assert rain_modulation([10])[0] < 1  # 10 mm/h x 1 h is below 14.82 -> class drops
-    assert rain_modulation([60] * 4)[-1] == 1.5  # 60 mm/h x 4 h far above 8.63
+    assert rain_modulation([60] * 4)[-1] == 1.25  # 60 mm/h x 4 h far above 8.63 -> graded cap
+    assert rain_modulation([8.63] * 4)[-1] == pytest.approx(1.0, abs=0.01)  # at threshold: unchanged
+    assert rain_modulation([0])[0] == 0.75
 
 
 def test_dynamic_classes_shift():
     lsi = np.full((2, 2), 0.5, np.float32)
-    edges = [0.2, 0.4, 0.6, 0.8]
+    edges = [0.3, 0.4, 0.5, 0.6]  # static 0.5 -> class 4
     slope = np.full((2, 2), 30.0)
     low = lsi_dynamic_classes(lsi, edges, [10], slope)[0, 0, 0]
     high = lsi_dynamic_classes(lsi, edges, [60] * 4, slope)[-1, 0, 0]
-    assert low < 3 < high
+    assert low < 4 < high

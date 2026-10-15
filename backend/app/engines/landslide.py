@@ -103,16 +103,23 @@ def normalise_and_classify(raw: np.ndarray, train_raw: np.ndarray, slope_deg: np
     return val, cls, edges
 
 
-def rain_modulation(rain_mm_h) -> np.ndarray:
-    """g[t] = clip(I_mean(1..t) / I_thr(t), 0.5, 1.5) with Caine's threshold, D = t hours."""
+def rain_modulation(rain_mm_h, g_slope: float = 0.25, g_min: float = 0.75, g_max: float = 1.25) -> np.ndarray:
+    """g[t] from R = I_mean(1..t) / I_thr(t) (Caine, D = t hours).
+
+    NOTE(spec-drift): the spec's g = clip(R, 0.5, 1.5) saturates for any rain above ~13 mm/h over 4 h, so we use a
+    graded g = clip(1 + g_slope * log2(R), g_min, g_max): each doubling of R adds g_slope (human decision, 16 Oct).
+    """
     i = np.asarray(rain_mm_h, dtype=float)
     t = np.arange(1, len(i) + 1)
-    return np.clip((np.cumsum(i) / t) / caine_threshold(t), 0.5, 1.5)
+    R = (np.cumsum(i) / t) / caine_threshold(t)
+    with np.errstate(divide="ignore"):
+        return np.clip(1 + g_slope * np.log2(np.maximum(R, 1e-9)), g_min, g_max)
 
 
-def lsi_dynamic_classes(lsi_static: np.ndarray, edges: list[float], rain_mm_h, slope_deg: np.ndarray) -> np.ndarray:
+def lsi_dynamic_classes(lsi_static: np.ndarray, edges: list[float], rain_mm_h, slope_deg: np.ndarray,
+                        **g_kwargs) -> np.ndarray:
     """uint8 [H, rows, cols] classes of clip(lsi_static * g[t], 0, 1), same thresholds and flat mask."""
-    g = rain_modulation(rain_mm_h)
+    g = rain_modulation(rain_mm_h, **g_kwargs)
     flat = np.nan_to_num(slope_deg) < FLAT_SLOPE_DEG
     out = np.empty((len(g),) + lsi_static.shape, np.uint8)
     for t, gt in enumerate(g):

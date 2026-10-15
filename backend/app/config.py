@@ -32,6 +32,13 @@ class Settings(BaseSettings):
     # S5.2 says drop records worse than 10 km; 5-10 km points cannot inform 90 m slope classes (FR came out
     # inverted for slope in Rudraprayag), so the default is 1 km. Set 10 to follow the spec literally.
     landslide_max_accuracy_km: float = 1.0
+    # Landslide rain modulation and scope in routing (human decision 16 Oct: "soften + scope"; spec drift)
+    lsi_g_slope: float = 0.25
+    lsi_g_min: float = 0.75
+    lsi_g_max: float = 1.25
+    lsi_demand_class: int = 5  # buildings/grid people at or above this class need evacuation (spec: 4)
+    lsi_shelter_max_class: int = 4  # shelters above this class are ruled out (spec: 3)
+    lsi_close_share: float = 0.2  # road closes when this share of its length is class 5 (spec: any cell)
     cors_origins: str = "http://localhost:5173,http://localhost:4173"
 
 

@@ -35,7 +35,7 @@ def test_edge_states_reasons():
     lsi[2, 0, 3] = 5  # cell 3 landslide class 5 at hour 3
     stage = np.array([[1.0, 2.0, 3.5]])  # reach 0 reaches the bridge cut at hour 3
     rid = np.array([[-1, -1, 0, -1]])
-    cells = [[0], [1], [2], [3], [0]]
+    cells = [[0], [1], [2], [3], [0]]  # single-cell edges: share of class-5 cells is 0 or 1
     first, reason, _ = edge_states(cells, np.array([0, 0, 1, 0, 0], bool), np.array([0, 0, 0, 0, 1], bool),
                                    depth, lsi, stage, rid, 0.5, 3.0)
     assert list(first) == [NEVER, 2, 3, 3, 1]
@@ -52,3 +52,13 @@ def test_assembly_points():
     z = np.zeros((10, 10))
     ap = assembly_points(z, np.full((10, 10), 20.0), z, None, z, 30.0)
     assert len(ap) == 1 and ap[0]["capacity"] == int(100 * 900 * 0.5 / 2)
+
+
+def test_bridge_ignores_river_below_and_short_landslide_patch():
+    depth = np.zeros((1, 1, 6), np.float32)
+    depth[0, 0, 2] = 2.0  # river cell under the bridge deck
+    lsi = np.ones((1, 1, 6), np.uint8)
+    lsi[0, 0, 5] = 5  # one class-5 cell in a 5-cell road
+    first, reason, _ = edge_states([[1, 2, 3], [1, 3, 4, 0, 5]], np.array([1, 0], bool), np.zeros(2, bool),
+                                   depth, lsi, np.zeros((1, 1)), np.full((1, 6), -1), 0.5, 3.0, lsi_close_share=0.3)
+    assert list(first) == [NEVER, NEVER]

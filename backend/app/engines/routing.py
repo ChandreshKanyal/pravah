@@ -11,8 +11,16 @@ OVERFLOW_COST = 10_000_000
 
 def edge_states(cells: list[list[int]], bridge: np.ndarray, blocked: np.ndarray, depth: np.ndarray,
                 lsi_dyn: np.ndarray | None, stage: np.ndarray, reach_id_30: np.ndarray,
-                depth_limit_m: float, bridge_cut_stage_m: float) -> tuple[np.ndarray, list[str], np.ndarray]:
-    """first_closed_hour (1-based, NEVER if open), reason, and edge_lsi[e, t] (max LSI class along edge)."""
+                depth_limit_m: float, bridge_cut_stage_m: float,
+                lsi_close_share: float = 0.2) -> tuple[np.ndarray, list[str], np.ndarray]:
+    """first_closed_hour (1-based, NEVER if open), reason, and edge_lsi[e, t] (max LSI class along edge).
+
+    NOTE(spec-drift, human decision 16 Oct "soften + scope"):
+    - landslide closes an edge only when >= lsi_close_share of its sample cells are class 5 (spec: any cell);
+      roads score high LSI by construction (distance-to-road factor) and OSM edges here are long;
+    - a bridge's interior cells lie over the river, so bridges close on reach stage >= cut or when an approach
+      (first/last cell) exceeds the depth limit (spec: any depth > 0 along the bridge).
+    """
     H = depth.shape[0]
     d_flat = depth.reshape(H, -1)
     l_flat = lsi_dyn.reshape(H, -1) if lsi_dyn is not None else None
@@ -27,15 +35,20 @@ def edge_states(cells: list[list[int]], bridge: np.ndarray, blocked: np.ndarray,
             continue
         if not c:
             continue
-        d = np.nan_to_num(d_flat[:, c]).max(axis=1)  # NaN = permanent river, not flood
+        dc = np.nan_to_num(d_flat[:, c])  # NaN = permanent river, not flood
+        slide5 = np.zeros(H, bool)
         if l_flat is not None:
-            edge_lsi[e] = l_flat[:, c].max(axis=1)
-        causes = [("flood", d > depth_limit_m), ("landslide", edge_lsi[e] == 5)]
+            lc = l_flat[:, c]
+            edge_lsi[e] = lc.max(axis=1)
+            slide5 = (lc == 5).mean(axis=1) >= lsi_close_share
         if bridge[e]:
+            approach = dc[:, [0, -1]].max(axis=1)
             rids = np.unique(rid_flat[c])
             rids = rids[rids >= 0]
             st = stage[rids].max(axis=0) if len(rids) else np.zeros(H)
-            causes.insert(0, ("bridge", (d > 0) | (st >= bridge_cut_stage_m)))
+            causes = [("bridge", (st >= bridge_cut_stage_m) | (approach > depth_limit_m)), ("landslide", slide5)]
+        else:
+            causes = [("flood", dc.max(axis=1) > depth_limit_m), ("landslide", slide5)]
         for t in range(H):
             hit = [name for name, m in causes if m[t]]
             if hit:
