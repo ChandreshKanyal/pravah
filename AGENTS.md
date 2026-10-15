@@ -28,3 +28,5 @@ Google AI Builder Cup 2026. Deadline: Sun 18 Oct 2026, 12:00 IST. Speed matters;
 - Never add AI attribution lines to commits.
 - Agent-run deploys are blocked by the permission classifier; give the human the exact deploy commands.
 - Current status, decisions and spec deviations live in `docs/PROGRESS.md` (read its hand-off section first).
+- UI follows Material Design 3 (human request): use `frontend/src/components/m3.tsx` and the tokens in `frontend/src/styles.css`.
+- Demo areas are cached; after engine changes re-run `backend/.venv/bin/python scripts/preprocess_demo_aoi.py all`.
