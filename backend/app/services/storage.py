@@ -45,6 +45,14 @@ def load_grid(aoi_id: str) -> GridSpec:
     return GridSpec.from_dict(json.loads(get_bytes(aoi_id, "grid.json")))
 
 
+def put_json(aoi_id: str, name: str, obj) -> None:
+    put_bytes(aoi_id, name, json.dumps(obj).encode(), "application/json")
+
+
+def get_json(aoi_id: str, name: str):
+    return json.loads(get_bytes(aoi_id, name))
+
+
 def save_layers(aoi_id: str, group: str, arrays: dict[str, np.ndarray], grid: GridSpec) -> None:
     buf = io.BytesIO()
     np.savez_compressed(buf, **arrays)

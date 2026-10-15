@@ -154,6 +154,14 @@ GROUP_BANDS = {
 }
 
 
+def fetch_merit_native(hgrid) -> dict[str, np.ndarray]:
+    """MERIT hnd/elv/upa/dir on MERIT's own 3-arcsecond grid, no resampling (S2.1). dir comes back as `d8`."""
+    g = GridSpec(crs="EPSG:4326", x0=hgrid.lon0, y0=hgrid.lat0, cell=hgrid.cell_deg,
+                 width=hgrid.width, height=hgrid.height)
+    img = ee.Image(MERIT_ID).select(["hnd", "elv", "upa", "dir"], ["hnd", "elv", "upa", "d8"])
+    return fetch_grid(img, g, ["hnd", "elv", "upa", "d8"])
+
+
 def worldpop_total(grid: GridSpec) -> float:
     """WorldPop people inside the grid extent, summed at native resolution."""
     init_ee()

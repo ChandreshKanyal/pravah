@@ -11,7 +11,8 @@ from rasterio.transform import Affine
 from scipy.ndimage import distance_transform_edt
 
 from app.config import get_settings
-from app.engines.grid import lonlat_bounds, make_grid, terrain
+from app.engines import hydrology as hy
+from app.engines.grid import lonlat_bounds, make_grid, rowcol_to_lonlat, terrain
 from app.engines.render import to_png
 from app.models.aoi import AOI
 from app.models.grid import GridSpec
@@ -90,6 +91,53 @@ def _derived(aoi_id: str, grid: GridSpec, warnings: list[str]) -> None:
     storage.save_layers(aoi_id, "derived", {"dist_road_m": _distance_m(road, grid.cell)}, grid)
 
 
+def src_name(n: float) -> str:
+    return f"src_n{n:.3f}.json"
+
+
+def _hydrology(aoi_id: str, grid: GridSpec, warnings: list[str], meta: dict) -> None:
+    """S2: native-grid D8 hydrology, reaches, SRC tables, hotspots; mapped to the 30 m grid (S2.12)."""
+    cfg = get_settings()
+    hg = hy.make_hydro_grid(lonlat_bounds(grid))
+    m = ees.fetch_merit_native(hg)
+    down = hy.downstream_index(m["d8"])
+    a_loc = hy.local_accumulation_km2(down, hg.cell_area)
+    stream = np.nan_to_num(m["upa"]) >= cfg.stream_upa_km2
+    drain = hy.drain_cells(stream, down)
+    reach_flat, reaches = hy.build_reaches(hg, stream, down, m["elv"], m["upa"], a_loc)
+    catch = np.where(drain >= 0, reach_flat[np.maximum(drain, 0)], -1).astype(np.int32)
+    slope = hy.local_slope(m["elv"], hg)
+    src = hy.src_tables(m["hnd"], catch, slope, reaches, hg.cell_area, cfg.manning_n)
+    hs = hy.hotspots(hg, stream, down, m["upa"])
+
+    rows, cols = np.indices((grid.height, grid.width))
+    lon, lat = rowcol_to_lonlat(grid, rows.ravel(), cols.ravel())
+    hidx = hy.hydro_index_for_lonlat(hg, np.asarray(lon), np.asarray(lat))
+    inside = hidx >= 0
+    safe = np.maximum(hidx, 0)
+    shape = (grid.height, grid.width)
+    h30 = storage.load_layers(aoi_id, "hydro30")
+    h30["reach_id"] = np.where(inside, catch[safe], -1).astype(np.int32).reshape(shape)
+    h30["drain_cell"] = np.where(inside, drain[safe], -1).astype(np.int32).reshape(shape)
+    storage.save_layers(aoi_id, "hydro30", h30, grid)
+
+    storage.save_layers(aoi_id, "hydro_native", {
+        "hnd": m["hnd"], "elv": m["elv"], "upa": m["upa"], "d8": m["d8"], "downstream": down.astype(np.int32),
+        "a_local_km2": a_loc.astype(np.float32), "stream": stream, "drain_cell": drain.astype(np.int32),
+        "catch_reach": catch, "slope": slope.astype(np.float32)}, grid)
+    storage.put_json(aoi_id, "hydro_grid.json", hg.to_dict())
+    storage.put_json(aoi_id, "reaches.json", reaches)
+    storage.put_json(aoi_id, src_name(cfg.manning_n), src)
+    storage.put_json(aoi_id, "hotspots.json", hs)
+
+    stream30 = np.where(inside, stream.ravel()[safe], False).reshape(shape)
+    storage.save_png(aoi_id, "streams", to_png(np.where(stream30, 1.0, np.nan), "blues", 0, 1, alpha=230))
+    if len(reaches) == 0:
+        warnings.append("No stream reaches found; flood modelling unavailable for this area")
+    meta.update(n_reaches=len(reaches), max_A_up_km2=round(max((r["A_up_km2"] for r in reaches), default=0), 1),
+                hydro_grid=f"{hg.width}x{hg.height}")
+
+
 def _overlays(aoi_id: str) -> None:
     hand = storage.load_layers(aoi_id, "hydro30")["hand"]
     storage.save_png(aoi_id, "hand", to_png(np.where(hand <= 20, hand, np.nan), "hand", 0, 20))
@@ -138,8 +186,12 @@ def prepare_area(aoi: AOI) -> dict:
     else:
         status["derived"] = "ready"
     if status.get("hydro30") == "ready":
+        if storage.exists(aoi_id, "reaches.json"):
+            status["hydrology"] = "ready"
+        else:
+            run("hydrology", _hydrology, aoi_id, grid, warnings, meta)
         run("overlays", _overlays, aoi_id)
-    # Later stages hook in here: S2 hydrology, S4 FSI, S5 LSI static, S6.1-S6.3, S7.1-S7.6, S9 crowding.
+    # Later stages hook in here: S4 FSI, S5 LSI static, S6.1-S6.3, S7.1-S7.6, S9 crowding.
 
     secs = round(time.time() - t0, 1)
     state = "ready" if all(v == "ready" for v in status.values()) else "partial"
