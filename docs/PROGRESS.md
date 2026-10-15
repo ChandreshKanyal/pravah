@@ -1,5 +1,31 @@
 # Pravah progress
 
+## Current status (hand-off, 2026-10-16 05:10 IST)
+
+**Where we are:** Wed-Fri plan done locally: S0-S10 backend + S16 Explore/Workspace UI. Last commit before this doc update: `3f8c5e9`.
+Backend tests: 47/47 (`cd backend && .venv/bin/pytest -q`). Frontend: `npm run build` passes; **UI not yet checked in a real browser**.
+**Deployed:** only S0 (health page). Cloud Run + Firebase still serve the S0 build; S1-S16 are **not deployed**.
+
+**Next (Saturday plan, SPEC §6):** S14 ADK agents + S15 advisory (P0), S11 history, S12 photo verify, S13 urban (cut first if late),
+remaining S16 pages (Advisory, Verify, Methods, ChatPanel), then S17 deploy. Cut order if behind: S19, S13, S12 drains, S11.4, S5 FR.
+
+**Human to-do:**
+1. Open http://localhost:5173/area/56f044f26351 (backend on :8080, `npx vite` in `frontend/`), run "Historic max" or Manual ~8 mm/h, slide hours; report anything broken.
+2. Deploy at the end (agent deploys are blocked by the permission classifier): `./scripts/deploy_backend.sh`, then
+   `cd frontend && npm run build && cd .. && ~/.npm-global/bin/firebase deploy --only hosting --project project-0fd9c4ae-bf90-452f-a80`.
+3. Optional decisions: landslide road-closure tuning (heavy rain closes ~75% of hill road segments); confirm Weather API caching terms; confirm NASA GLC licence string.
+
+**Demo area:** Rudraprayag 10 km, `aoi_id = 56f044f26351`, bbox (78.93, 30.24, 79.03, 30.33); fully prepared and cached in GCS.
+
+**Key config knobs** (`backend/app/config.py`, env-overridable): `gemini_model_*`/`gemini_thinking_*`, `stream_upa_km2`, `manning_n`, `runoff_c`,
+`fsi_ahp_matrix`, `lsi_ahp_matrix`, `landslide_max_accuracy_km` (1), `lsi_g_slope/min/max` (0.25/0.75/1.25), `lsi_demand_class` (5),
+`lsi_shelter_max_class` (4), `lsi_close_share` (0.2).
+
+**Known data limits (shown as warnings):** OSM in Rudraprayag has no schools/halls (17 POIs) -> unverified large-building shelter candidates;
+walk network 166 nodes; Open Buildings places only ~9% of residents in buildings; October forecast is dry (use historical extreme/manual).
+
+## Stage log
+
 | Stage | Status | Date-time (IST) | What works | Deviations from spec | Open questions | What the human must do |
 |---|---|---|---|---|---|---|
 | S0.9 scaffold | done | 2026-10-15 | Repo layout per SPEC §3.5, venv (py3.12), deps installed and pinned in `backend/requirements.txt`, config + CORS app stub | Frontend `src/` dirs only; Vite app comes in S0.13 | | |

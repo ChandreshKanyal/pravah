@@ -20,8 +20,14 @@ referrer-restricted and the server key lives only in Secret Manager.
 S0.1 project and billing, S0.2 APIs, S0.3 Earth Engine, S0.4 service account,
 S0.5 bucket and Firestore, S0.6 both API keys, S0.7 Map ID, S0.8 budget (₹9,000 alerts).
 
+## Decided / done after S0
+- Browser key referrers: localhost:5173, localhost:4173, `project-0fd9c4ae-bf90-452f-a80.web.app`, `.firebaseapp.com` (done 15 Oct).
+- Gemini: only `gemini-3.8-flash` on Vertex `global`; FAST = thinking LOW, PRO = thinking HIGH (MINIMAL unsupported).
+- Cloud Run service: `pravah-backend`, `https://pravah-backend-265255051442.asia-south1.run.app` (public).
+- Firebase Hosting: `https://project-0fd9c4ae-bf90-452f-a80.web.app`, `/api/**` rewrites to Cloud Run.
+- Weather API key: read from env `MAPS_SERVER_KEY` (Cloud Run secret mapping) or Secret Manager `maps-server-key` locally.
+- Overpass endpoints (public, flaky): overpass.private.coffee, overpass-api.de, maps.mail.ru (tried in that order).
+
 ## Still open
-- Browser key allows only `http://localhost:5173/*` and `http://localhost:4173/*`.
-  After the first Firebase deploy, add the `*.web.app` and `*.firebaseapp.com` URLs.
-- Pick `GEMINI_MODEL_FAST` / `GEMINI_MODEL_PRO` from `scripts/list_models.py` (S0.10).
-- Next: S0.9 repo scaffold, S0.11 `/api/health`, S0.12 Cloud Run deploy, S0.13 Firebase Hosting.
+- Redeploy backend + frontend with S1-S16 (see `docs/PROGRESS.md` hand-off).
+- Weather API caching period for hourly/daily data not confirmed (we keep raw responses in memory 10 min only).

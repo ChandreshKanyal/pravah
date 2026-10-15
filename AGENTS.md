@@ -22,3 +22,9 @@ Google AI Builder Cup 2026. Deadline: Sun 18 Oct 2026, 12:00 IST. Speed matters;
 ## Environment (Mac, Apple Silicon)
 - Python: use uv with Python 3.12 (`uv venv --python 3.12 backend/.venv`, then `uv pip install ...`). Do not use Homebrew; it is the Intel version and cannot compile here.
 - Node 24; npm global prefix is ~/.npm-global. gcloud and firebase are installed and logged in as chankarkalwayal@gmail.com. gcloud project is project-0fd9c4ae-bf90-452f-a80.
+
+## Working notes (from the build so far)
+- gcloud and firebase are not on PATH in agent shells: use `~/google-cloud-sdk/bin/gcloud` and `~/.npm-global/bin/firebase`.
+- Never add AI attribution lines to commits.
+- Agent-run deploys are blocked by the permission classifier; give the human the exact deploy commands.
+- Current status, decisions and spec deviations live in `docs/PROGRESS.md` (read its hand-off section first).
