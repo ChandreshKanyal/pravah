@@ -19,9 +19,11 @@ export const COLORS = {  // Google palette
   crowd: [251, 188, 4, 255] as RGBA,
 };
 
+const RENDER_V = "2";  // bump when backend/app/engines/render.py changes so browsers drop cached overlay PNGs
+
 export function bitmap(id: string, url: string, corners: LonLat[], opacity = 0.85): Layer {
   // 4 corners (bottom-left, top-left, top-right, bottom-right) correct the UTM grid rotation.
-  return new BitmapLayer({ id, image: apiUrl(url), bounds: corners as any, opacity, pickable: false });
+  return new BitmapLayer({ id, image: apiUrl(url) + (url.includes("?") ? "&" : "?") + "v=" + RENDER_V, bounds: corners as any, opacity, pickable: false });
 }
 
 export function roadsLayer(id: string, data: GeoJSON.FeatureCollection, hour: number): Layer {
