@@ -1,4 +1,4 @@
-import { useEffect, useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { APIProvider, ColorScheme, ControlPosition, Map, useMap } from "@vis.gl/react-google-maps";
 import { GoogleMapsOverlay } from "@deck.gl/google-maps";
 import type { Layer } from "@deck.gl/core";
@@ -9,13 +9,21 @@ const MAP_ID = import.meta.env.VITE_MAP_ID as string;
 export type MapType = "roadmap" | "hybrid" | "terrain";
 
 /** Attaches a deck.gl overlay to the current Google map and keeps its layers in sync. */
+// Safari drops the map's shared WebGL context under deck.gl's interleaved mode (layers vanish), so it gets deck's own canvas.
+const SAFARI = /^((?!chrome|android|crios|fxios|edg).)*safari/i.test(navigator.userAgent);
+
 export function useDeckOverlay(layers: Layer[]) {
   const map = useMap();
-  const overlay = useMemo(() => new GoogleMapsOverlay({ interleaved: true }), []);
+  const [gen, setGen] = useState(0);
+  const overlay = useMemo(() => new GoogleMapsOverlay({ interleaved: !SAFARI }), [gen]);
   useEffect(() => {
     if (!map) return;
     overlay.setMap(map);
-    return () => overlay.setMap(null);
+    // recreate the overlay if the browser loses the WebGL context
+    const div = map.getDiv();
+    const lost = () => setTimeout(() => setGen((g) => g + 1), 300);
+    div.addEventListener("webglcontextlost", lost, true);
+    return () => { div.removeEventListener("webglcontextlost", lost, true); overlay.setMap(null); overlay.finalize(); };
   }, [map, overlay]);
   useEffect(() => {
     overlay.setProps({ layers });

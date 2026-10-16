@@ -77,8 +77,8 @@ export function areaLayers(bbox: [number, number, number, number]): [Layer, Laye
   const ring: LonLat[] = [[w, s], [e, s], [e, n], [w, n], [w, s]];
   const world: LonLat[] = [[-180, -85], [180, -85], [180, 85], [-180, 85], [-180, -85]];
   const mask = new PolygonLayer({ id: "area-mask", data: [{ p: [world, [...ring].reverse()] }], getPolygon: (d: any) => d.p,
-    getFillColor: [0, 0, 0, 64], stroked: false, pickable: false });
-  const border = new PathLayer({ id: "area-border", data: [{ p: ring, c: [255, 255, 255, 230], w: 6 }, { p: ring, c: [217, 48, 37, 255], w: 3 }],
-    getPath: (d: any) => d.p, getColor: (d: any) => d.c, getWidth: (d: any) => d.w, widthUnits: "pixels", jointRounded: true, pickable: false });
+    getFillColor: [0, 0, 0, 64], stroked: false, pickable: false, parameters: { depthCompare: "always" } as any });
+    const border = new PathLayer({ id: "area-border", data: [{ p: ring }], getPath: (d: any) => d.p, getColor: [217, 48, 37, 255], getWidth: 4,
+    widthUnits: "pixels", widthMinPixels: 4, jointRounded: true, capRounded: true, pickable: false, parameters: { depthCompare: "always" } as any });
   return [mask, border];
 }
