@@ -46,3 +46,32 @@ export function MapCanvas({ center, zoom, layers = [], children, mapTypeId = "hy
     </div>
   );
 }
+
+type BBox = [number, number, number, number];
+type Pad = { top: number; right: number; bottom: number; left: number };
+
+/** Red outline of the simulated area with everything outside it dimmed (like a Google Maps place outline). Fits the
+ *  view to the area whenever `fitKey` changes. Drawn with native google.maps.Polygon, above the deck.gl layers. */
+export function AreaOutline({ bbox, fitKey, padding = 48, dim = true, color = "#d93025" }: {
+  bbox: BBox | null | undefined; fitKey?: unknown; padding?: number | Pad; dim?: boolean; color?: string;
+}) {
+  const map = useMap();
+  const key = bbox?.join(",");
+  useEffect(() => {
+    if (!map || !bbox) return;
+    const [w, s, e, n] = bbox;
+    const ring = [{ lat: s, lng: w }, { lat: s, lng: e }, { lat: n, lng: e }, { lat: n, lng: w }];
+    const world = [{ lat: 85, lng: -179.9 }, { lat: 85, lng: 0 }, { lat: 85, lng: 179.9 }, { lat: -85, lng: 179.9 }, { lat: -85, lng: 0 }, { lat: -85, lng: -179.9 }];
+    const mask = dim ? new google.maps.Polygon({ map, paths: [world, [...ring].reverse()], strokeWeight: 0, fillColor: "#000", fillOpacity: 0.28, clickable: false, zIndex: 1 }) : null;
+    const halo = new google.maps.Polygon({ map, paths: ring, strokeColor: "#ffffff", strokeOpacity: 0.9, strokeWeight: 6, fillOpacity: 0, clickable: false, zIndex: 2 });
+    const line = new google.maps.Polygon({ map, paths: ring, strokeColor: color, strokeOpacity: 1, strokeWeight: 3, fillOpacity: 0, clickable: false, zIndex: 3 });
+    return () => { mask?.setMap(null); halo.setMap(null); line.setMap(null); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [map, key, dim, color]);
+  useEffect(() => {
+    if (!map || !bbox) return;
+    map.fitBounds({ west: bbox[0], south: bbox[1], east: bbox[2], north: bbox[3] }, padding);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [map, key, fitKey]);
+  return null;
+}

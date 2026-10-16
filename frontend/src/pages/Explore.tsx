@@ -7,7 +7,7 @@ import type { Layer } from "@deck.gl/core";
 import { createAoi, geocode, historyIndia, listAois } from "../api/client";
 import DrawControl, { bboxKm, bboxOf, type DrawMode } from "../components/DrawControl";
 import { Button, Chip, Dialog, Field, Icon, IconButton, Segmented, nf, useSnackbar } from "../components/m3";
-import { MapCanvas, type MapType } from "../components/MapCanvas";
+import { AreaOutline, MapCanvas, type MapType } from "../components/MapCanvas";
 import type { AoiListItem, GeocodeResult, HistoryIndia } from "../types/api";
 
 const LIMIT_KM = { river: 15, urban: 4 } as const;
@@ -116,6 +116,7 @@ export default function Explore() {
     <div className="explore">
       <MapCanvas center={{ lat: 22.5, lng: 82 }} zoom={5} layers={layers} mapTypeId={mapType} streetView={false}>
         <Fly to={fly} />
+        <AreaOutline bbox={draft?.bbox} padding={{ top: 80, right: 80, bottom: 80, left: 440 }} />
         <GfdTiles url={hist?.gfd_tiles ?? null} on={showFloods} />
         <DrawControl mode={mode} onFinish={(p) => { setMode(null); setDraft({ bbox: bboxOf(p), name: "", mode: "river" }); }} />
       </MapCanvas>
@@ -156,7 +157,7 @@ export default function Explore() {
               return (
                 <button key={d.name} className="row-item sl" onClick={() => {
                   if (a) nav(`/area/${a.aoi_id}`);
-                  else { setFly({ bbox: d.bbox }); setDraft({ bbox: d.bbox, name: d.name, mode: d.mode }); }
+                  else { setDraft({ bbox: d.bbox, name: d.name, mode: d.mode }); }
                 }}>
                   <span className={`avatar ${d.mode}`}><Icon name={d.mode === "urban" ? "location_city" : "landscape"} /></span>
                   <span className="txt"><span className="t">{d.name}</span><span className="s">{d.note}</span></span>

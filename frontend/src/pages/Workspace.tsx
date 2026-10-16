@@ -9,7 +9,7 @@ import ForecastStrip from "../components/ForecastStrip";
 import HistoryPanel from "../components/HistoryPanel";
 import LayerPanel, { type LayerKey } from "../components/LayerPanel";
 import { Button, Dialog, Fab, Field, Icon, Linear, Tabs, nf, useSnackbar } from "../components/m3";
-import { MapCanvas, type MapType } from "../components/MapCanvas";
+import { AreaOutline, MapCanvas, type MapType } from "../components/MapCanvas";
 import Results from "../components/Results";
 import ScenarioPanel from "../components/ScenarioPanel";
 import TimeSlider from "../components/TimeSlider";
@@ -60,6 +60,7 @@ export default function Workspace() {
   const [drawMode, setDrawMode] = useState<DrawMode>(null);
   const [fly, setFly] = useState<{ lon: number; lat: number; zoom?: number; t: number } | null>(null);
   const [tab, setTab] = useState<Tab>("scenario");
+  const [fitT, setFitT] = useState(0);
   const [chatOpen, setChatOpen] = useState(false);
   const [mapType, setMapType] = useState<MapType>("hybrid");
   const [pending, setPending] = useState<{ lng: number; lat: number } | null>(null);
@@ -101,8 +102,6 @@ export default function Workspace() {
     if (!ready) return;
     getStaticLayers(aoiId).then((s) => {
       setSt(s);
-      const xs = s.corners.map((c) => c[0]), ys = s.corners.map((c) => c[1]);
-      setFly({ lon: (Math.min(...xs) + Math.max(...xs)) / 2, lat: (Math.min(...ys) + Math.max(...ys)) / 2, zoom: 13, t: Date.now() });
     }).catch((e) => setError(String(e.message)));
     getForecast(aoiId, p.duration_h).then(setFc).catch(() => setFc(null));
     if (status?.latest_run_id) getRun(status.latest_run_id).then((r) => loadRun(r, false)).catch(() => undefined);
@@ -218,6 +217,7 @@ export default function Workspace() {
       <main className="ws-map">
         <MapCanvas center={{ lat: 30.28, lng: 78.98 }} zoom={12} layers={layers} mapTypeId={mapType}>
           <FlyTo target={fly} />
+          <AreaOutline bbox={status?.bbox} fitKey={fitT} padding={{ top: 150, right: 72, bottom: 150, left: 48 }} />
           <Traffic on={on.has("traffic")} />
           <DrawControl mode={drawMode}
             onFinish={(poly) => { setDrawMode(null); set({ blocked_polygons: [...p.blocked_polygons, poly] }); snack("Road block added. Run the scenario to reroute."); }}
@@ -234,6 +234,14 @@ export default function Workspace() {
             <Icon name={drawMode === "point" ? "add_home" : "block"} />
             {drawMode === "point" ? "Click the map where the shelter is" : "Click points around the road to block; double-click to finish"}
             <button className="btn btn-text sl" onClick={() => setDrawMode(null)}>Cancel</button>
+          </div>
+        )}
+
+        {status?.bbox && (
+          <div className="area-chip">
+            <button className="chip elevated sl" onClick={() => setFitT(Date.now())} title="Zoom to the simulated area">
+              <span className="sq" /> Simulated area · {status.name ?? "this area"}<Icon name="center_focus_strong" className="sm" />
+            </button>
           </div>
         )}
 
