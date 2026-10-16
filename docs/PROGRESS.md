@@ -1,11 +1,14 @@
 # Pravah progress
 
-## Current status (hand-off, 2026-10-16 02:30 IST)
+## Current status (hand-off, 2026-10-16 02:45 IST)
 
 **Where we are:** S0-S19 built, tested and committed **locally**. Backend tests 65/65 (`cd backend && .venv/bin/pytest -q`);
 frontend `npm run build` passes; local smoke test passes (`scripts/smoke_test.sh http://localhost:8080`). UI checked with
 headless Chrome screenshots (Explore, Workspace, Advisory, Verify, Methods, 3D, Mumbai urban).
 **Deployed:** still only S0. Cloud Run + Firebase serve the S0 build until the human redeploys.
+**Local preview:** backend `cd backend && .venv/bin/uvicorn app.main:app --port 8080`, frontend `cd frontend && npx vite`
+-> http://localhost:5173 (Rudraprayag `/area/56f044f26351`, Mumbai `/area/d277268c1783`). Last smoke test (local) passed;
+it left Rudraprayag's latest run as `00326e8c0801` (record rain, Gemini advisory ready).
 
 **Human to-do (in order):**
 1. Deploy (agent deploys are blocked):
