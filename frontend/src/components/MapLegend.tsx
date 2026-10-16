@@ -11,7 +11,7 @@ const SUS = ["var(--sus-1)", "var(--sus-2)", "var(--sus-3)", "var(--sus-4)", "va
 /** Compact map key (Google Maps style): only what is currently drawn, colours taken from the layer factories. */
 export default function MapLegend({ on, hasRun, blocked }: { on: Set<LayerKey>; hasRun: boolean; blocked: boolean }) {
   const [open, setOpen] = useState(true);
-  const items: Sym[] = [{ kind: "box", color: "#202124", label: "Simulated area" }];
+  const items: Sym[] = [{ kind: "box", color: "#ffffff", label: "Simulated area" }];
   if (hasRun && on.has("depth")) items.push({ kind: "ramp", color: DEPTH, label: "Flood depth 5 cm → 3 m+" });
   if (hasRun && on.has("ponding")) items.push({ kind: "ramp", color: ["#9ecae1", "#3182bd", "#08306b"], label: "Ponding low → high" });
   if (hasRun && on.has("lsi")) items.push({ kind: "ramp", color: SUS, label: "Landslide risk low → high" });

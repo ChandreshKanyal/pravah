@@ -84,11 +84,11 @@ export function areaLayers(bbox: [number, number, number, number]): { mask: Laye
   const world: LonLat[] = [[-180, -85], [180, -85], [180, 85], [-180, 85], [-180, -85]];
   const mask = new PolygonLayer({ id: "area-mask", data: [{ p: [world, [...ring].reverse()] }], getPolygon: (d: any) => d.p,
     getFillColor: [0, 0, 0, 64], stroked: false, pickable: false, parameters: { depthCompare: "always" } as any });
-    // dark dashed outline on a white halo: red is reserved for closed roads and bridges
+    // white dashes on a dark outline read on satellite and on light maps alike; red is reserved for closed roads and bridges
   const border: Layer[] = [
-    new PathLayer({ id: "area-halo", data: [{ p: ring }], getPath: (d: any) => d.p, getColor: [255, 255, 255, 220], getWidth: 6,
+    new PathLayer({ id: "area-halo", data: [{ p: ring }], getPath: (d: any) => d.p, getColor: [32, 33, 36, 210], getWidth: 6,
       widthUnits: "pixels", jointRounded: true, pickable: false, parameters: { depthCompare: "always" } as any }),
-    new PathLayer({ id: "area-border", data: [{ p: ring }], getPath: (d: any) => d.p, getColor: COLORS.boundary, getWidth: 3,
+    new PathLayer({ id: "area-border", data: [{ p: ring }], getPath: (d: any) => d.p, getColor: [255, 255, 255, 255], getWidth: 3,
       widthUnits: "pixels", jointRounded: true, pickable: false, parameters: { depthCompare: "always" } as any,
       getDashArray: [4, 3], dashJustified: true, extensions: [new PathStyleExtension({ dash: true })] } as any),
   ];
