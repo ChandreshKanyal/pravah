@@ -7,7 +7,7 @@ import { COORDINATE_SYSTEM, Deck } from "@deck.gl/core";
 import { PathLayer, PolygonLayer } from "@deck.gl/layers";
 import { SimpleMeshLayer } from "@deck.gl/mesh-layers";
 import { apiUrl, getAoiStatus, getRun } from "../api/client";
-import { Button, Icon, IconButton, Segmented } from "../components/m3";
+import { Button, HelpTip, Icon, IconButton, Segmented } from "../components/m3";
 import TimeSlider from "../components/TimeSlider";
 import type { RunResult } from "../types/api";
 
@@ -177,6 +177,10 @@ export default function View3D() {
           <li><span className="ramp">{DEPTH.map((c) => <i key={c} style={{ background: c }} />)}</span> Flood 5 cm → 3 m+</li>
           <li>{(["critical", "high", "moderate", "low"] as const).map((r, i) => <span key={r} className="sw" title={r} style={{ background: `rgb(${RISK[i].join(",")})` }} />)} Building risk: critical → low</li>
         </ul>
+        <div className="row nowrap" style={{ gap: 4 }}>
+          <span className="label-m">Height exaggeration</span>
+          <HelpTip text="Draws hills and buildings 1, 1.5 or 2 times taller than they are, so gentle slopes and low spots are easier to see (useful in flat cities). Display only; the model and numbers do not change." />
+        </div>
         <Segmented label="Height exaggeration" block value={ex} onChange={setEx} options={[{ value: "1", label: "1×" }, { value: "1.5", label: "1.5×" }, { value: "2", label: "2×" }]} />
         <div className="row" style={{ gap: 4 }}>
           <Button variant="tonal" size="small" icon="location_city" onClick={() => town && view(town[0], town[1], 15.4)} disabled={!town}>Town</Button>
