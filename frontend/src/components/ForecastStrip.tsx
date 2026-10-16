@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Forecast } from "../types/api";
 import { Icon, Tip } from "./m3";
 
@@ -7,6 +7,14 @@ const wx = (mm: number) => (mm >= 20 ? "thunderstorm" : mm >= 5 ? "rainy" : mm >
 /** 10-day screening strip (Google Weather style): day, icon, rain total and a screening badge bar. */
 export default function ForecastStrip({ fc, selected, onPick }: { fc: Forecast | null; selected: number | null; onPick: (i: number) => void }) {
   const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", away); document.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("mousedown", away); document.removeEventListener("keydown", esc); };
+  }, [open]);
   if (!fc) return <div className="fc-chip"><div className="shimmer" style={{ width: 200, height: 20 }} /></div>;
   const days = fc.screening.length ? fc.screening : fc.daily.map((d) => ({ ...d, max_stage_m: 0, badge: "low" as const }));
   if (!days.length) return <div className="fc-chip body-s muted">Forecast unavailable</div>;
@@ -22,8 +30,8 @@ export default function ForecastStrip({ fc, selected, onPick }: { fc: Forecast |
     </button>
   );
   return (
+    <div className="forecast-wrap" ref={ref}>
     <div className="forecast" role="listbox" aria-label="10-day rain forecast">
-      <button className="fc-close sl" onClick={() => setOpen(false)} aria-label="Collapse forecast"><Icon name="expand_less" /></button>
       {days.map((d, i) => {
         const dt = new Date(d.date + "T00:00:00");
         const label = i === 0 ? "Today" : dt.toLocaleDateString("en-IN", { weekday: "short" });
@@ -32,7 +40,7 @@ export default function ForecastStrip({ fc, selected, onPick }: { fc: Forecast |
             <b>{dt.toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "short" })}</b><br />
             {d.precip_mm.toFixed(1)} mm forecast · screening: {d.badge} (main river {d.max_stage_m} m above base){fc.worst_day_index === i ? " · wettest day" : ""}
           </>}>
-            <button role="option" aria-selected={selected === i} className={`fday sl ${selected === i ? "sel" : ""} ${fc.worst_day_index === i ? "worst" : ""}`} onClick={() => onPick(i)}>
+            <button role="option" aria-selected={selected === i} className={`fday sl ${selected === i ? "sel" : ""} ${fc.worst_day_index === i ? "worst" : ""}`} onClick={() => { onPick(i); setOpen(false); }}>
               <span className="d">{label}</span>
               <Icon name={wx(d.precip_mm)} />
               <span className="mm">{d.precip_mm < 0.05 ? "0" : d.precip_mm.toFixed(1)} mm</span>
@@ -41,6 +49,8 @@ export default function ForecastStrip({ fc, selected, onPick }: { fc: Forecast |
           </Tip>
         );
       })}
+    </div>
+    <button className="fc-close sl" onClick={() => setOpen(false)} aria-label="Close forecast" title="Close"><Icon name="close" /></button>
     </div>
   );
 }

@@ -14,7 +14,7 @@ import { AreaOutline, MapCanvas, type MapType } from "../components/MapCanvas";
 import Results from "../components/Results";
 import ScenarioPanel from "../components/ScenarioPanel";
 import TimeSlider from "../components/TimeSlider";
-import { COLORS, bitmap, points, polygonsLayer, roadsLayer, routesLayer } from "../layers/factories";
+import { COLORS, areaLayers, bitmap, points, polygonsLayer, roadsLayer, routesLayer } from "../layers/factories";
 import { defaultParams, type AoiStatus, type Forecast, type HistoryAoi, type RunResult, type ScenarioParams, type StaticLayers } from "../types/api";
 
 const STEPS: [string, string][] = [["terrain", "Terrain"], ["hydro30", "Rivers"], ["landcover", "Land cover"], ["hazard_hist", "Past hazards"],
@@ -126,7 +126,9 @@ export default function Workspace() {
 
   const layers = useMemo(() => {
     const L: Layer[] = [];
-    if (!st) return L;
+    const area = status?.bbox ? areaLayers(status.bbox) : null;
+    if (area) L.push(area[0]);
+    if (!st) { if (area) L.push(area[1]); return L; }
     const c = st.corners;
     for (const k of ["fsi", "lsi_static", "hand", "crowd", "streams"] as const) {
       if (on.has(k) && st.layers[k]) L.push(bitmap(`static-${k}`, st.layers[k], c, k === "streams" ? 0.9 : 0.65));
@@ -163,8 +165,13 @@ export default function Workspace() {
     }
     if (p.blocked_polygons.length) L.push(polygonsLayer("blocked", p.blocked_polygons));
     if (p.extra_shelters.length) L.push(...points("extra", p.extra_shelters.map((s) => ({ ...s, lon: s.lng })), COLORS.shelter, 9, (s) => s.name));
+    if (area) {
+      // border above the rasters but below roads and points: insert after the last bitmap layer
+      let i = 0; L.forEach((x, k) => { if (/^(area-mask|static-|lsi-|depth-|pond-)/.test(x.id)) i = k + 1; });
+      L.splice(i, 0, area[1]);
+    }
     return L;
-  }, [st, run, roads, routes, hour, on, p.blocked_polygons, p.extra_shelters, hist]);
+  }, [status?.bbox, st, run, roads, routes, hour, on, p.blocked_polygons, p.extra_shelters, hist]);
 
   const done = status?.status ? STEPS.filter(([k]) => status.status![k] === "ready").length : 0;
   const days = fc?.daily.map((d, i) => (i === 0 ? "Today" : new Date(d.date + "T00:00:00").toLocaleDateString("en-IN", { weekday: "short", day: "numeric" }))) ?? [];

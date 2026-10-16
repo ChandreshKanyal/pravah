@@ -1,5 +1,5 @@
 // deck.gl layer factories per data type (S16.8 colours).
-import { BitmapLayer, GeoJsonLayer, ScatterplotLayer, TextLayer } from "@deck.gl/layers";
+import { BitmapLayer, GeoJsonLayer, PathLayer, PolygonLayer, ScatterplotLayer, TextLayer } from "@deck.gl/layers";
 import type { Layer } from "@deck.gl/core";
 import { apiUrl } from "../api/client";
 import type { LonLat } from "../types/api";
@@ -68,4 +68,17 @@ export function polygonsLayer(id: string, polys: GeoJSON.Polygon[]): Layer {
     id, data: { type: "FeatureCollection", features: polys.map((g) => ({ type: "Feature", geometry: g, properties: {} })) } as any,
     getFillColor: [215, 25, 28, 60], getLineColor: [215, 25, 28, 255], lineWidthUnits: "pixels", getLineWidth: 2,
   });
+}
+
+/** Simulated-area outline: dim everything outside the box, then a white-haloed red border (drawn by deck.gl so it shares
+ *  one renderer with the other layers on both vector and raster maps). Returns [mask, border]; put border last. */
+export function areaLayers(bbox: [number, number, number, number]): [Layer, Layer] {
+  const [w, s, e, n] = bbox;
+  const ring: LonLat[] = [[w, s], [e, s], [e, n], [w, n], [w, s]];
+  const world: LonLat[] = [[-180, -85], [180, -85], [180, 85], [-180, 85], [-180, -85]];
+  const mask = new PolygonLayer({ id: "area-mask", data: [{ p: [world, [...ring].reverse()] }], getPolygon: (d: any) => d.p,
+    getFillColor: [0, 0, 0, 64], stroked: false, pickable: false });
+  const border = new PathLayer({ id: "area-border", data: [{ p: ring, c: [255, 255, 255, 230], w: 6 }, { p: ring, c: [217, 48, 37, 255], w: 3 }],
+    getPath: (d: any) => d.p, getColor: (d: any) => d.c, getWidth: (d: any) => d.w, widthUnits: "pixels", jointRounded: true, pickable: false });
+  return [mask, border];
 }

@@ -7,6 +7,7 @@ import type { Layer } from "@deck.gl/core";
 import { createAoi, geocode, historyIndia, listAois } from "../api/client";
 import DrawControl, { bboxKm, bboxOf, type DrawMode } from "../components/DrawControl";
 import { Button, Chip, Dialog, Field, Icon, IconButton, Segmented, nf, useSnackbar } from "../components/m3";
+import { areaLayers } from "../layers/factories";
 import { AreaOutline, MapCanvas, type MapType } from "../components/MapCanvas";
 import type { AoiListItem, GeocodeResult, HistoryIndia } from "../types/api";
 
@@ -79,8 +80,9 @@ export default function Explore() {
       L.push(new ScatterplotLayer({ id: "glc-pts", data: hist.landslides, getPosition: (d: any) => [d.lon, d.lat], radiusUnits: "pixels", getRadius: 3,
         getFillColor: [189, 0, 38, 220], getLineColor: [255, 255, 255, 255], stroked: true, lineWidthUnits: "pixels", getLineWidth: 1, minZoom: 8 } as any));
     }
+    if (draft) L.push(...areaLayers(draft.bbox));
     return L;
-  }, [hist, showSlides]);
+  }, [hist, showSlides, draft?.bbox]);
 
   const size = draft ? bboxKm(draft.bbox) : null;
   const tooBig = !!(draft && size && (size[0] > LIMIT_KM[draft.mode] || size[1] > LIMIT_KM[draft.mode]));

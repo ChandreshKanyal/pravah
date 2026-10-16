@@ -28,13 +28,13 @@ function Chart({ data, unit, title, color }: { data: { h: number; v: number }[];
       <figcaption className="label-m muted" style={{ marginBottom: 4 }}>{title}</figcaption>
       <ResponsiveContainer width="100%" height={120}>
         <AreaChart data={data} margin={{ top: 6, right: 8, bottom: 2, left: -12 }}>
-          <defs><linearGradient id={`g-${title}`} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor={color} stopOpacity={0.35} /><stop offset="1" stopColor={color} stopOpacity={0.02} /></linearGradient></defs>
+          <defs><linearGradient id={`g-${title.replace(/\W+/g, "-")}`} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor={color} stopOpacity={0.35} /><stop offset="1" stopColor={color} stopOpacity={0.02} /></linearGradient></defs>
           <CartesianGrid vertical={false} stroke="#9aa0a6" strokeOpacity={0.25} />
           <XAxis dataKey="h" tick={{ fontSize: 11, fill: "#80868b" }} tickLine={false} axisLine={false} tickFormatter={(h) => `h${h}`} />
           <YAxis tick={{ fontSize: 11, fill: "#80868b" }} tickLine={false} axisLine={false} width={44} />
           <Tooltip formatter={(v) => [`${v} ${unit}`, title]} labelFormatter={(h) => `Hour ${h}`}
             contentStyle={{ borderRadius: 8, border: 0, boxShadow: "0 1px 3px rgba(0,0,0,.3)", fontFamily: "Google Sans" }} />
-          <Area type="monotone" dataKey="v" stroke={color} strokeWidth={2} fill={`url(#g-${title})`} isAnimationActive animationDuration={450} dot={false} />
+          <Area type="monotone" dataKey="v" stroke={color} strokeWidth={2} fill={`url(#g-${title.replace(/\W+/g, "-")})`} isAnimationActive animationDuration={450} dot={false} />
         </AreaChart>
       </ResponsiveContainer>
     </figure>
