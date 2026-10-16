@@ -81,6 +81,7 @@ export default function View3D() {
   const [showB, setShowB] = useState(true);
   const [err, setErr] = useState("");
   const [name, setName] = useState("");
+  const [noRun, setNoRun] = useState(false);
   const [tex, setTex] = useState<HTMLImageElement | null>(null);
   const [texBusy, setTexBusy] = useState(false);
   const flown = useRef(false);
@@ -91,12 +92,12 @@ export default function View3D() {
       const [w, h, cell] = (r.headers.get("X-Grid") ?? "0,0,60").split(",").map(Number);
       setDem({ w, h, cell, z: new Float32Array(await r.arrayBuffer()) });
     }).catch(() => setErr("Terrain unavailable"));
-    getAoiStatus(aoiId).then((s) => { setName(s.name ?? ""); if (s.latest_run_id) getRun(s.latest_run_id).then((r) => { setRun(r); setHour(r.rain_series_mm_h.length); }); }).catch(() => undefined);
+    getAoiStatus(aoiId).then((s) => { setName(s.name ?? ""); if (!s.latest_run_id) setNoRun(true); if (s.latest_run_id) getRun(s.latest_run_id).then((r) => { setRun(r); setHour(r.rain_series_mm_h.length); }); }).catch(() => undefined);
   }, [aoiId]);
   useEffect(() => {
-    if (!run) return;
-    fetch(apiUrl(`/api/runs/${run.run_id}/3d/buildings.json?aoi_id=${aoiId}`)).then((r) => r.json()).then(setBlds).catch(() => setBlds([]));
-  }, [run, aoiId]);
+    if (!run && !noRun) return;
+    fetch(apiUrl(run ? `/api/runs/${run.run_id}/3d/buildings.json?aoi_id=${aoiId}` : `/api/aoi/${aoiId}/3d/buildings.json`)).then((r) => r.json()).then(setBlds).catch(() => setBlds([]));
+  }, [run, noRun, aoiId]);
 
   useEffect(() => {
     if (!ref.current || !meta || deck.current) return;
@@ -112,15 +113,15 @@ export default function View3D() {
 
   // Load the hourly texture as an <img> ourselves (Safari fails deck's ImageBitmap path); keep the old one until ready.
   useEffect(() => {
-    if (!run) return;
+    if (!run && !noRun) return;
     const img = new Image();
     img.crossOrigin = "anonymous";
     setTexBusy(true);
     img.onload = () => { setTex(img); setTexBusy(false); };
     img.onerror = () => setTexBusy(false);
-    img.src = apiUrl(`/api/runs/${run.run_id}/3d/texture_h${hour}.jpg?aoi_id=${aoiId}`);
+    img.src = apiUrl(run ? `/api/runs/${run.run_id}/3d/texture_h${hour}.jpg?aoi_id=${aoiId}` : `/api/aoi/${aoiId}/3d/base.jpg`);
     return () => { img.onload = null; img.onerror = null; };
-  }, [run, hour, aoiId]);
+  }, [run, noRun, hour, aoiId]);
 
   const view = (x: number, y: number, zoom: number, pitch = 62) => {
     if (!meta || !deck.current) return;
@@ -184,7 +185,7 @@ export default function View3D() {
           <IconButton icon={showB ? "domain_disabled" : "domain"} label={showB ? "Hide buildings" : "Show buildings"} onClick={() => setShowB(!showB)} />
         </div>
         {(!dem || texBusy) && !err && <div className="lin indet"><i /></div>}
-        {!run && <div className="notice info"><Icon name="info" />Run a scenario to see flood water and building risk.</div>}
+        {!run && <div className="notice info"><Icon name="info" />No scenario yet: terrain, rivers and buildings only. Run a scenario on the Map tab to see flood water and building risk.</div>}
         {err && <div className="notice error"><Icon name="error" />{err}</div>}
       </div>
       {run && (

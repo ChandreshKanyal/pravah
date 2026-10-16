@@ -146,19 +146,41 @@ def texture(run_id: str, hour: int, aoi_id: str):
     return Response(out, media_type="image/jpeg", headers=hdr)
 
 
+@router.get("/api/aoi/{aoi_id}/3d/base.jpg")
+def base_texture(aoi_id: str):
+    """Terrain, rivers and main streams only, for areas with no run yet."""
+    try:
+        rgb = _tex_base(aoi_id)
+    except NotFound:
+        raise HTTPException(404, "Area not prepared")
+    buf = io.BytesIO()
+    Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8)).save(buf, "JPEG", quality=85)
+    return Response(buf.getvalue(), media_type="image/jpeg", headers={"Cache-Control": "public, max-age=3600"})
+
+
+@router.get("/api/aoi/{aoi_id}/3d/buildings.json")
+def buildings_static(aoi_id: str):
+    """Buildings before any run: same format, risk unknown (shown as low)."""
+    return buildings("none", aoi_id)
+
+
 @router.get("/api/runs/{run_id}/3d/buildings.json")
 def buildings(run_id: str, aoi_id: str):
     """[{p: [[x, y], ...] metre offsets, z: ground m, h: height m, r: risk 0 critical..3 low}] (cached per run)."""
-    try:
-        return Response(storage.get_run(run_id, "buildings3d.json"), media_type="application/json")
-    except NotFound:
-        pass
+    if run_id != "none":
+        try:
+            return Response(storage.get_run(run_id, "buildings3d.json"), media_type="application/json")
+        except NotFound:
+            pass
     grid = storage.load_grid(aoi_id)
-    b = storage.load_gdf(aoi_id, "buildings_proxy.parquet")
+    try:
+        b = storage.load_gdf(aoi_id, "buildings_proxy.parquet")
+    except NotFound:  # areas prepared before the building-class step
+        return Response(b"[]", media_type="application/json")
     b = b.to_crs(grid.crs) if str(b.crs) != str(grid.crs) else b
     dem = storage.load_layers(aoi_id, "terrain")["dem"]
     try:
-        risk = np.load(io.BytesIO(storage.get_run(run_id, "bld_risk.npy")))
+        risk = np.load(io.BytesIO(storage.get_run(run_id, "bld_risk.npy"))) if run_id != "none" else np.full(len(b), 3, np.uint8)
     except NotFound:
         risk = np.full(len(b), 3, np.uint8)
     cx, cy = grid.x0 + grid.width * grid.cell / 2, grid.y0 - grid.height * grid.cell / 2
@@ -175,5 +197,6 @@ def buildings(run_id: str, aoi_id: str):
         out.append({"p": pts, "z": round(float(z[i]), 1), "h": round(float(max(hgt[i], 2.5)), 1),
                     "r": int(risk[i]) if i < len(risk) else 3})
     data = json.dumps(out, separators=(",", ":")).encode()
-    storage.put_run(run_id, "buildings3d.json", data, "application/json")
+    if run_id != "none":
+        storage.put_run(run_id, "buildings3d.json", data, "application/json")
     return Response(data, media_type="application/json")
