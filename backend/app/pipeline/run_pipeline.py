@@ -204,6 +204,9 @@ def rain_series(p: ScenarioParams, area: Area) -> tuple[list[float], str, list[s
     from app.services.weather import get_provider
     H, warnings = p.duration_h, []
     src = p.rain_source
+    if p.rain_series_override:  # replay of an observed storm (scripts/event_replay.py)
+        series = [max(0.0, float(v)) for v in p.rain_series_override][:24]
+        return series, p.preset_label or f"Observed rain, {len(series)} h", warnings, None
     if src in (RainSource.forecast, RainSource.worst, RainSource.best):
         try:
             lon, lat = area_centroid(area)
@@ -229,8 +232,8 @@ def rain_series(p: ScenarioParams, area: Area) -> tuple[list[float], str, list[s
             # the wettest H hours of that day follow the IMD reduction formula P_H = P_24 (H/24)^(1/3).
             depth = rainfall.daily_to_duration_mm(mm, H)
             series = rainfall.distribute_total(depth, H, p.hyetograph)
-            return series, (f"Historical extreme: wettest {H} h of a {mm:.0f} mm day (CHIRPS 2001-2024 max within 5 km; "
-                            f"{depth:.0f} mm by the IMD 1/3 rule)"), warnings, None
+            return series, (f"Record rain: {depth:.0f} mm in {H} h, the wettest hours of the wettest day on record nearby "
+                            f"({mm:.0f} mm, CHIRPS 2001-2024, IMD reduction rule)"), warnings, None
         except Exception as e:
             warnings.append(f"Historical extreme unavailable ({e.__class__.__name__}); used manual rain instead")
     series = rainfall.manual_series(p.manual_intensity_mm_h, H, p.hyetograph)
@@ -314,7 +317,9 @@ def run_pipeline(p: ScenarioParams) -> RunResult:
         if not trig.any():
             warnings.append(f"Rain stays below the landslide trigger threshold ({rainfall.LANDSLIDE_THRESHOLDS[thr][2]}; "
                             f"peak {R.max():.0%} of it): slopes are shown as susceptibility only, no landslide closures "
-                            "or evacuations")
+                            "or evacuations. This does NOT rule landslides out: satellite and forecast rain under-read "
+                            "cloudbursts, and in replays of three recorded Rudraprayag landslide events the trigger was not "
+                            "reached either (Methods: Track record). For planning, also run a record or IMD preset scenario.")
     else:
         lsi_act = None
         warnings.append("Landslide susceptibility not prepared for this area")

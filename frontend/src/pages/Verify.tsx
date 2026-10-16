@@ -6,6 +6,7 @@ import { Button, Icon, Segmented, nf, useSnackbar } from "../components/m3";
 import { MapCanvas } from "../components/MapCanvas";
 import { points } from "../layers/factories";
 import type { PhotoDoc, VerificationItem } from "../types/api";
+import { enqueue, list as listQueued, remove as unqueue, shrink, type Queued } from "../offlineQueue";
 
 const pretty = (s?: string) => (s ?? "").replace(/^verified_/, "verified ").replace(/_/g, " ");
 
@@ -40,6 +41,44 @@ export default function Verify() {
   const [last, setLast] = useState<PhotoDoc | null>(null);
   const [fly, setFly] = useState<{ lon: number; lat: number; z: number; t: number } | null>(null);
   const input = useRef<HTMLInputElement>(null);
+  const [waiting, setWaiting] = useState<Queued[]>([]);
+  const [online, setOnline] = useState(navigator.onLine);
+  const [locating, setLocating] = useState(false);
+
+  async function flush() {
+    const qs = await listQueued(aoiId);
+    setWaiting(qs);
+    if (!navigator.onLine) return;
+    for (const q of qs) {
+      try {
+        const d = await uploadPhoto(aoiId, q.kind, new File([q.blob], q.name, { type: q.blob.type || "image/jpeg" }), q.pin ?? undefined);
+        await unqueue(q.id);
+        setPhotos((x) => [d, ...x]);
+      } catch (e) {
+        if (e instanceof TypeError) break;  // still offline
+        await unqueue(q.id);  // rejected by the server (e.g. no location): drop it and say why
+        snack(`A saved photo could not be used: ${(e as Error).message}`);
+      }
+    }
+    const left = await listQueued(aoiId);
+    if (left.length < qs.length) snack(`${qs.length - left.length} saved photo(s) uploaded`);
+    setWaiting(left);
+  }
+  useEffect(() => {
+    flush();
+    const on = () => { setOnline(true); flush(); }, off = () => setOnline(false);
+    window.addEventListener("online", on); window.addEventListener("offline", off);
+    return () => { window.removeEventListener("online", on); window.removeEventListener("offline", off); };
+  }, [aoiId]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  function myLocation() {
+    if (!navigator.geolocation) { snack("This device cannot share its location"); return; }
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => { setPin({ lng: pos.coords.longitude, lat: pos.coords.latitude }); setFly({ lon: pos.coords.longitude, lat: pos.coords.latitude, z: 18, t: Date.now() }); setLocating(false); },
+      () => { snack("Location not available: drop a pin on the map instead"); setLocating(false); },
+      { enableHighAccuracy: true, timeout: 15000 });
+  }
 
   useEffect(() => {
     verificationQueue(aoiId).then((q) => setQueue(q.queue)).catch(() => setQueue([]));
@@ -59,15 +98,24 @@ export default function Verify() {
   async function send() {
     if (!file) return;
     setBusy(true);
+    const blob = pin ? await shrink(file).catch(() => file) : file;  // keep EXIF GPS when there is no pin
+    const save = async () => {
+      await enqueue({ id: crypto.randomUUID(), aoiId, kind, blob, name: file.name || "photo.jpg", pin, at: new Date().toISOString() });
+      setWaiting(await listQueued(aoiId));
+      snack("No connection: the photo is saved on this device and uploads when you are back online");
+      setFile(null); setPreview(null); setPin(null);
+    };
+    if (!navigator.onLine) { await save(); setBusy(false); return; }
     try {
-      const d = await uploadPhoto(aoiId, kind, file, pin ?? undefined);
+      const d = await uploadPhoto(aoiId, kind, new File([blob], file.name || "photo.jpg", { type: blob.type || "image/jpeg" }), pin ?? undefined);
       setLast(d);
       setPhotos((x) => [d, ...x]);
       snack(d.accepted ? "Classified and applied on the next run" : "Saved, not applied");
       setFile(null); setPreview(null); setPin(null);
     } catch (e) {
+      if (e instanceof TypeError) { await save(); return; }  // network failure: keep it for later
       const m = String((e as Error).message);
-      snack(m.includes("GPS") ? "No GPS in the photo: click the map to drop a pin, then send again" : m);
+      snack(m.includes("GPS") ? "No GPS in the photo: tap “Use my location” or drop a pin on the map, then send again" : m);
     } finally { setBusy(false); }
   }
 
@@ -81,12 +129,19 @@ export default function Verify() {
     <div className="doc-page">
       <div className="doc" style={{ maxWidth: 1240 }}>
         <div className="doc-head"><div className="grow stack-s">
-          <span className="label-l muted">Field verification</span>
+          <span className="label-l muted">Field check</span>
           <h1>Check buildings and drains with your own photos</h1>
           <p className="body-m muted">Upload field or drone photos taken by your teams. Gemini classifies the structure or drain; a confident result replaces the proxy class from the next run. Only your photos are used, never Google Maps imagery.</p>
         </div></div>
 
-        <div className="grid-2" style={{ alignItems: "start" }}>
+        {(!online || waiting.length > 0) && (
+          <div className={`notice ${online ? "info" : "warn"}`}>
+            <Icon name={online ? "cloud_upload" : "cloud_off"} />
+            <span className="grow">{online ? `${waiting.length} photo(s) saved on this device are waiting to upload.` : `You are offline. Photos are saved on this device${waiting.length ? ` (${waiting.length} waiting)` : ""} and upload automatically when the signal returns.`}</span>
+            {online && waiting.length > 0 && <Button variant="text" size="small" onClick={flush}>Upload now</Button>}
+          </div>
+        )}
+        <div className="grid-2 verify-grid" style={{ alignItems: "start" }}>
           <div className="stack">
             <div className="card elevated stack">
               <Segmented label="Photo of" block value={kind} onChange={setKind}
@@ -96,15 +151,18 @@ export default function Verify() {
                 onDrop={(e) => { e.preventDefault(); setOver(false); pick(e.dataTransfer.files?.[0]); }}>
                 {preview ? <img src={preview} alt="Selected" style={{ maxHeight: 220, borderRadius: 12 }} /> : <>
                   <Icon name="add_a_photo" />
-                  <span className="title-m">Drop a photo here or click to choose</span>
+                  <span className="title-m">Take a photo or choose one</span>
                   <span className="body-s muted">JPEG or PNG up to 12 MB. Location is read from the photo's GPS; otherwise click the map.</span>
                 </>}
                 <input ref={input} type="file" accept="image/*" capture="environment" hidden onChange={(e) => pick(e.target.files?.[0])} />
               </div>
-              <div className="row nowrap">
-                <span className="body-s muted grow">{pin ? `Pin: ${pin.lat.toFixed(5)}, ${pin.lng.toFixed(5)}` : "No pin (uses photo GPS)"}</span>
+              <div className="row">
+                <Button variant="outlined" size="small" icon="my_location" onClick={myLocation} disabled={locating}>{locating ? "Locating…" : "Use my location"}</Button>
+                <span className="body-s muted grow">{pin ? `Location: ${pin.lat.toFixed(5)}, ${pin.lng.toFixed(5)}` : "No location yet (photo GPS is used if present)"}</span>
+              </div>
+              <div className="row nowrap verify-actions">
                 {file && <Button variant="text" onClick={() => { setFile(null); setPreview(null); }}>Clear</Button>}
-                <Button icon={busy ? undefined : "auto_awesome"} disabled={!file || busy} onClick={send}>{busy ? "Classifying…" : "Classify with Gemini"}</Button>
+                <Button icon={busy ? undefined : online ? "auto_awesome" : "save"} disabled={!file || busy} onClick={send}>{busy ? "Sending…" : online ? "Classify with Gemini" : "Save for upload"}</Button>
               </div>
             </div>
 
@@ -138,7 +196,7 @@ export default function Verify() {
 
           <div className="stack" style={{ position: "sticky", top: 16 }}>
             <div className="mini-map card elevated" style={{ padding: 0, height: 420 }}>
-              <MapCanvas center={{ lat: 30.28, lng: 78.98 }} zoom={14} layers={layers} mapTypeId="hybrid">
+              <MapCanvas center={{ lat: 30.28, lng: 78.98 }} zoom={14} layers={layers} mapTypeId="hybrid" streetView={false}>
                 <MapClick on={!!file} onPick={(lng, lat) => setPin({ lng, lat })} />
                 <Fly to={fly} />
               </MapCanvas>

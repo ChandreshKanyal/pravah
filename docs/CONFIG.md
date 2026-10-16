@@ -33,8 +33,19 @@ S0.5 bucket and Firestore, S0.6 both API keys, S0.7 Map ID, S0.8 budget (₹9,00
 - Gemini requests time out after 120 s and fall back (advisory -> rules brief). Vertex returned one transient 429 on 16 Oct.
 - Earth Engine community assets in use (verified access): NASA GLC, GRIP4 South-East-Asia roads, FABDEM.
 
+- Sign-in and roles (17 Oct, policy review): code ready, **off by default** (`AUTH_REQUIRED=false`). To switch on:
+  1. Register a Firebase web app: `~/.npm-global/bin/firebase apps:create WEB pravah-web --project project-0fd9c4ae-bf90-452f-a80`,
+     then `~/.npm-global/bin/firebase apps:sdkconfig WEB <appId> --project project-0fd9c4ae-bf90-452f-a80` for `apiKey` and `authDomain`.
+  2. Firebase console -> Authentication -> Sign-in method -> enable **Google**; add the hosting domains under Authorized domains.
+  3. Frontend `.env.local` (and the build environment): `VITE_FIREBASE_API_KEY=...`, `VITE_FIREBASE_AUTH_DOMAIN=project-0fd9c4ae-bf90-452f-a80.firebaseapp.com`.
+  4. Cloud Run env: `AUTH_REQUIRED=true`, `ADMIN_EMAILS=<your email>`, `DEFAULT_ROLE=analyst` (judges who sign in can run scenarios;
+     only admins/approvers approve). Other roles: Firestore `users/{email}` with `role` = viewer | field | analyst | approver | admin.
+- Official warnings: IMD and CWC have no public APIs we may use, so staff type the IMD district colour and CWC gauge levels
+  (stored on the AOI with name and time); the page links to mausam.imd.gov.in, ffs.india-water.gov.in and Google Flood Hub.
+
 ## Still open
 - Redeploy backend + frontend with S1-S19 (see `docs/PROGRESS.md` hand-off), then run `scripts/smoke_test.sh`.
 - Weather API caching period for hourly/daily data not confirmed (we keep raw responses in memory 10 min only).
 - Licence terms to confirm: NASA Global Landslide Catalog, GRIP4 roads (both shown as "terms being confirmed" on Methods).
 - Grounding with Google Search: we show the Search suggestions HTML returned by Gemini; confirm display requirements.
+- Enable sign-in for the deployed demo (steps above) or leave it open for judges (approvals then record typed, unverified names).

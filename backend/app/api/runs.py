@@ -295,17 +295,23 @@ def share_text(run_id: str, lang: str = "en", horizon: str = "immediate"):
              "reviewed": f"Reviewed by {rv.get('by')}"}.get(rv.get("state"), "DRAFT, not yet approved")
     L = [f"*Pravah brief: {aoi.get('name', '')}* ({state}, v{cur.get('version', 1)})", "",
          (tr or {}).get("headline") or cur["headline"], ""]
+    from app.models.advisory import DEPARTMENTS_HI, KEY_LABELS_HI
+    hi = lang == "hi"
     for k in cur.get("key_numbers", [])[:4]:
         v = k.get("rounded") if k.get("rounded") is not None else k["value"]
         rng = f" ({k['range'][0]:,}-{k['range'][1]:,})" if k.get("range") else ""
-        L.append(f"- {k['label']}: {v:,}{rng} {k['unit'] if k['unit'] != 'people' else ''}".rstrip())
+        label = KEY_LABELS_HI.get(k["evidence_id"], k["label"]) if hi else k["label"]
+        L.append(f"- {label}: {v:,}{rng} {k['unit'] if k['unit'] != 'people' and not hi else ''}".rstrip())
     L += ["", "*Actions*" if lang == "en" else "*कार्रवाई*" if lang == "hi" else "*Actions*"]
     for r in [r for r in cur["recommendations"] if r["horizon"] == horizon][:8]:
         t = T.get(r["id"], {})
-        L.append(f"{r['priority']} {t.get('action') or r['action']} | {r.get('owner', '')} | {t.get('act_by') or r.get('act_by', '')}")
+        owner = DEPARTMENTS_HI.get(r.get("owner", ""), r.get("owner", "")) if hi else r.get("owner", "")
+        L.append(f"{r['priority']} {t.get('action') or r['action']} | {owner} | {t.get('act_by') or r.get('act_by', '')}")
     if cur.get("supplies"):
-        L += ["", f"*Supplies for {cur.get('supply_days', 3)} days*"]
-        for s in cur["supplies"][:4]:
-            L.append(f"- {s['item']}: {s['quantity']:,} {s['unit']} (plan up to {s['quantity_high']:,})")
-    L += ["", cur["disclaimer"]]
+        sup_names = (tr or {}).get("supplies") or []
+        L += ["", f"*{cur.get('supply_days', 3)} दिनों की राहत सामग्री*" if hi else f"*Supplies for {cur.get('supply_days', 3)} days*"]
+        for i, s in enumerate(cur["supplies"][:4]):
+            name = sup_names[i] if hi and i < len(sup_names) else s["item"]
+            L.append(f"- {name}: {s['quantity']:,} {s['unit']} ({'अधिकतम' if hi else 'plan up to'} {s['quantity_high']:,})")
+    L += ["", cur["disclaimer"]] + ([(tr or {}).get("disclaimer", "")] if hi and tr else [])
     return Response("\n".join(L), media_type="text/plain; charset=utf-8")

@@ -61,6 +61,14 @@ cd frontend && npm run build && cd ..
 | POST / GET | `/api/photos` | S12 field photo upload + Gemini vision classification; list per AOI |
 | GET | `/api/aois`, `/api/geocode?q=` | recent areas; search box (Maps Geocoding, display only) |
 | GET | `/api/aoi/{id}/3d/*`, `/api/runs/{id}/3d/*` | S19 3D view: DEM mesh, hourly texture, buildings with risk |
+| GET | `/api/runs/{id}/advisory/versions[/{n}]` | immutable brief versions with review state |
+| POST | `/api/runs/{id}/advisory/review` | draft -> reviewed -> approved (name, designation, note); approved versions lock |
+| POST | `/api/runs/{id}/advisory/translate?lang=hi` | Gemini translation; items whose numbers change stay in English |
+| GET | `/api/runs/{id}/advisory/share.txt?lang=` | plain-text brief for WhatsApp/SMS/2G |
+| GET | `/api/runs/{id}/audit` | audit trail for a run's brief |
+| GET | `/api/aoi/{id}/runs` | recent scenarios for side-by-side comparison |
+| PUT | `/api/aoi/{id}/official` | IMD colour code and CWC gauge levels entered by staff |
+| POST | `/api/aoi/{id}/archive` | hide an area from the Explore list (reversible) |
 
 ## Code map
 
@@ -68,9 +76,11 @@ cd frontend && npm run build && cd ..
 exposure, roads, shelters, routing, crowding, pluvial, drains, render) · `services/` I/O (Earth Engine, OSM, GCS, Firestore,
 Weather, Gemini, history) · `agents/` Gemini via ADK (planner, analyst + tools, historian) and the advisor ·
 `pipeline/prepare_area.py` (static, per AOI) · `pipeline/run_pipeline.py` + `evac.py` (per scenario) · `pipeline/facts.py`
-(advisory facts, validator, rules fallback) · `api/` routes.
+(advisory facts, validator, rules fallback, deadlines, supplies) · `services/places.py` (OSM place names) · `auth.py`
+(Firebase sign-in, roles) · `api/` routes.
 `frontend/src/` React + `@vis.gl/react-google-maps` + deck.gl + Terra Draw, Material Design 3 (Google Sans, Material
-Symbols, `components/m3.tsx`); pages Explore, Workspace, Advisory, Verify, Methods, 3D.
+Symbols, `components/m3.tsx`); pages Explore, Workspace (Map), Advisory (Brief), Verify (Field check), Methods, 3D.
+Decision view (default) vs Analyst view: `src/mode.ts`; sign-in: `src/auth.ts`; offline field photos: `src/offlineQueue.ts`.
 
 ## Data and licences
 

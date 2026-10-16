@@ -18,6 +18,20 @@ export interface AoiStatus {
   meta: Record<string, any> | null;
   prepare_seconds?: number | null;
   name?: string; bbox?: [number, number, number, number]; mode?: "river" | "urban"; latest_run_id?: string | null;
+  official?: Official | null; archived?: boolean;
+}
+
+export interface Official {
+  imd_warning: "green" | "yellow" | "orange" | "red" | null; imd_valid_for: string;
+  cwc_station: string; cwc_level_m: number | null; cwc_warning_m: number | null; cwc_danger_m: number | null; cwc_hfl_m: number | null;
+  note: string; entered_by?: string; verified?: boolean; at?: string;
+}
+
+export interface RunSummary {
+  run_id: string; created_at: string; rain_label: string; people_to_evacuate: number; capacity_gap_people: number;
+  demand_range: number[]; gap_range: number[]; evac_window_h: number | null; start_local: string | null;
+  bridges_closing: number; bridges_total: number; flooded_km2: number; flood_peak: number; shelters_used: number;
+  changes: Record<string, unknown>;
 }
 
 export interface AoiListItem { aoi_id: string; name: string; bbox: [number, number, number, number]; mode: string; state: string; latest_run_id: string | null }
@@ -66,6 +80,8 @@ export interface ScenarioParams {
   bridge_cut_stage_m: number;
   max_travel_min: number;
   sqm_per_person: number;
+  preset_label?: string | null;
+  visitors?: number;
 }
 
 export const defaultParams = (aoi_id: string): ScenarioParams => ({
@@ -73,7 +89,7 @@ export const defaultParams = (aoi_id: string): ScenarioParams => ({
   hyetograph: "constant", worst_multiplier: 1.5, best_multiplier: 0.5, river_offset_m: 0, upstream_inflow_m3s: 0, manning_n: 0.04,
   pop_multiplier: 1, pop_total_override: null, disabled_shelter_ids: [], extra_shelters: [], blocked_polygons: [],
   travel_mode: "walk", evac_start_hour: 1, vehicle_depth_limit_m: 0.3, walk_depth_limit_m: 0.5,
-  bridge_cut_stage_m: 3, max_travel_min: 60, sqm_per_person: 3.5,
+  bridge_cut_stage_m: 3, max_travel_min: 60, sqm_per_person: 3.5, preset_label: null, visitors: 0,
 });
 
 export interface ExposureSummary {
@@ -82,15 +98,15 @@ export interface ExposureSummary {
   exposed_by_depth_band: Record<string, number>;
   landslide_exposed_pop_by_hour: number[];
   buildings_by_risk: Record<string, number>;
-  clusters: { id: string; centroid: LonLat; people: number; max_depth: number; risk: number; risk_class: string; dominant_class: string }[];
+  clusters: { id: string; centroid: LonLat; people: number; max_depth: number; risk: number; risk_class: string; dominant_class: string; place?: string; place_hi?: string }[];
 }
 
 export interface TriageRow { structure_class: string; risk_class: string; buildings: number; people: number }
-export interface ShelterResult { id: string; name: string; kind: string; lon: number; lat: number; capacity: number; assigned: number; spare: number; status: string; note: string; capacity_confidence: string }
-export interface BridgeStatus { id: string; name: string; lon: number; lat: number; first_closed_hour: number | null; reason: string | null }
+export interface ShelterResult { id: string; name: string; kind: string; lon: number; lat: number; capacity: number; assigned: number; spare: number; status: string; note: string; capacity_confidence: string; place?: string }
+export interface BridgeStatus { id: string; name: string; lon: number; lat: number; first_closed_hour: number | null; reason: string | null; place?: string }
 export interface RouteSummary {
   from_node: number; from_lon?: number; from_lat?: number; to_shelter: string; people: number; eta_min: number;
-  access_min?: number; length_km?: number; passable_until_h: number | null; use_now_gone_soon: boolean;
+  access_min?: number; length_km?: number; passable_until_h: number | null; use_now_gone_soon: boolean; place?: string;
 }
 
 export interface RunResult {
@@ -115,6 +131,11 @@ export interface RunResult {
   advisory_id?: string | null;
   drains?: DrainPoint[];
   ponding_png_url?: string;
+  start_local?: string | null;
+  evac_window_h?: number | null;
+  demand_breakdown?: { flood?: number; landslide?: number; both?: number };
+  demand_range?: number[];
+  gap_range?: number[];
 }
 export interface DrainPoint { id: string; lon: number; lat: number; type: string; name: string; priority: number; photo_condition: string | null;
   exposed_people_300m: number; ponding: number; fsi: number; waterway_id: string }
@@ -135,14 +156,25 @@ export interface Forecast {
 export interface Recommendation {
   id: string; horizon: "immediate" | "seasonal" | "structural"; priority: "P1" | "P2" | "P3"; action: string;
   location_label: string; evidence_ids: string[]; why: string; confidence: "low" | "medium" | "high"; lonlat?: LonLat | null;
+  owner?: string; act_by_hour?: number | null; act_by?: string;
+}
+export interface Review { state: "draft" | "reviewed" | "approved"; by?: string; designation?: string; verified?: boolean; at?: string; note?: string }
+export interface Supply { item: string; quantity: number; quantity_high: number; unit: string; basis: string }
+export interface Translation {
+  lang: string; version: number; headline: string; summary: string; disclaimer: string; limitations: string[]; supplies: string[];
+  recommendations: Record<string, { id: string; action: string; location_label: string; why: string; act_by: string }>; kept_english: string[];
 }
 export interface Advisory {
   status?: "pending" | "ready" | "error"; error?: string;
   advisory_id: string; run_id: string; headline: string;
-  key_numbers: { label: string; value: number; unit: string; evidence_id: string }[];
+  key_numbers: { label: string; value: number; unit: string; evidence_id: string; rounded?: number | null; range?: number[] | null }[];
   recommendations: Recommendation[]; limitations: string[]; disclaimer: string;
   generated_by: "gemini" | "rules_fallback"; dropped: { action: string; reason: string }[]; model: string;
+  summary?: string; start_local?: string | null; evac_window_h?: number | null; breakdown?: { flood?: number; landslide?: number; both?: number };
+  supplies?: Supply[]; supply_days?: number; version?: number; last_version?: number; approved_version?: number;
+  review?: Review; translations?: Record<string, Translation>; created_at?: string;
 }
+export interface AdvisoryVersion { version: number; created_at: string; generated_by: string; review: Review; headline: string }
 export interface PlanResponse { params: ScenarioParams; diff: Record<string, [unknown, unknown]>; explanation: string }
 export interface ChatResponse { reply: string; new_run_id: string | null; tools_called: string[] }
 export interface HistoryAoi {

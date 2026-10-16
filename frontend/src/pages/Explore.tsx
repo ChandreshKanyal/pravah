@@ -4,7 +4,8 @@ import { useMap } from "@vis.gl/react-google-maps";
 import { HeatmapLayer } from "@deck.gl/aggregation-layers";
 import { ScatterplotLayer } from "@deck.gl/layers";
 import type { Layer } from "@deck.gl/core";
-import { createAoi, geocode, historyIndia, listAois } from "../api/client";
+import { archiveAoi, createAoi, geocode, historyIndia, listAois } from "../api/client";
+import { useMode } from "../mode";
 import DrawControl, { bboxKm, bboxOf, type DrawMode } from "../components/DrawControl";
 import { Button, Chip, Dialog, Field, Icon, IconButton, Segmented, nf, useSnackbar } from "../components/m3";
 import { areaLayers } from "../layers/factories";
@@ -62,6 +63,16 @@ export default function Explore() {
   const [showSlides, setShowSlides] = useState(true);
   const [mapType, setMapType] = useState<MapType>("terrain");
   const timer = useRef<number>();
+  const view = useMode();
+  // Decision view opens a prepared area on its brief; Analyst view on the map
+  const open = (a: AoiListItem) => nav(view === "decision" && a.latest_run_id ? `/area/${a.aoi_id}/advisory` : `/area/${a.aoi_id}`);
+  async function hide(a: AoiListItem) {
+    try {
+      await archiveAoi(a.aoi_id);
+      setAreas((xs) => (xs ?? []).filter((x) => x.aoi_id !== a.aoi_id));
+      snack(`${a.name} removed from the list`, { label: "Undo", onClick: () => archiveAoi(a.aoi_id, false).then(() => listAois().then(setAreas)) });
+    } catch (e) { snack(String((e as Error).message)); }
+  }
 
   useEffect(() => { listAois().then(setAreas).catch(() => setAreas([])); }, []);
   useEffect(() => { historyIndia().then(setHist).catch(() => snack("Historical layers are unavailable right now")); }, [snack]);
@@ -80,7 +91,7 @@ export default function Explore() {
       L.push(new ScatterplotLayer({ id: "glc-pts", data: hist.landslides, getPosition: (d: any) => [d.lon, d.lat], radiusUnits: "pixels", getRadius: 3,
         getFillColor: [189, 0, 38, 220], getLineColor: [255, 255, 255, 255], stroked: true, lineWidthUnits: "pixels", getLineWidth: 1, minZoom: 8 } as any));
     }
-    if (draft) L.push(...areaLayers(draft.bbox));
+    if (draft) { const a = areaLayers(draft.bbox); L.push(a.mask, ...a.border); }
     return L;
   }, [hist, showSlides, draft?.bbox]);
 
@@ -158,7 +169,7 @@ export default function Explore() {
               const a = demoArea(d);
               return (
                 <button key={d.name} className="row-item sl" onClick={() => {
-                  if (a) nav(`/area/${a.aoi_id}`);
+                  if (a) open(a);
                   else { setDraft({ bbox: d.bbox, name: d.name, mode: d.mode }); }
                 }}>
                   <span className={`avatar ${d.mode}`}><Icon name={d.mode === "urban" ? "location_city" : "landscape"} /></span>
@@ -174,15 +185,18 @@ export default function Explore() {
             <div className="group">
               <div className="group-label">Recent</div>
               {recent.map((a) => (
-                <button key={a.aoi_id} className="row-item sl" onClick={() => nav(`/area/${a.aoi_id}`)}>
-                  <span className="avatar plain"><Icon name="history" /></span>
-                  <span className="txt"><span className="t">{a.name}</span>
-                    <span className="s">{a.mode === "urban" ? "Urban" : "River & hills"} · {bboxKm(a.bbox).map((x) => x.toFixed(0)).join(" × ")} km</span></span>
-                  <Icon name="chevron_right" className="trail" />
-                </button>
+                <div key={a.aoi_id} className="row-item-wrap">
+                  <button className="row-item sl" onClick={() => open(a)}>
+                    <span className="avatar plain"><Icon name="history" /></span>
+                    <span className="txt"><span className="t">{a.name}</span>
+                      <span className="s">{a.mode === "urban" ? "Urban" : "River & hills"} · {bboxKm(a.bbox).map((x) => x.toFixed(0)).join(" × ")} km</span></span>
+                  </button>
+                  <IconButton icon="close" label={`Remove ${a.name} from the list`} small onClick={() => hide(a)} />
+                </div>
               ))}
             </div>
           )}
+          <div className="credits">Built on Google Cloud: Gemini on Vertex AI, Earth Engine, Google Maps Platform, Firebase. Open data: Copernicus DEM, WorldPop, Open Buildings, OpenStreetMap, CHIRPS, NASA GLC.</div>
         </div>
       </aside>
 

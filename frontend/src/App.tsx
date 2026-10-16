@@ -1,65 +1,87 @@
 import { useEffect, useState } from "react";
 import { Link, NavLink, Outlet, useMatch } from "react-router-dom";
 import { getAoiStatus } from "./api/client";
+import { authConfigured, signIn, signOut, useUser } from "./auth";
 import Disclaimer from "./components/Disclaimer";
-import { Icon, IconButton, SnackbarProvider } from "./components/m3";
+import { Icon, IconButton, Segmented, SnackbarProvider } from "./components/m3";
 import { MapProvider } from "./components/MapCanvas";
+import { setMode, useMode } from "./mode";
 
 const names: Record<string, string> = {};
 
-function useTheme(): ["light" | "dark" | null, () => void] {
-  const [t, setT] = useState<"light" | "dark" | null>(() => {
-    try { return (localStorage.getItem("pravah-theme") as "light" | "dark" | null) ?? null; } catch { return null; }
-  });
-  useEffect(() => {
-    if (t) document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme;
-    try { if (t) localStorage.setItem("pravah-theme", t); else localStorage.removeItem("pravah-theme"); } catch { /* private mode */ }
-  }, [t]);
-  const dark = t ? t === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches;
-  return [t, () => setT(dark ? "light" : "dark")];
+function Pill({ to, icon, label, end }: { to: string; icon: string; label: string; end?: boolean }) {
+  return <NavLink end={end} to={to} className={({ isActive }) => `navpill sl ${isActive ? "active" : ""}`}><Icon name={icon} /><span className="lbl">{label}</span></NavLink>;
+}
+
+function Account() {
+  const user = useUser();
+  if (!authConfigured) return null;
+  if (!user) return <button className="btn btn-outlined small sl" onClick={() => signIn().catch(() => undefined)}><Icon name="login" /> Sign in</button>;
+  return (
+    <span className="account" title={`${user.name} · ${user.email}`}>
+      {user.photo ? <img src={user.photo} alt="" referrerPolicy="no-referrer" /> : <Icon name="account_circle" />}
+      <IconButton icon="logout" label="Sign out" small onClick={() => signOut()} />
+    </span>
+  );
 }
 
 export default function App() {
   const area = useMatch("/area/:aoiId/*");
   const aoiId = area?.params.aoiId;
   const [name, setName] = useState<string>("");
-  const [theme, toggleTheme] = useTheme();
+  const mode = useMode();
+  useEffect(() => {
+    // the theme follows the operating system; clear the old manual override
+    try { localStorage.removeItem("pravah-theme"); } catch { /* private mode */ }
+    delete document.documentElement.dataset.theme;
+  }, []);
   useEffect(() => {
     if (!aoiId) return;
     if (names[aoiId]) { setName(names[aoiId]); return; }
     getAoiStatus(aoiId).then((s) => { names[aoiId] = s.name ?? ""; setName(s.name ?? ""); }).catch(() => setName(""));
   }, [aoiId]);
-  const dark = theme ? theme === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches;
 
   return (
     <MapProvider>
       <SnackbarProvider>
         <div className="app">
+          <a href="#main" className="skip">Skip to content</a>
           <header className="topbar">
             <Link to="/" className="brand sl" aria-label="Pravah home">
               <img src="/pravah.svg" alt="" />
               <span className="name"><b>Pravah</b></span>
             </Link>
-            {aoiId ? (
+            {aoiId && (
               <>
                 <span className="area-title"><Icon name="location_on" className="sm" />{name || "Area"}</span>
                 <nav className="navpills" aria-label="Area">
-                  <NavLink end to={`/area/${aoiId}`} className={({ isActive }) => `navpill sl ${isActive ? "active" : ""}`}><Icon name="map" /><span className="lbl">Map</span></NavLink>
-                  <NavLink to={`/area/${aoiId}/advisory`} className={({ isActive }) => `navpill sl ${isActive ? "active" : ""}`}><Icon name="assignment" /><span className="lbl">Advisory</span></NavLink>
-                  <NavLink to={`/area/${aoiId}/verify`} className={({ isActive }) => `navpill sl ${isActive ? "active" : ""}`}><Icon name="photo_camera" /><span className="lbl">Verify</span></NavLink>
-                  <NavLink to={`/area/${aoiId}/3d`} className={({ isActive }) => `navpill sl ${isActive ? "active" : ""}`}><Icon name="view_in_ar" /><span className="lbl">3D</span></NavLink>
+                  {mode === "decision" ? (
+                    <>
+                      <Pill to={`/area/${aoiId}/advisory`} icon="assignment" label="Brief" />
+                      <Pill end to={`/area/${aoiId}`} icon="map" label="Map" />
+                      <Pill to={`/area/${aoiId}/verify`} icon="photo_camera" label="Field check" />
+                    </>
+                  ) : (
+                    <>
+                      <Pill end to={`/area/${aoiId}`} icon="map" label="Map" />
+                      <Pill to={`/area/${aoiId}/advisory`} icon="assignment" label="Brief" />
+                      <Pill to={`/area/${aoiId}/verify`} icon="photo_camera" label="Field check" />
+                      <Pill to={`/area/${aoiId}/3d`} icon="view_in_ar" label="3D" />
+                    </>
+                  )}
                 </nav>
               </>
-            ) : null}
+            )}
             <span className="spacer" />
-            <span className="powered no-print" title="AI features run on Gemini via Vertex AI; data and compute on Google Cloud">
-              <Icon name="auto_awesome" className="sm spark" /> Gemini · Google Cloud
-            </span>
-            <NavLink to="/methods" className={({ isActive }) => `navpill sl ${isActive ? "active" : ""}`}><Icon name="menu_book" /><span className="lbl">Methods</span></NavLink>
-            <IconButton icon={dark ? "light_mode" : "dark_mode"} label={dark ? "Light theme" : "Dark theme"} onClick={toggleTheme} />
+            <div className="mode-switch no-print" title="Decision view: the brief and the essentials. Analyst view: every control and technical layer.">
+              <Segmented label="View" value={mode} onChange={setMode}
+                options={[{ value: "decision", label: "Decision" }, { value: "analyst", label: "Analyst" }]} />
+            </div>
+            <Pill to="/methods" icon="menu_book" label="Methods" />
+            <Account />
           </header>
           {aoiId && <Disclaimer className="global" />}
-          <div className="page"><Outlet /></div>
+          <main id="main" className="page"><Outlet /></main>
         </div>
       </SnackbarProvider>
     </MapProvider>

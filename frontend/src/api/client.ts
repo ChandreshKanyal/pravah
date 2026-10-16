@@ -1,15 +1,21 @@
 import type {
-  AOI, AoiListItem, AoiStatus, Advisory, ChatResponse, Forecast, GeocodeResult, HistoryAoi, HistoryIndia, PhotoDoc, PlanResponse,
-  RunResult, ScenarioParams, StaticLayers, VerificationItem,
+  AOI, AoiListItem, AoiStatus, Advisory, AdvisoryVersion, ChatResponse, Forecast, GeocodeResult, HistoryAoi, HistoryIndia, Official,
+  PhotoDoc, PlanResponse, Review, RunResult, RunSummary, ScenarioParams, StaticLayers, Translation, VerificationItem,
 } from "../types/api";
+import { idToken } from "../auth";
 
 export const BASE = import.meta.env.VITE_API_BASE ?? "/api";
 
 /** Backend paths come back as "/api/..."; resolve them against the configured base. */
 export const apiUrl = (path: string) => (path.startsWith("/api") ? BASE + path.slice(4) : path);
 
+async function authHeaders(): Promise<Record<string, string>> {
+  const t = await idToken();
+  return t ? { authorization: `Bearer ${t}` } : {};
+}
+
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
-  const r = await fetch(apiUrl(path), { headers: { "content-type": "application/json" }, ...init });
+  const r = await fetch(apiUrl(path), { ...init, headers: { "content-type": "application/json", ...(await authHeaders()), ...(init?.headers ?? {}) } });
   if (!r.ok) {
     let msg = `${r.status}`;
     try {
@@ -51,9 +57,25 @@ export async function uploadPhoto(aoi_id: string, kind: "building" | "drain", fi
   fd.append("aoi_id", aoi_id);
   fd.append("kind", kind);
   if (pin) { fd.append("lat", String(pin.lat)); fd.append("lng", String(pin.lng)); }
-  const r = await fetch(apiUrl("/api/photos"), { method: "POST", body: fd });
+  const r = await fetch(apiUrl("/api/photos"), { method: "POST", body: fd, headers: await authHeaders() });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(typeof j.detail === "string" ? j.detail : `${r.status}`);
   return j;
 }
 export const photoUrl = (aoi_id: string, photo_id: string) => apiUrl(`/api/photos/${photo_id}.jpg?aoi_id=${aoi_id}`);
+export const archiveAoi = (id: string, archived = true) =>
+  call<{ archived: boolean }>(`/api/aoi/${id}/archive`, { method: "POST", body: JSON.stringify({ archived }) });
+export const getAoiRuns = (id: string) => call<RunSummary[]>(`/api/aoi/${id}/runs`);
+export const setOfficial = (id: string, o: Partial<Official>) => call<Official>(`/api/aoi/${id}/official`, { method: "PUT", body: JSON.stringify(o) });
+export const reviewAdvisory = (runId: string, body: { state: Review["state"]; name?: string; designation?: string; note?: string; version?: number }) =>
+  call<Advisory>(`/api/runs/${runId}/advisory/review`, { method: "POST", body: JSON.stringify(body) });
+export const advisoryVersions = (runId: string) => call<AdvisoryVersion[]>(`/api/runs/${runId}/advisory/versions`);
+export const advisoryVersion = (runId: string, v: number) => call<Advisory>(`/api/runs/${runId}/advisory/versions/${v}`);
+export const translateAdvisory = (runId: string, lang = "hi") => call<Translation>(`/api/runs/${runId}/advisory/translate?lang=${lang}`, { method: "POST" });
+export const shareTextUrl = (runId: string, lang = "en") => apiUrl(`/api/runs/${runId}/advisory/share.txt?lang=${lang}`);
+export async function shareText(runId: string, lang = "en"): Promise<string> {
+  const r = await fetch(shareTextUrl(runId, lang));
+  if (!r.ok) throw new Error(`${r.status}`);
+  return r.text();
+}
+export const runAudit = (runId: string) => call<{ at: string; action: string; by: string; verified: boolean; version?: number; note?: string }[]>(`/api/runs/${runId}/audit`);

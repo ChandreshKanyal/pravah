@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import type { RunResult } from "../types/api";
+import { before, clockAt, roundPeople } from "../time";
 import { HelpTip, Icon, Tabs, nf } from "./m3";
 
 const RISK_TAG: Record<string, string> = { critical: "crit", high: "high", moderate: "mod", low: "" };
@@ -11,18 +12,22 @@ const STATUS: Record<string, { label: string; tag: string; icon: string }> = {
   disabled: { label: "Closed by you", tag: "", icon: "block" },
   unreachable: { label: "Unreachable", tag: "", icon: "wrong_location" },
 };
+/** OSM-unnamed candidate buildings get a findable description. */
+export const niceName = (s: { name: string; place?: string }) =>
+  /^(large building|unnamed|candidate)/i.test(s.name) && s.place ? `Large building ${s.place.startsWith("near ") ? s.place : "at " + s.place}` : s.name;
 const pretty = (s: string) => s.replace(/^verified_/, "verified ").replace(/_/g, " ").replace(/^likely /, "likely ") + (s.startsWith("verified_") ? " (field photo)" : " (proxy)");
 
-function Metric({ label, value, tip, alert, icon, wide }: { label: string; value: string; tip: string; alert?: boolean; icon: string; wide?: boolean }) {
+function Metric({ label, value, tip, alert, icon, wide, sub }: { label: string; value: string; tip: string; alert?: boolean; icon: string; wide?: boolean; sub?: string }) {
   return (
     <div className={`metric ${alert ? "alert" : ""} ${wide ? "wide" : ""}`}>
       <span className="l"><Icon name={icon} /> {label} <HelpTip text={tip} /></span>
       <span className="v">{value}</span>
+      {sub && <span className="body-s muted">{sub}</span>}
     </div>
   );
 }
 
-function Chart({ data, unit, title, color }: { data: { h: number; v: number }[]; unit: string; title: string; color: string }) {
+function Chart({ data, unit, title, color, start }: { data: { h: number; v: number }[]; unit: string; title: string; color: string; start?: string | null }) {
   return (
     <figure style={{ margin: 0 }}>
       <figcaption className="label-m muted" style={{ marginBottom: 4 }}>{title}</figcaption>
@@ -30,9 +35,9 @@ function Chart({ data, unit, title, color }: { data: { h: number; v: number }[];
         <AreaChart data={data} margin={{ top: 6, right: 8, bottom: 2, left: -12 }}>
           <defs><linearGradient id={`g-${title.replace(/\W+/g, "-")}`} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor={color} stopOpacity={0.35} /><stop offset="1" stopColor={color} stopOpacity={0.02} /></linearGradient></defs>
           <CartesianGrid vertical={false} stroke="#9aa0a6" strokeOpacity={0.25} />
-          <XAxis dataKey="h" tick={{ fontSize: 11, fill: "#80868b" }} tickLine={false} axisLine={false} tickFormatter={(h) => `h${h}`} />
+          <XAxis dataKey="h" tick={{ fontSize: 11, fill: "#80868b" }} tickLine={false} axisLine={false} tickFormatter={(h) => clockAt(start, h) ?? `h${h}`} />
           <YAxis tick={{ fontSize: 11, fill: "#80868b" }} tickLine={false} axisLine={false} width={44} />
-          <Tooltip formatter={(v) => [`${v} ${unit}`, title]} labelFormatter={(h) => `Hour ${h}`}
+          <Tooltip formatter={(v) => [`${v} ${unit}`, title]} labelFormatter={(h) => (clockAt(start, Number(h)) ? `${clockAt(start, Number(h))} (hour ${h})` : `Hour ${h}`)}
             contentStyle={{ borderRadius: 8, border: 0, boxShadow: "0 1px 3px rgba(0,0,0,.3)", fontFamily: "Google Sans" }} />
           <Area type="monotone" dataKey="v" stroke={color} strokeWidth={2} fill={`url(#g-${title.replace(/\W+/g, "-")})`} isAnimationActive animationDuration={450} dot={false} />
         </AreaChart>
@@ -53,27 +58,33 @@ export default function Results({ run, hour, onFly, previous }: { run: RunResult
   const usable = run.shelters.filter((s) => s.status === "usable").length;
   const triage = run.triage.filter((t) => t.risk_class !== "low").slice(0, 10);
   const trig = run.methods?.landslide_trigger_hours as number[] | undefined;
-  const delta = (a: number, b: number) => (b === a ? "" : ` (${b > a ? "+" : "−"}${nf(Math.abs(b - a))})`);
+  const delta = (a: number, b: number) => (b === a ? "no change vs previous run" : `${b > a ? "+" : "−"}${nf(Math.abs(b - a))} vs previous run`);
+  const rng = (r?: number[]) => (r && r.length === 2 && r[0] !== r[1] ? `range ${nf(roundPeople(r[0]))}–${nf(roundPeople(r[1]))}` : "");
+  const bd = run.demand_breakdown ?? {};
+  const shName = (id: string) => { const s = run.shelters.find((x) => x.id === id); return s ? niceName(s) : id; };
 
   return (
     <section className="stack" aria-label="Results">
       <div className="stack-s">
-        <span className="label-m muted">{run.rain_label}</span>
+        <span className="label-m muted">{run.rain_label}{run.start_local ? "" : " · hypothetical rain, hours after it starts"}</span>
         <p className="body-l">
-          An estimated <b>{nf(run.people_to_evacuate)}</b> people need to move; <b>{usable}</b> of {run.shelters.length} shelters are reachable in this scenario
-          {run.capacity_gap_people > 0 ? <>, leaving <b style={{ color: "var(--error)" }}>{nf(run.capacity_gap_people)}</b> without a place</> : <>, with room for everyone</>}.
-          {first ? <> The first bridge closes at hour <b>{first.first_closed_hour}</b>.</> : null}
+          About <b>{nf(roundPeople(run.people_to_evacuate))}</b> people need to move{run.evac_window_h ? <>, <b>{before(run.start_local, run.evac_window_h)}</b></> : null};
+          {run.capacity_gap_people > 0 ? <> about <b style={{ color: "var(--error)" }}>{nf(roundPeople(run.capacity_gap_people))}</b> have no reachable shelter place</> : <> all can reach one of {usable} shelters</>}.
+          {first ? <> The first bridge closes at {clockAt(run.start_local, first.first_closed_hour!) ?? <>hour <b>{first.first_closed_hour}</b></>}.</> : null}
         </p>
+        {(bd.flood || bd.landslide) ? <span className="body-s muted">Why they move: {nf(bd.flood ?? 0)} flood water · {nf(bd.landslide ?? 0)} landslide-trigger slopes{bd.both ? ` · ${nf(bd.both)} both` : ""}</span> : null}
       </div>
 
       <div className="metrics">
-        <Metric icon="water" label="In flood water (peak)" value={nf(peak) + (previous ? delta(Math.max(0, ...previous.exposure.exposed_pop_by_hour), peak) : "")}
+        <Metric icon="water" label="In flood water (peak)" value={`≈ ${nf(roundPeople(peak))}`} sub={previous ? delta(Math.max(0, ...previous.exposure.exposed_pop_by_hour), peak) : undefined}
           tip="Estimated residents where water is at least 5 cm deep, at the worst hour." />
-        <Metric icon="landslide" label="In landslide zones" value={nf(lsPeak)}
+        <Metric icon="landslide" label="On landslide-trigger slopes" value={`≈ ${nf(roundPeople(lsPeak))}`}
           tip={trig && trig.length ? `People on class 4–5 slopes in hours when rain exceeds the trigger threshold (hours ${trig.join(", ")}).` : "Rain stays below the landslide trigger threshold in this scenario, so no one is counted."} />
-        <Metric icon="directions_walk" label="Need to move" value={nf(run.people_to_evacuate) + (previous ? delta(previous.people_to_evacuate, run.people_to_evacuate) : "")}
+        <Metric icon="directions_walk" label="Need to move" value={`≈ ${nf(roundPeople(run.people_to_evacuate))}`}
+          sub={[rng(run.demand_range), previous ? delta(previous.people_to_evacuate, run.people_to_evacuate) : ""].filter(Boolean).join(" · ")}
           tip="People in buildings or cells that flood, or that reach landslide class 5 above the rain threshold." />
-        <Metric icon="no_accounts" label="Capacity gap" value={nf(run.capacity_gap_people) + (previous ? delta(previous.capacity_gap_people, run.capacity_gap_people) : "")}
+        <Metric icon="no_accounts" label="No shelter place" value={`≈ ${nf(roundPeople(run.capacity_gap_people))}`}
+          sub={[rng(run.gap_range), previous ? delta(previous.capacity_gap_people, run.capacity_gap_people) : ""].filter(Boolean).join(" · ")}
           alert={run.capacity_gap_people > 0} tip="People who need to move but have no reachable shelter place within the travel limit." />
         <Metric icon="home_work" label="High-risk buildings" value={nf(crit)} tip="Buildings whose estimated risk (water depth damage curve, structure proxy, stream proximity, landslide) is high or critical." />
         <Metric icon="pin_drop" label="Bridges closing" value={`${closing.length} / ${run.bridges.length}`}
@@ -81,9 +92,9 @@ export default function Results({ run, hour, onFly, previous }: { run: RunResult
       </div>
 
       <div className="stack-s">
-        <Chart title="Flooded area" unit="km²" color="#1a73e8" data={run.flooded_area_km2_by_hour.map((v, i) => ({ h: i + 1, v }))} />
-        <Chart title="People in flood water" unit="people" color="#d93025" data={e.exposed_pop_by_hour.map((v, i) => ({ h: i + 1, v }))} />
-        <p className="body-s muted">Showing hour {hour} of {H}. Water never recedes within a scenario (worst-case envelope), which over-estimates on purpose.</p>
+        <Chart title="Flooded area" unit="km²" color="#1a73e8" start={run.start_local} data={run.flooded_area_km2_by_hour.map((v, i) => ({ h: i + 1, v }))} />
+        <Chart title="People in flood water" unit="people" color="#d93025" start={run.start_local} data={e.exposed_pop_by_hour.map((v, i) => ({ h: i + 1, v }))} />
+        <p className="body-s muted">Showing {clockAt(run.start_local, hour) ? `${clockAt(run.start_local, hour)} (hour ${hour} of ${H})` : `hour ${hour} of ${H}`}. Ranges show the effect of flood depth ±30% and population ±20%. Water never recedes within a scenario (worst-case envelope), which over-estimates on purpose.</p>
       </div>
 
       <div className="card outlined" style={{ padding: 0 }}>
@@ -102,7 +113,7 @@ export default function Results({ run, hour, onFly, previous }: { run: RunResult
                   <div key={s.id} className="li dense clickable sl" onClick={() => onFly(s.lon, s.lat)} role="button" tabIndex={0}>
                     <span className="label-l" style={{ width: 28, color: "var(--primary)" }}>{s.id}</span>
                     <span className="txt">
-                      <span className="t" style={{ display: "block", fontSize: 14 }}>{s.name.length > 34 ? s.name.slice(0, 34) + "…" : s.name}</span>
+                      <span className="t" style={{ display: "block", fontSize: 14 }}>{niceName(s).length > 40 ? niceName(s).slice(0, 40) + "…" : niceName(s)}</span>
                       <span className={`cap ${pct >= 99 ? "full" : ""}`} style={{ display: "block", margin: "4px 0" }}><i style={{ width: `${pct}%` }} /></span>
                       <span className="s">{nf(s.assigned)} of {nf(s.capacity)} places{s.capacity_confidence === "low" ? " · capacity unconfirmed" : ""}</span>
                     </span>
@@ -117,7 +128,7 @@ export default function Results({ run, hour, onFly, previous }: { run: RunResult
               <thead><tr><th>To</th><th className="r">People</th><th className="r">ETA</th><th>Passable until</th></tr></thead>
               <tbody>{run.routes.slice(0, 15).map((r, i) => (
                 <tr key={i} className={r.from_lon != null ? "clickable" : ""} onClick={() => r.from_lon != null && onFly(r.from_lon, r.from_lat!)}>
-                  <td><b>{r.to_shelter}</b>{r.length_km != null && <span className="body-s muted"> · {r.length_km} km</span>}</td>
+                  <td><b>{shName(r.to_shelter)}</b>{r.place && <span className="body-s muted" style={{ display: "block" }}>from {r.place}</span>}{r.length_km != null && <span className="body-s muted"> · {r.length_km} km</span>}</td>
                   <td className="r">{nf(r.people)}</td>
                   <td className="r" title={r.access_min ? `includes ${r.access_min} min walk to the road network` : undefined}>{r.eta_min} min</td>
                   <td>{r.passable_until_h == null ? <span className="body-s muted">whole scenario</span> : <>hour {r.passable_until_h} {r.use_now_gone_soon && <span className="tag crit">use now</span>}</>}</td>

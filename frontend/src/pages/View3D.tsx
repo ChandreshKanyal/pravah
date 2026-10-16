@@ -7,7 +7,7 @@ import { COORDINATE_SYSTEM, Deck } from "@deck.gl/core";
 import { PathLayer, PolygonLayer } from "@deck.gl/layers";
 import { SimpleMeshLayer } from "@deck.gl/mesh-layers";
 import { apiUrl, getAoiStatus, getRun } from "../api/client";
-import { Button, HelpTip, Icon, IconButton, Segmented } from "../components/m3";
+import { Button, Icon, IconButton } from "../components/m3";
 import TimeSlider from "../components/TimeSlider";
 import type { RunResult } from "../types/api";
 
@@ -77,6 +77,7 @@ export default function View3D() {
   const [run, setRun] = useState<RunResult | null>(null);
   const [blds, setBlds] = useState<Bld[]>([]);
   const [hour, setHour] = useState(1);
+  // heights are exaggerated so gentle slopes show: 2x in flat cities, 1.5x in hills (display only)
   const [ex, setEx] = useState<"1" | "1.5" | "2">("1.5");
   const [showB, setShowB] = useState(true);
   const [err, setErr] = useState("");
@@ -92,7 +93,7 @@ export default function View3D() {
       const [w, h, cell] = (r.headers.get("X-Grid") ?? "0,0,60").split(",").map(Number);
       setDem({ w, h, cell, z: new Float32Array(await r.arrayBuffer()) });
     }).catch(() => setErr("Terrain unavailable"));
-    getAoiStatus(aoiId).then((s) => { setName(s.name ?? ""); if (!s.latest_run_id) setNoRun(true); if (s.latest_run_id) getRun(s.latest_run_id).then((r) => { setRun(r); setHour(r.rain_series_mm_h.length); }); }).catch(() => undefined);
+    getAoiStatus(aoiId).then((s) => { setName(s.name ?? ""); setEx(s.mode === "urban" ? "2" : "1.5"); if (!s.latest_run_id) setNoRun(true); if (s.latest_run_id) getRun(s.latest_run_id).then((r) => { setRun(r); setHour(r.rain_series_mm_h.length); }); }).catch(() => undefined);
   }, [aoiId]);
   useEffect(() => {
     if (!run && !noRun) return;
@@ -169,7 +170,7 @@ export default function View3D() {
       <div ref={ref} style={{ position: "absolute", inset: 0 }} />
       <div className="card elevated stack-s v3d-panel">
         <div className="row nowrap"><Icon name="view_in_ar" style={{ color: "var(--primary)" }} /><span className="title-m grow">3D · {name || "this area"}</span></div>
-        <p className="body-s muted">The simulated area and its surroundings: our terrain model with rivers and flood water at the selected hour, and buildings coloured by estimated risk. Right-drag to tilt and rotate.</p>
+        <p className="body-s muted">The simulated area and its surroundings: our terrain model with rivers and flood water at the selected hour, and buildings coloured by estimated risk. Heights are drawn {ex}× to make slopes visible. Right-drag to tilt and rotate.</p>
         {run && <span className="label-s muted">{run.rain_label}</span>}
         <ul className="v3d-legend">
           <li><span className="bx" /> Simulated area</li>
@@ -177,11 +178,6 @@ export default function View3D() {
           <li><span className="ramp">{DEPTH.map((c) => <i key={c} style={{ background: c }} />)}</span> Flood 5 cm → 3 m+</li>
           <li>{(["critical", "high", "moderate", "low"] as const).map((r, i) => <span key={r} className="sw" title={r} style={{ background: `rgb(${RISK[i].join(",")})` }} />)} Building risk: critical → low</li>
         </ul>
-        <div className="row nowrap" style={{ gap: 4 }}>
-          <span className="label-m">Height exaggeration</span>
-          <HelpTip text="Draws hills and buildings 1, 1.5 or 2 times taller than they are, so gentle slopes and low spots are easier to see (useful in flat cities). Display only; the model and numbers do not change." />
-        </div>
-        <Segmented label="Height exaggeration" block value={ex} onChange={setEx} options={[{ value: "1", label: "1×" }, { value: "1.5", label: "1.5×" }, { value: "2", label: "2×" }]} />
         <div className="row" style={{ gap: 4 }}>
           <Button variant="tonal" size="small" icon="location_city" onClick={() => town && view(town[0], town[1], 15.4)} disabled={!town}>Town</Button>
           <Button variant="tonal" size="small" icon="crop_free" onClick={() => view(0, 600, 12.35, 45)}>Whole area</Button>
@@ -194,7 +190,7 @@ export default function View3D() {
       </div>
       {run && (
         <div style={{ position: "absolute", left: 16, right: 16, bottom: 24, zIndex: 5, display: "flex" }}>
-          <TimeSlider hours={run.rain_series_mm_h.length} hour={hour} setHour={setHour} rain={run.rain_series_mm_h} />
+          <TimeSlider hours={run.rain_series_mm_h.length} hour={hour} setHour={setHour} rain={run.rain_series_mm_h} start={run.start_local} windowHour={run.evac_window_h} />
         </div>
       )}
     </div>

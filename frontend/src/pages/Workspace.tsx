@@ -6,6 +6,7 @@ import { createRun, getAoiStatus, getForecast, getGeoJson, getRun, getStaticLaye
 import ChatPanel from "../components/ChatPanel";
 import DrawControl, { type DrawMode } from "../components/DrawControl";
 import ForecastStrip from "../components/ForecastStrip";
+import CompareRuns from "../components/CompareRuns";
 import HistoryPanel from "../components/HistoryPanel";
 import LayerPanel, { type LayerKey } from "../components/LayerPanel";
 import { Button, Dialog, Fab, Field, Icon, Linear, Tabs, nf, useSnackbar } from "../components/m3";
@@ -40,7 +41,7 @@ function Traffic({ on }: { on: boolean }) {
   return null;
 }
 
-type Tab = "scenario" | "results" | "history";
+type Tab = "scenario" | "results" | "compare" | "history";
 
 export default function Workspace() {
   const { aoiId = "" } = useParams();
@@ -117,7 +118,7 @@ export default function Workspace() {
       await loadRun(r);
       setTab("results");
       snack(r.capacity_gap_people > 0 ? `Done: ${nf(r.people_to_evacuate)} people to move, ${nf(r.capacity_gap_people)} without a place` : `Done: ${nf(r.people_to_evacuate)} people to move, all placed`,
-        { label: "Advisory", onClick: () => nav(`/area/${aoiId}/run/${r.run_id}/advisory`) });
+        { label: "Brief", onClick: () => nav(`/area/${aoiId}/run/${r.run_id}/advisory`) });
     } catch (e) {
       setError(String((e as Error).message));
       snack("The scenario could not run: " + String((e as Error).message));
@@ -127,8 +128,8 @@ export default function Workspace() {
   const layers = useMemo(() => {
     const L: Layer[] = [];
     const area = status?.bbox ? areaLayers(status.bbox) : null;
-    if (area) L.push(area[0]);
-    if (!st) { if (area) L.push(area[1]); return L; }
+    if (area) L.push(area.mask);
+    if (!st) { if (area) L.push(...area.border); return L; }
     const c = st.corners;
     for (const k of ["fsi", "lsi_static", "hand", "crowd", "streams"] as const) {
       if (on.has(k) && st.layers[k]) L.push(bitmap(`static-${k}`, st.layers[k], c, k === "streams" ? 0.9 : 0.65));
@@ -138,22 +139,27 @@ export default function Workspace() {
       if (on.has("lsi") && run.lsi_png_url) L.push(bitmap(`lsi-${run.run_id}-${hour}`, run.lsi_png_url.replace(/lsi_h\d+/, `lsi_h${hour}`), oc, 0.55));
       if (on.has("depth")) L.push(bitmap(`depth-${run.run_id}-${hour}`, run.depth_png_urls[hour - 1], oc, 0.9));
       if (on.has("ponding") && run.ponding_png_url) L.push(bitmap(`pond-${run.run_id}`, run.ponding_png_url, oc, 0.75));
-      if (on.has("drains") && run.drains?.length) L.push(...points("drains", run.drains, [161, 66, 244, 255], 6, (d) => d.id));
+      if (on.has("drains") && run.drains?.length) L.push(...points("drains", run.drains, COLORS.drain, 6, (d) => d.id));
       if (on.has("roads") && roads) L.push(roadsLayer("roads", roads, hour));
       if (on.has("routes") && routes) L.push(routesLayer("routes", routes));
       if (on.has("bridges")) L.push(...points("bridges", run.bridges, (b) => b.first_closed_hour == null ? COLORS.open : b.first_closed_hour <= hour ? COLORS.closed : COLORS.closesLater, 6));
       if (on.has("assembly")) L.push(...points("assembly", run.assembly_points, COLORS.assembly, 7, (a) => a.id));
       if (on.has("medical")) L.push(...points("staging", run.staging_points, COLORS.staging, 7, (s) => s.id));
     }
+    // shelters: by default only those people are sent to (sized by places filled); every candidate is one switch away
+    type Pt = { id: string; lon: number; lat: number; assigned: number; capacity: number };
+    const cand: Pt[] = run ? run.shelters.filter((s) => s.kind !== "assembly_point") : st.shelters.map((s) => ({ ...s, assigned: 0, capacity: 0 }));
+    if (on.has("all_shelters")) {
+      const rest = run ? cand.filter((s) => s.assigned === 0) : cand;
+      L.push(...points("shelters-all", rest, COLORS.shelterOff, rest.length > 60 ? 3 : 5, rest.length <= 40 ? (s) => s.id : undefined));
+    }
     if (on.has("shelters")) {
-      // label only shelters in use (or all when there are few), so dense cities stay readable
-      const sh = run ? run.shelters.filter((s) => s.kind !== "assembly_point") : [];
-      const few = (run ? sh.length : st.shelters.length) <= 40;
       if (run) {
-        L.push(...points("shelters", sh, (s) => (s.status === "usable" ? COLORS.shelter : COLORS.shelterOff),
-          (s) => (s.assigned > 0 ? 6 + 10 * Math.min(1, s.assigned / Math.max(1, s.capacity)) : few ? 6 : 3)));
-        L.push(...points("shelters-used", sh.filter((s) => few || s.assigned > 0), COLORS.shelter, 0.1, (s) => s.id));
-      } else L.push(...points("shelters", st.shelters, COLORS.shelter, few ? 8 : 3, few ? (s) => s.id : undefined));
+        const used = cand.filter((s) => s.assigned > 0);
+        L.push(...points("shelters", used, COLORS.shelter, (s) => 6 + 10 * Math.min(1, s.assigned / Math.max(1, s.capacity)), (s) => s.id));
+      } else if (!on.has("all_shelters")) {
+        L.push(...points("shelters", cand, COLORS.shelter, cand.length > 40 ? 3 : 7, cand.length <= 40 ? (s) => s.id : undefined));
+      }
     }
     if (on.has("medical")) L.push(...points("medical", st.medical, COLORS.medical, st.medical.length > 30 ? 4 : 7, st.medical.length > 30 ? undefined : () => "+"));
     if (on.has("streams")) L.push(...points("hotspots", st.hotspots.slice(0, 8), COLORS.hotspot, 5));
@@ -168,11 +174,12 @@ export default function Workspace() {
     if (area) {
       // border above the rasters but below roads and points: insert after the last bitmap layer
       let i = 0; L.forEach((x, k) => { if (/^(area-mask|static-|lsi-|depth-|pond-)/.test(x.id)) i = k + 1; });
-      L.splice(i, 0, area[1]);
+      L.splice(i, 0, ...area.border);
     }
     return L;
   }, [status?.bbox, st, run, roads, routes, hour, on, p.blocked_polygons, p.extra_shelters, hist]);
 
+  const usedShelters = useMemo(() => new Set((run?.shelters ?? []).filter((x) => x.assigned > 0).map((x) => x.id)), [run]);
   const done = status?.status ? STEPS.filter(([k]) => status.status![k] === "ready").length : 0;
   const days = fc?.daily.map((d, i) => (i === 0 ? "Today" : new Date(d.date + "T00:00:00").toLocaleDateString("en-IN", { weekday: "short", day: "numeric" }))) ?? [];
   const onHist = useCallback((h: HistoryAoi) => { setHist(h); }, []);
@@ -183,13 +190,14 @@ export default function Workspace() {
         <Tabs value={tab} onChange={setTab} withIcons tabs={[
           { value: "scenario", label: "Scenario", icon: "tune" },
           { value: "results", label: "Results", icon: "insights", badge: run && run.capacity_gap_people > 0 ? "!" : undefined },
-          { value: "history", label: "History", icon: "history" },
+          { value: "compare", label: "Compare", icon: "compare_arrows" },
+          { value: "history", label: "Past events", icon: "history" },
         ]} />
         {running ? <Linear indeterminate /> : <div style={{ height: 4 }} />}
         <div className="panel-body">
           {!ready && <div className="stack-s"><div className="shimmer" style={{ height: 120 }} /><div className="shimmer" style={{ height: 200 }} /></div>}
           {ready && st && tab === "scenario" && (
-            <ScenarioPanel p={p} set={set} replace={setP} shelters={st.shelters} drawMode={drawMode} setDrawMode={setDrawMode} days={days} />
+            <ScenarioPanel p={p} set={set} replace={setP} shelters={st.shelters} drawMode={drawMode} setDrawMode={setDrawMode} days={days} used={usedShelters} />
           )}
           {ready && tab === "results" && (run ? <Results run={run} hour={hour} onFly={onFly} previous={prev} /> : (
             <div className="stack" style={{ alignItems: "center", textAlign: "center", padding: "48px 16px" }}>
@@ -199,6 +207,8 @@ export default function Workspace() {
               <Button variant="tonal" icon="tune" onClick={() => setTab("scenario")}>Open scenario</Button>
             </div>
           ))}
+          {ready && tab === "compare" && <CompareRuns aoiId={aoiId} currentId={run?.run_id ?? null}
+            onOpen={(id) => getRun(id).then((r) => { loadRun(r); setTab("results"); }).catch((e) => snack(String(e.message)))} />}
           {ready && tab === "history" && <HistoryPanel aoiId={aoiId} onFly={onFly} onData={onHist} />}
           {ready && status?.warnings?.length && tab === "scenario" ? (
             <details className="card tonal">
@@ -235,6 +245,9 @@ export default function Workspace() {
         <div className="top">
           <ForecastStrip fc={fc} selected={["forecast", "worst", "best"].includes(p.rain_source) ? p.forecast_day_index : null}
             onPick={(i) => { set({ forecast_day_index: i, rain_source: ["worst", "best"].includes(p.rain_source) ? p.rain_source : "forecast" }); setTab("scenario"); }} />
+          {status?.official?.imd_warning && (
+            <span className={`imd-badge ${status.official.imd_warning}`} title={`Entered by ${status.official.entered_by ?? ""}`}>IMD {status.official.imd_warning}</span>
+          )}
           {status?.bbox && (
             <button className="fc-chip sl" onClick={() => setFitT(Date.now())} title="Zoom to the simulated area">
               <span className="sq" />{status.name ?? "Simulated area"}<Icon name="center_focus_strong" className="sm" />
@@ -254,7 +267,7 @@ export default function Workspace() {
 
         <div className="bottom">
           <LayerPanel on={on} toggle={toggle} hasRun={!!run} mapType={mapType} setMapType={setMapType} urban={status?.mode === "urban"} />
-          {run ? <TimeSlider hours={run.rain_series_mm_h.length} hour={hour} setHour={setHour} rain={run.rain_series_mm_h} /> : <span className="spacer" />}
+          {run ? <TimeSlider hours={run.rain_series_mm_h.length} hour={hour} setHour={setHour} rain={run.rain_series_mm_h} start={run.start_local} windowHour={run.evac_window_h} /> : <span className="spacer" />}
           <div style={{ marginRight: 56 }}><Fab icon="auto_awesome" label="Ask Pravah" variant="gemini" small onClick={() => setChatOpen(true)} /></div>
         </div>
 

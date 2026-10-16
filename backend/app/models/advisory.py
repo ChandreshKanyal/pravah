@@ -18,6 +18,19 @@ Department = Literal["District Magistrate / DDMA", "SDM / Tehsildar (Revenue)", 
                      "Fire and Emergency Services", "Border Roads Organisation"]
 
 
+# fixed Hindi terms (hand-checked) for departments and headline figures; free text is translated by Gemini
+DEPARTMENTS_HI = {
+    "District Magistrate / DDMA": "ज़िलाधिकारी / DDMA", "SDM / Tehsildar (Revenue)": "SDM / तहसीलदार (राजस्व)", "Police": "पुलिस",
+    "SDRF / NDRF": "SDRF / NDRF", "PWD (roads and bridges)": "लोक निर्माण विभाग (सड़क व पुल)",
+    "Health (CMO, 108 ambulance)": "स्वास्थ्य (CMO, 108 एम्बुलेंस)", "Municipal body (drains, water-logging)": "नगर निकाय (नाले, जलभराव)",
+    "Irrigation / Flood control": "सिंचाई / बाढ़ नियंत्रण", "Education (school shelters)": "शिक्षा (स्कूल आश्रय)",
+    "Block Development Officer": "खंड विकास अधिकारी", "Fire and Emergency Services": "अग्निशमन एवं आपात सेवाएँ",
+    "Border Roads Organisation": "सीमा सड़क संगठन (BRO)"}
+KEY_LABELS_HI = {"K7": "जिन लोगों को हटाना है", "K3": "जिन्हें आश्रय स्थल नहीं मिल रहा", "K4": "बंद होने वाले पुल",
+                 "K1": "बाढ़ के पानी में लोग (अधिकतम)", "K6": "भूस्खलन-संवेदनशील ढलानों पर लोग", "K2": "उच्च/गंभीर जोखिम वाले भवन",
+                 "K5": "सबसे बुरे घंटे में बाढ़ क्षेत्र"}
+
+
 class Recommendation(BaseModel):
     id: str = ""  # "R1"..; assigned after validation
     horizon: Literal["immediate", "seasonal", "structural"]

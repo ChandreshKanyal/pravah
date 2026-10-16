@@ -6,7 +6,8 @@ import { Icon } from "../components/m3";
 
 const SECTIONS = [
   ["overview", "How Pravah works"], ["flood", "Flood depth"], ["landslide", "Landslide susceptibility"], ["exposure", "Exposure and risk"],
-  ["routing", "Evacuation routing"], ["forecast", "Rain scenarios"], ["ai", "Gemini and guardrails"], ["limits", "Limitations"], ["data", "Data and licences"],
+  ["routing", "Evacuation routing"], ["forecast", "Rain scenarios"], ["brief", "How the brief is built"], ["ai", "Gemini and guardrails"],
+  ["track", "Track record"], ["governance", "Access and data governance"], ["limits", "Limitations"], ["data", "Data and licences"],
 ] as const;
 
 const FLOW = [
@@ -28,7 +29,9 @@ const DATA: [string, string, string][] = [
   ["Sentinel-2 SR (Copernicus)", "NDVI", "Copernicus data: free and open"],
   ["OpenLandMap soil clay", "Landslide factor", "CC BY-SA 4.0"],
   ["CHIRPS daily", "Rain climatology, record day", "Public domain (CC0)"],
-  ["NASA GPM IMERG V07", "Past 90 days of rain", "NASA open data"],
+  ["NASA GPM IMERG V07", "Past 90 days of rain; hourly rain for historical event replays", "NASA open data"],
+  ["OpenStreetMap place names", "Village, ward and town names in the brief (with Hindi names where mapped)", "© OpenStreetMap contributors, ODbL"],
+  ["Sphere Handbook (2018)", "Relief supply minimums in the brief", "Sphere Association; standards cited, not copied"],
   ["WorldPop 100 m", "Population", "CC BY 4.0"],
   ["Google Open Buildings v3 + 2.5D Temporal", "Footprints, heights", "CC BY 4.0 (or ODbL)"],
   ["NASA Global Landslide Catalog", "Landslide inventory", "NASA open data (terms being confirmed)"],
@@ -43,10 +46,10 @@ const LIMITS = [
   "The rational method is designed for small catchments. Applied to the selected area with an envelope (no recession), it gives coarse, conservative estimates; an areal reduction factor softens it for larger catchments.",
   "Resolution: MERIT Hydro is about 90 m and the DEM is 30 m. Single streets and small drains are not resolved. Copernicus GLO-30 is a surface model, including buildings and trees, which matters most in cities.",
   "Building classes are proxies from footprint and height until verified by field photos. Open Buildings heights are model estimates.",
-  "Population is a residential estimate (WorldPop). It is blind to day/night and tourist or pilgrim surges.",
+  "Population is a residential estimate (WorldPop). Day/night differences are not modelled; pilgrims and tourists must be entered as a number (they are spread over temples, markets and hotels).",
   "Landslide output is susceptibility, not prediction. The rain trigger uses a published regional threshold (Dahal & Hasegawa 2008 in the Himalaya, Caine 1980 elsewhere) without antecedent rain. The landslide inventory is incomplete.",
   "OpenStreetMap roads and shelters can be incomplete in hill towns. Capacities use footprint × floors × Sphere space standards and must be confirmed locally.",
-  "No calibration against gauges. The backtest is a sanity check only.",
+  "No calibration against gauges. Event replays test the rain trigger against a handful of catalogued events; they are evidence, not validation.",
   "Licences: MERIT Hydro and the Global Flood Database are non-commercial (CC BY-NC). Commercial use needs other licences or data.",
 ];
 
@@ -61,6 +64,41 @@ function Weights({ title, info }: { title: string; info?: { factors: string[]; w
         <tbody>{info.factors.map((f, i) => <tr key={f}><td>{f.replace(/_/g, " ")}</td><td className="r">{info.weights[i].toFixed(3)}</td>
           <td><div className="cap"><i style={{ width: `${(info.weights[i] / Math.max(...info.weights)) * 100}%` }} /></div></td></tr>)}</tbody></table>
     </div>
+  );
+}
+
+const DEMO_IDS = ["56f044f26351", "d277268c1783"];
+
+function TrackRecord() {
+  const [rows, setRows] = useState<{ name: string; ev: any[] }[] | null>(null);
+  useEffect(() => {
+    Promise.all(DEMO_IDS.map((id) => getAoiStatus(id).then((s) => ({ name: s.name ?? id, ev: (s.meta?.event_replays as any[]) ?? [] })).catch(() => ({ name: id, ev: [] }))))
+      .then(setRows);
+  }, []);
+  if (!rows) return <div className="shimmer" style={{ height: 120 }} />;
+  if (!rows.some((r) => r.ev.length)) return <p className="body-m muted">Event replays have not been run yet (scripts/event_replay.py).</p>;
+  return (
+    <>
+      {rows.filter((r) => r.ev.length).map((r) => (
+        <div key={r.name} className="card outlined" style={{ padding: 0, overflowX: "auto" }}>
+          <div className="title-s" style={{ padding: "12px 16px 4px" }}>{r.name}
+            <span className="body-s muted"> · landslide trigger reached in {r.ev.filter((e) => e.trigger_fired).length} of {r.ev.length} recorded events</span></div>
+          <table className="tbl">
+            <thead><tr><th>Event and record</th><th className="r">Observed rain (IMERG)</th><th>Landslide trigger</th><th className="r">Model: people to move</th><th>Same monsoon: other days over the 24 h trigger</th></tr></thead>
+            <tbody>{r.ev.map((e) => (
+              <tr key={e.id}>
+                <td><b>{e.label}</b><div className="body-s muted">{e.record}</div></td>
+                <td className="r">{e.window_mm} mm in 12 h<div className="body-s muted">peak {e.imerg_peak_mm_h} mm/h · 48 h {e.imerg_48h_mm} mm</div></td>
+                <td>{e.trigger_fired ? <span className="tag high">fired (×{e.trigger_ratio_max})</span> : <span className="tag">not reached (×{e.trigger_ratio_max ?? "–"})</span>}
+                  {e.glc_point_class != null && <div className="body-s muted">class {e.glc_point_class} at the record point; {Math.round(100 * e.share_class4plus_within_1km)}% of land within 1 km in class 4–5</div>}</td>
+                <td className="r">{(e.people_to_move ?? 0).toLocaleString("en-IN")}<div className="body-s muted">{e.flooded_km2} km² flooded</div></td>
+                <td>{e.season ? `${e.season.days_over_24h_trigger} of ${e.season.days} days (≥ ${e.season.trigger_24h_mm} mm); event day ranked ${e.season.event_day_rank ?? "–"} with ${e.season.event_day_mm ?? "–"} mm` : "–"}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      ))}
+    </>
   );
 }
 
@@ -149,6 +187,20 @@ export default function Methods() {
             <p>Rain up to the storm-drain design capacity (25 mm/h, Mumbai's historical standard; configurable) is carried away; the rest ponds in depressions of the bare-earth terrain. People move when still water reaches 0.5 m (DEFRA/EA FD2321 hazard rating “danger for some”), or 0.3 m in fragile single-storey homes. Drains and culverts are ranked for pre-monsoon clearing by flow accumulation, ponding or flood susceptibility, and exposed people within 300 m; field photos marked blocked raise the priority. River overflow and tides are not modelled in urban mode.</p>
           </section>
 
+          <section id="brief">
+            <h2>How the brief is built</h2>
+            <ul>
+              <li><b>Bottom line first.</b> The headline is written by rules from the model numbers: who must move, from which places, by when, and how many have no shelter place. Gemini adds a short situation summary whose numbers are checked.</li>
+              <li><b>Rounded figures with a range.</b> People are rounded (to 5, 10, 50 or 100 depending on size). The range re-counts who must move if flood depths are 30% lower or higher and the population 20% lower or higher: a what-if band for uncalibrated models, not a statistical interval.</li>
+              <li><b>Places, not codes.</b> Clusters, bridges, routes and shelters carry the nearest OpenStreetMap village, ward or town name and a nearby named landmark.</li>
+              <li><b>Owner and deadline per action.</b> Each action names one responsible department (Revenue, Police, PWD, Health, SDRF, municipal body…). Deadlines come from the model: a bridge must close before the hour it is cut, people must move before the first evacuation route is cut, teams are staged before the rain starts. Forecast scenarios show clock times; hypothetical rain shows hours after the rain starts.</li>
+              <li><b>Supplies.</b> Water (15 L per person per day), food (2,100 kcal per person per day), latrines (1 per 20 people), covered space (3.5 m² per person), blankets and hygiene kits, from the Sphere Handbook minimums, for the central estimate and the high end of the range.</li>
+              <li><b>Accountability.</b> Every generated brief is an immutable numbered version. It moves from Draft to Reviewed to Approved with a name, designation and time; approved versions are locked and every action is logged.</li>
+              <li><b>Languages and sharing.</b> Hindi is produced by Gemini; any item whose numbers change in translation stays in English. A plain-text version works on WhatsApp, SMS and 2G connections.</li>
+              <li><b>Official warnings.</b> Staff enter the IMD district colour code and the CWC gauge level, shown next to the model with links to IMD, CWC and Google Flood Hub. Pravah does not scrape these sites.</li>
+            </ul>
+          </section>
+
           <section id="ai">
             <h2>Gemini and guardrails</h2>
             <ul>
@@ -157,6 +209,23 @@ export default function Methods() {
               <li><b>Advisory brief</b>: Gemini drafts recommendations from a compact facts sheet. A validator drops any recommendation that cites an unknown id or a number not in its cited facts, and fills empty horizons from deterministic rules; if Gemini fails, a rules-based brief is produced.</li>
               <li><b>Web incidents</b>: a separate agent with Google Search grounding returns sourced leads, shown with Google Search suggestions and labelled unverified.</li>
               <li><b>Field photos</b>: Gemini vision classifies structures or drains in photos your teams take; never Google Maps or Street View imagery.</li>
+            </ul>
+          </section>
+
+          <section id="track">
+            <h2>Track record: historical event replays</h2>
+            <p className="body-m">The model is run with the observed rain (NASA IMERG, wettest 12 hours) of catalogued disasters. Only the rain trigger can be tested: the landslide records are located to within 5–10 km, and no observed flood extent exists inside these boxes. The last column shows how often the same monsoon crossed the 24-hour trigger on other days, i.e. how many false alarms a trigger-only warning would have raised.</p>
+            <TrackRecord />
+            <div className="notice warn"><Icon name="report" /><span><b>What this shows.</b> In Rudraprayag the Himalayan rain trigger (Dahal & Hasegawa 2008) was <b>not reached</b> for any of the three recorded events when fed satellite rain (0.36–0.95 of the threshold): IMERG's ~10 km cells smooth out cloudbursts, and the 2013 destruction came mostly from upstream flow, which the model takes only through the upstream-flow input. A forecast scenario that stays below the trigger therefore does not rule landslides out; plan with the record or IMD presets as well. In Mumbai the trigger was reached for both events, with 3–5 other days of the same monsoon also crossing the 24-hour threshold. Calibrating a satellite-rain trigger (for example a local rain percentile, as in NASA LHASA) is the next step.</span></div>
+          </section>
+
+          <section id="governance">
+            <h2>Access and data governance</h2>
+            <ul>
+              <li><b>Sign-in and roles.</b> With sign-in enabled (Firebase Authentication with Google accounts), roles are viewer, field, analyst, approver and admin. Running scenarios and using Gemini need the analyst role; approving a brief needs the approver role; uploading field photos needs the field role.</li>
+              <li><b>Sensitive outputs.</b> Building-level risk (the 3D buildings) is served only to signed-in users when sign-in is enabled, because labels like “critical risk” on individual houses can affect residents.</li>
+              <li><b>Audit trail.</b> Brief generation, reviews, approvals, translations, official-status entries and area archiving are logged with the user, time and version.</li>
+              <li><b>Where data lives.</b> Model inputs and outputs stay in this Google Cloud project (Cloud Storage, Firestore). Google Maps content is display only. Field photos are your teams' own and are used only to reclassify buildings and drains.</li>
             </ul>
           </section>
 

@@ -228,6 +228,23 @@ def imerg_daily(lon: float, lat: float, end: date, days: int = 90) -> list[dict]
     return out
 
 
+def imerg_hourly(lon: float, lat: float, start: str, hours: int = 48) -> list[float]:
+    """Hourly rain (mm) from IMERG V07 half-hourly rates, mean within 5 km, for `hours` from `start` (UTC ISO).
+    Used for historical event replays (S18 credibility); IMERG under-reads intense convective cores."""
+    init_ee()
+    g = ee.Geometry.Point([lon, lat]).buffer(5000)
+    col = ee.ImageCollection(IMERG_ID).select("precipitation")
+    t0 = ee.Date(start)
+
+    def hour(i):
+        t = t0.advance(i, "hour")
+        c = col.filterDate(t, t.advance(1, "hour"))
+        img = ee.Image(ee.Algorithms.If(c.size().gt(0), c.mean(), ee.Image.constant(0).rename("precipitation")))  # mean rate = mm in that hour
+        return ee.Feature(None, {"mm": img.reduceRegion(ee.Reducer.mean(), g, 10000).get("precipitation")})
+    fc = ee.FeatureCollection(ee.List.sequence(0, hours - 1).map(hour)).getInfo()
+    return [round(float(f["properties"].get("mm") or 0.0), 2) for f in fc["features"]]
+
+
 def worldpop_total(grid: GridSpec) -> float:
     """WorldPop people inside the grid extent, summed at native resolution."""
     init_ee()

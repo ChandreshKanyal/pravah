@@ -21,7 +21,8 @@ location_label; never use a bare id like "C1" there (ids go only in evidence_ids
 Do not invent numbers, places or ids. Every number in 'why' must appear in the facts you cite. Priority P1 = life-safety
 within the scenario window. The headline is a 2-sentence situation summary (what is coming, where the risk is).
 Use the words estimated, susceptibility, suggested; never say "will flood" or "safe"
-(shelters are "reachable in this scenario"). Building classes are proxies ("likely ..."). Include 3-5 limitations.
+(shelters are "reachable in this scenario"). Building classes are proxies ("likely ..."). Only recommend hazards present in the
+facts (flood, water-logging, landslide); this is not a cyclone or earthquake tool. Include 3-5 limitations.
 
 FACTS JSON:
 {facts}

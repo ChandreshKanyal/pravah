@@ -36,7 +36,9 @@ def _road_groups(roads: dict, keep) -> list[dict]:
             continue
         seen.add(key)
         name = pr.get("name") or f"unnamed {pr.get('highway') or 'road'}"
-        g = groups.setdefault(name, {"name": name, "length_m": 0.0, "first_closed_hour": None, "reason": pr.get("reason"),
+        # named roads group by name; unnamed ones by type and ~1 km location, so "village road" never sums a whole district
+        gkey = name if pr.get("name") else f"{name}@{round(cs[0][0], 2)},{round(cs[0][1], 2)}"
+        g = groups.setdefault(gkey, {"name": name, "length_m": 0.0, "first_closed_hour": None, "reason": pr.get("reason"),
                                      "lsi_max": 0, "lonlat": cs[len(cs) // 2]})
         g["length_m"] += pr.get("length_m") or sum(_hav_m(a, b) for a, b in zip(cs[:-1], cs[1:]))
         h = pr.get("first_closed_hour")
@@ -438,7 +440,8 @@ def rules_advisory(facts: dict) -> list[Recommendation]:
 
 RULE_LIMITATIONS = [
     "Flood depths come from HAND mapping and rational-method runoff: uncalibrated, no channel routing, water never recedes.",
-    "Landslide classes are susceptibility, not timed predictions; the rain trigger uses a published regional threshold.",
+    "Landslide classes are susceptibility, not timed predictions; the rain trigger uses a published regional threshold and "
+    "missed three recorded Rudraprayag events when replayed with satellite rain, so a scenario without a trigger does not rule landslides out.",
     "Building classes are proxies from footprints and heights until verified by field photos.",
     "Population is residential and night-time-like (WorldPop); daytime crowds may differ.",
     "Roads and shelters come from OpenStreetMap, which is incomplete in hill towns.",
