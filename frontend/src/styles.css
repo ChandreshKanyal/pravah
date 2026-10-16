@@ -598,3 +598,11 @@ p { margin: 0; }
 .ws-panel .metric { padding: 10px 12px; } .ws-panel .metric .v { font: 400 22px/28px var(--font); }
 .ws-panel .li { min-height: 48px; padding: 6px 8px; gap: 12px; } .ws-panel .li .txt .t { font-size: 14px; line-height: 20px; } .ws-panel .li .txt .s { font-size: 12px; line-height: 16px; }
 .ws-panel .body-l { font-size: 15px; line-height: 22px; }
+
+/* 3D view panel */
+.v3d-panel { position: absolute; top: 12px; left: 12px; width: 300px; z-index: 5; padding: 14px; }
+.v3d-legend { list-style: none; margin: 0; padding: 0; display: grid; gap: 5px; font: 400 12px/16px var(--font); color: var(--on-surface-variant); }
+.v3d-legend li { display: flex; align-items: center; gap: 6px; }
+.v3d-legend .sw { width: 12px; height: 12px; border-radius: 3px; border: 1px solid #0002; display: inline-block; }
+.v3d-legend .bx { width: 16px; height: 12px; border: 2.5px solid #d93025; border-radius: 2px; }
+.v3d-legend .ramp { width: 40px; height: 8px; margin: 0; }

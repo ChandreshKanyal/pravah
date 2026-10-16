@@ -4,21 +4,28 @@ Coordinates are metre offsets from the grid centre so terrain, texture and build
 Never uses the Maps Elevation API (Maps terms 3.2.3(c)(iii))."""
 import io
 import json
+import threading
+from functools import lru_cache
 
 import numpy as np
 from fastapi import APIRouter, HTTPException, Response
 from google.api_core.exceptions import NotFound
 from PIL import Image
 
-from app.engines.render import DEPTH_COLORS, DEPTH_EDGES, _rgb
-from app.services import storage
+from scipy import ndimage
+
+from app.engines.render import DEPTH_COLORS, DEPTH_EDGES, _rgb, _smooth_mask
+from app.services import firestore as fs, storage
+
+TEX_K = 3  # texture at cell/3 (10 m) so rivers, streams and flood edges are crisp on the mesh
+RIVER = np.array([66, 133, 214.0])
 
 router = APIRouter()
 
 
 def _png(rgb: np.ndarray) -> bytes:
     buf = io.BytesIO()
-    Image.fromarray(rgb).save(buf, "PNG", optimize=True)
+    Image.fromarray(rgb).save(buf, "PNG", compress_level=6)
     return buf.getvalue()
 
 
@@ -33,7 +40,16 @@ def meta(aoi_id: str):
     lon, lat = rowcol_to_lonlat(grid, (grid.height - 1) / 2, (grid.width - 1) / 2)
     W, H = grid.width * grid.cell, grid.height * grid.cell
     from app.engines.grid import lonlat_bounds
-    return {"origin": [float(lon), float(lat)], "bounds_m": [-W / 2, -H / 2, W / 2, H / 2],
+    threading.Thread(target=_tex_base, args=(aoi_id,), daemon=True).start()  # warm the 3D texture base
+    aoi_m = None
+    bbox = (fs.get_aoi(aoi_id) or {}).get("bbox")
+    if bbox:
+        from app.engines.grid import _to_utm
+        w, s_, e, n = bbox
+        t = _to_utm(grid.crs)
+        cx, cy = grid.x0 + W / 2, grid.y0 - H / 2
+        aoi_m = [[round(x - cx, 1), round(y - cy, 1)] for x, y in (t.transform(lo, la) for lo, la in [(w, s_), (e, s_), (e, n), (w, n), (w, s_)])]
+    return {"origin": [float(lon), float(lat)], "bounds_m": [-W / 2, -H / 2, W / 2, H / 2], "aoi_m": aoi_m,
             "bounds_ll": [float(x) for x in lonlat_bounds(grid)],
             "z_min": float(np.nanmin(dem)), "z_max": float(np.nanmax(dem)), "cell": grid.cell}
 
@@ -70,34 +86,64 @@ def _hillshade(dem: np.ndarray, cell: float) -> np.ndarray:
     return np.clip(hs, 0, 1)
 
 
-@router.get("/api/runs/{run_id}/3d/texture_h{hour}.png")
-def texture(run_id: str, hour: int, aoi_id: str):
-    """Hillshaded terrain tinted green-brown by elevation, with the run's flood depth at `hour` on top."""
-    key = f"png/tex3d_h{hour}.png"
-    try:
-        return Response(storage.get_run(run_id, key), media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
-    except NotFound:
-        pass
+@lru_cache(maxsize=4)
+def _tex_base(aoi_id: str) -> np.ndarray:
+    """Per-area base picture at 3x the grid: hillshaded terrain tinted by elevation, rivers (JRC surface water present
+    >= 50 % of the time) and main streams (>= 10 km2 upstream) in blue. Context only, not model output."""
     grid = storage.load_grid(aoi_id)
     dem = storage.load_layers(aoi_id, "terrain")["dem"].astype(np.float64)
-    hs = _hillshade(dem, grid.cell)
-    z = (np.nan_to_num(dem) - np.nanpercentile(dem, 2)) / max(1.0, np.nanpercentile(dem, 98) - np.nanpercentile(dem, 2))
-    low, high = np.array([110, 140, 90]), np.array([190, 175, 150])
-    base = (low + np.clip(z, 0, 1)[..., None] * (high - low)) * (0.45 + 0.75 * hs[..., None])
+    k = TEX_K
+    demf = ndimage.zoom(np.nan_to_num(dem, nan=float(np.nanmin(dem))).astype(np.float32), k, order=1, grid_mode=True, mode="nearest")
+    hs = _hillshade(demf, grid.cell / k)
+    p2, p98 = np.nanpercentile(dem, 2), np.nanpercentile(dem, 98)
+    z = np.clip((demf - p2) / max(1.0, p98 - p2), 0, 1)
+    low, high = np.array([96, 128, 78.0]), np.array([196, 182, 156.0])
+    rgb = (low + z[..., None] * (high - low)) * (0.42 + 0.78 * hs[..., None])
+    river = np.zeros(demf.shape, bool)
     try:
-        depth = np.load(io.BytesIO(storage.get_run(run_id, "depth.npz")))["depth"].astype(np.float32)
+        river |= _smooth_mask(np.nan_to_num(storage.load_layers(aoi_id, "hazard_hist")["gsw_occ"]) >= 50, k)
+    except (NotFound, KeyError):
+        pass
+    try:
+        h30 = storage.load_layers(aoi_id, "hydro30")
+        river |= _smooth_mask(h30["stream"] & (np.nan_to_num(h30["upa"]) >= 10.0), k, sigma_cells=0.3, level=0.35)
+    except (NotFound, KeyError):
+        pass
+    rgb[river] = RIVER * (0.75 + 0.25 * hs[river][..., None])
+    return rgb.astype(np.float32)
+
+
+@lru_cache(maxsize=4)
+def _run_depth(run_id: str) -> np.ndarray:
+    return np.load(io.BytesIO(storage.get_run(run_id, "depth.npz")))["depth"].astype(np.float32)
+
+
+@router.get("/api/runs/{run_id}/3d/texture_h{hour}.jpg")
+def texture(run_id: str, hour: int, aoi_id: str):
+    """Base picture with the run's flood depth at `hour` on top (nested smoothed bands, as on the 2D map). JPEG, cached
+    per run and hour in GCS (written in the background) and per area/run in memory."""
+    key = f"png/tex3d_v2_h{hour}.jpg"
+    hdr = {"Cache-Control": "public, max-age=86400"}
+    try:
+        return Response(storage.get_run(run_id, key), media_type="image/jpeg", headers=hdr)
+    except NotFound:
+        pass
+    try:
+        depth = _run_depth(run_id)
     except NotFound:
         raise HTTPException(404, "Run not found")
+    rgb = _tex_base(aoi_id).copy()
     d = depth[min(max(hour, 1), depth.shape[0]) - 1]
-    rgb = base.copy()
-    k = np.digitize(np.nan_to_num(d, nan=-1), DEPTH_EDGES) - 1
+    filled = np.nan_to_num(d, nan=-np.inf)
+    band = sum(_smooth_mask(filled >= e, TEX_K).astype(np.int8) for e in DEPTH_EDGES) - 1
     for i, c in enumerate(DEPTH_COLORS):
-        m = k == i
-        rgb[m] = 0.25 * rgb[m] + 0.75 * np.array(_rgb(c))
-    rgb[np.isnan(d)] = np.array([70, 110, 160]) * (0.6 + 0.4 * hs[np.isnan(d)][..., None])  # permanent river
-    out = _png(np.clip(rgb, 0, 255).astype(np.uint8))
-    storage.put_run(run_id, key, out, "image/png")
-    return Response(out, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
+        m = band == i
+        rgb[m] = 0.2 * rgb[m] + 0.8 * np.array(_rgb(c))
+    buf = io.BytesIO()
+    Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8)).save(buf, "JPEG", quality=85)
+    out = buf.getvalue()
+    threading.Thread(target=storage.put_run, args=(run_id, key, out, "image/jpeg"), daemon=True).start()
+    return Response(out, media_type="image/jpeg", headers=hdr)
 
 
 @router.get("/api/runs/{run_id}/3d/buildings.json")
