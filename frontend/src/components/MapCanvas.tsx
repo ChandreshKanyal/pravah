@@ -31,14 +31,14 @@ export function MapProvider({ children }: { children: ReactNode }) {
   return <APIProvider apiKey={KEY} language="en" region="IN">{children}</APIProvider>;
 }
 
-export function MapCanvas({ center, zoom, layers = [], children, mapTypeId = "hybrid" }: {
-  center: { lat: number; lng: number }; zoom: number; layers?: Layer[]; children?: ReactNode; mapTypeId?: MapType;
+export function MapCanvas({ center, zoom, layers = [], children, mapTypeId = "hybrid", streetView = true }: {
+  center: { lat: number; lng: number }; zoom: number; layers?: Layer[]; children?: ReactNode; mapTypeId?: MapType; streetView?: boolean;
 }) {
   return (
     <div className="map-wrap">
       <Map defaultCenter={center} defaultZoom={zoom} mapId={MAP_ID} mapTypeId={mapTypeId} gestureHandling="greedy"
         disableDefaultUI zoomControl zoomControlOptions={{ position: ControlPosition.RIGHT_BOTTOM }}
-        streetViewControl streetViewControlOptions={{ position: ControlPosition.RIGHT_BOTTOM }}
+        streetViewControl={streetView} streetViewControlOptions={{ position: ControlPosition.RIGHT_BOTTOM }}
         colorScheme={ColorScheme.FOLLOW_SYSTEM} clickableIcons={false} style={{ width: "100%", height: "100%" }}>
         <DeckLayers layers={layers} />
         {children}

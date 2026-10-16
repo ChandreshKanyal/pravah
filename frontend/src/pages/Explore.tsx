@@ -6,15 +6,15 @@ import { ScatterplotLayer } from "@deck.gl/layers";
 import type { Layer } from "@deck.gl/core";
 import { createAoi, geocode, historyIndia, listAois } from "../api/client";
 import DrawControl, { bboxKm, bboxOf, type DrawMode } from "../components/DrawControl";
-import { Button, Chip, Dialog, Fab, Field, Icon, IconButton, Segmented, useSnackbar } from "../components/m3";
+import { Button, Chip, Dialog, Field, Icon, IconButton, Segmented, nf, useSnackbar } from "../components/m3";
 import { MapCanvas, type MapType } from "../components/MapCanvas";
 import type { AoiListItem, GeocodeResult, HistoryIndia } from "../types/api";
 
 const LIMIT_KM = { river: 15, urban: 4 } as const;
 type BBox = [number, number, number, number];
 const DEMOS: { name: string; bbox: BBox; mode: "river" | "urban"; note: string }[] = [
-  { name: "Rudraprayag", bbox: [78.93, 30.24, 79.03, 30.33], mode: "river", note: "Alaknanda–Mandakini confluence, Uttarakhand" },
-  { name: "Mumbai Kurla–Mithi", bbox: [72.865, 19.06, 72.895, 19.09], mode: "urban", note: "Mithi river and Kurla waterlogging, Maharashtra" },
+  { name: "Rudraprayag", bbox: [78.93, 30.24, 79.03, 30.33], mode: "river", note: "Uttarakhand · river confluence, steep hills" },
+  { name: "Mumbai Kurla–Mithi", bbox: [72.865, 19.06, 72.895, 19.09], mode: "urban", note: "Maharashtra · urban waterlogging" },
 ];
 
 function Fly({ to }: { to: { bbox?: BBox | null; lat?: number; lng?: number; zoom?: number } | null }) {
@@ -34,7 +34,7 @@ function GfdTiles({ url, on }: { url: string | null; on: boolean }) {
     if (!map || !url || !on) return;
     const t = new google.maps.ImageMapType({
       getTileUrl: (c, z) => url.replace("{x}", String(c.x)).replace("{y}", String(c.y)).replace("{z}", String(z)),
-      tileSize: new google.maps.Size(256, 256), opacity: 0.65, name: "GFD",
+      tileSize: new google.maps.Size(256, 256), opacity: 0.5, name: "GFD",
     });
     map.overlayMapTypes.push(t);
     return () => {
@@ -98,16 +98,30 @@ export default function Explore() {
     }
   }
 
+  // Demo cards open the prepared area directly when one exists; otherwise they pre-fill the prepare dialog.
+  const ready = (areas ?? []).filter((a) => a.state === "ready" || a.state === "partial");
+  const demoArea = (d: (typeof DEMOS)[number]) => ready.find((a) => a.name.toLowerCase().startsWith(d.name.split(" ")[0].toLowerCase()));
+  const demoIds = new Set(DEMOS.map(demoArea).filter(Boolean).map((a) => a!.aoi_id));
+  const seen = new Set<string>();
+  const recent = ready.filter((a) => {
+    const k = a.name.trim().toLowerCase();
+    if (demoIds.has(a.aoi_id) || seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  }).slice(0, 3);
+  const drawing = mode === "rectangle";
+  const toggleDraw = () => setMode(drawing ? null : "rectangle");
+
   return (
     <div className="explore">
-      <MapCanvas center={{ lat: 22.5, lng: 79 }} zoom={5} layers={layers} mapTypeId={mapType}>
+      <MapCanvas center={{ lat: 22.5, lng: 82 }} zoom={5} layers={layers} mapTypeId={mapType} streetView={false}>
         <Fly to={fly} />
         <GfdTiles url={hist?.gfd_tiles ?? null} on={showFloods} />
         <DrawControl mode={mode} onFinish={(p) => { setMode(null); setDraft({ bbox: bboxOf(p), name: "", mode: "river" }); }} />
       </MapCanvas>
 
-      <div className="left">
-        <div>
+      <aside className="left">
+        <div className="search-wrap">
           <div className="search">
             <Icon name="search" />
             <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search a town, district or river" aria-label="Search places"
@@ -125,68 +139,74 @@ export default function Explore() {
           )}
         </div>
 
-        <div className="card elevated hero stack">
-          <div className="stack-s">
+        <div className="panel">
+          <div className="intro">
             <h1>Plan for floods and landslides</h1>
-            <p className="body-m muted">Pick an area to estimate flood depth, landslide susceptibility, who is exposed, which roads and bridges close, and where people can go — hour by hour.</p>
+            <p>Draw an area to see flood depth, landslide risk, who is exposed and where people can go, hour by hour.</p>
+            <div className="row">
+              <Button icon={drawing ? "close" : "crop_free"} onClick={toggleDraw}>{drawing ? "Cancel drawing" : "Draw an area"}</Button>
+              <Button variant="text" onClick={() => nav("/methods")}>How it works</Button>
+            </div>
           </div>
-          <div className="row">
-            <Button icon="crop_free" onClick={() => setMode(mode === "rectangle" ? null : "rectangle")}>{mode === "rectangle" ? "Cancel drawing" : "Draw an area"}</Button>
-            <Button variant="text" icon="menu_book" onClick={() => nav("/methods")}>How it works</Button>
+
+          <div className="group">
+            <div className="group-label">Try a prepared area</div>
+            {DEMOS.map((d) => {
+              const a = demoArea(d);
+              return (
+                <button key={d.name} className="row-item sl" onClick={() => {
+                  if (a) nav(`/area/${a.aoi_id}`);
+                  else { setFly({ bbox: d.bbox }); setDraft({ bbox: d.bbox, name: d.name, mode: d.mode }); }
+                }}>
+                  <span className={`avatar ${d.mode}`}><Icon name={d.mode === "urban" ? "location_city" : "landscape"} /></span>
+                  <span className="txt"><span className="t">{d.name}</span><span className="s">{d.note}</span></span>
+                  <Icon name="chevron_right" className="trail" />
+                </button>
+              );
+            })}
           </div>
-        </div>
 
-        <div className="card elevated stack" style={{ borderRadius: "var(--r-xl)" }}>
-          <div className="section-title"><Icon name="history" /> Your areas</div>
-          {areas === null && <div className="shimmer" style={{ height: 64 }} />}
-          {areas?.filter((a) => a.state === "ready" || a.state === "partial").slice(0, 4).map((a) => (
-            <button key={a.aoi_id} className="area-card sl" onClick={() => nav(`/area/${a.aoi_id}`)}>
-              <span className="thumb"><Icon name={a.mode === "urban" ? "location_city" : "landscape"} /></span>
-              <span className="grow"><span className="title-s" style={{ display: "block" }}>{a.name}</span>
-                <span className="body-s muted">{a.mode === "urban" ? "Urban" : "River & hills"} · {bboxKm(a.bbox).map((x) => x.toFixed(0)).join(" × ")} km · ready</span></span>
-              <Icon name="chevron_right" className="muted" />
-            </button>
-          ))}
-          <div className="section-title" style={{ marginTop: 4 }}><Icon name="star" /> Demo areas</div>
-          {DEMOS.map((d) => (
-            <button key={d.name} className="area-card sl" onClick={() => { setFly({ bbox: d.bbox }); setDraft({ bbox: d.bbox, name: d.name === "Rudraprayag" ? "Rudraprayag 10km" : d.name, mode: d.mode }); }}>
-              <span className="thumb"><Icon name={d.mode === "urban" ? "location_city" : "water"} /></span>
-              <span className="grow"><span className="title-s" style={{ display: "block" }}>{d.name}</span><span className="body-s muted">{d.note}</span></span>
-              <Icon name="chevron_right" className="muted" />
-            </button>
-          ))}
+          {areas === null && <div className="group"><div className="shimmer" style={{ height: 56, borderRadius: 12 }} /></div>}
+          {recent.length > 0 && (
+            <div className="group">
+              <div className="group-label">Recent</div>
+              {recent.map((a) => (
+                <button key={a.aoi_id} className="row-item sl" onClick={() => nav(`/area/${a.aoi_id}`)}>
+                  <span className="avatar plain"><Icon name="history" /></span>
+                  <span className="txt"><span className="t">{a.name}</span>
+                    <span className="s">{a.mode === "urban" ? "Urban" : "River & hills"} · {bboxKm(a.bbox).map((x) => x.toFixed(0)).join(" × ")} km</span></span>
+                  <Icon name="chevron_right" className="trail" />
+                </button>
+              ))}
+            </div>
+          )}
         </div>
-      </div>
+      </aside>
 
-      <div className="top-chips chips scroll">
+      <div className="top-chips chips">
         <Chip variant="elevated" label="Past floods" icon="flood" selected={showFloods} onClick={() => setShowFloods(!showFloods)} title="Global Flood Database, MODIS 2000–2018" />
-        <Chip variant="elevated" label="Reported landslides" icon="landslide" selected={showSlides} onClick={() => setShowSlides(!showSlides)} title="NASA Global Landslide Catalog 1970–2019" />
-        <Chip variant="elevated" label="Terrain" icon="terrain" selected={mapType === "terrain"} onClick={() => setMapType("terrain")} />
-        <Chip variant="elevated" label="Satellite" icon="satellite_alt" selected={mapType === "hybrid"} onClick={() => setMapType("hybrid")} />
-        <Chip variant="elevated" label="Map" icon="map" selected={mapType === "roadmap"} onClick={() => setMapType("roadmap")} />
+        <Chip variant="elevated" label="Landslides" icon="landslide" selected={showSlides} onClick={() => setShowSlides(!showSlides)} title="NASA Global Landslide Catalog 1970–2019" />
+        <Chip variant="elevated" label="Satellite" icon="satellite_alt" selected={mapType === "hybrid"} onClick={() => setMapType(mapType === "hybrid" ? "terrain" : "hybrid")} />
       </div>
 
       {(showFloods || showSlides) && (
-        <div className="legend-card card elevated stack-s">
-          <div className="title-s">Historical incidents, not predictions</div>
-          {showFloods && <div><div className="body-s muted">{hist?.labels.gfd ?? "Observed floods 2000–2018"} · events per pixel</div>
-            <div className="ramp">{["#fee5d9", "#fcae91", "#fb6a4a", "#de2d26", "#a50f15"].map((c) => <i key={c} style={{ background: c }} />)}</div>
-            <div className="row body-s muted"><span>1</span><span className="spacer" /><span>10+</span></div></div>}
-          {showSlides && <div className="row body-s muted"><span style={{ width: 10, height: 10, borderRadius: 5, background: "#bd0026", display: "inline-block" }} />
-            {hist?.labels.glc ?? "Reported landslides 1970–2019"} ({hist?.landslides.length ?? "…"})</div>}
+        <div className="legend-card">
+          {showFloods && <div className="lg-row" title={hist?.labels.gfd}>
+            <span className="lg-name">Past floods</span>
+            <span className="ramp">{["#fee5d9", "#fcae91", "#fb6a4a", "#de2d26", "#a50f15"].map((c) => <i key={c} style={{ background: c }} />)}</span>
+            <span className="lg-end">1–10+ events</span></div>}
+          {showSlides && <div className="lg-row" title={hist?.labels.glc}>
+            <span className="lg-name">Landslides</span><span className="dot" /><span className="lg-end">{hist ? `${nf(hist.landslides.length)} reported` : "…"}</span></div>}
+          <div className="lg-note">Historical records, not predictions</div>
         </div>
       )}
 
-      {mode === "rectangle" && (
+      {drawing && (
         <div className="draw-hint" role="status">
-          <Icon name="touch_app" /> Click and drag on the map to draw an area (up to 15 × 15 km)
+          <Icon name="touch_app" /> Drag on the map to draw an area, up to 15 × 15 km
           <button className="btn btn-text sl" onClick={() => setMode(null)}>Cancel</button>
         </div>
       )}
-
-      <div className="fab-zone">
-        <Fab icon={mode === "rectangle" ? "close" : "crop_free"} label={mode === "rectangle" ? "Cancel" : "Draw area"} onClick={() => setMode(mode === "rectangle" ? null : "rectangle")} />
-      </div>
 
       <Dialog open={!!draft} title="Prepare this area" icon="landscape" onClose={() => setDraft(null)}
         actions={<>

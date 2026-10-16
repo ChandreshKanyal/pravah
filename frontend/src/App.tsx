@@ -50,11 +50,7 @@ export default function App() {
                   <NavLink to={`/area/${aoiId}/3d`} className={({ isActive }) => `navpill sl ${isActive ? "active" : ""}`}><Icon name="view_in_ar" /><span className="lbl">3D</span></NavLink>
                 </nav>
               </>
-            ) : (
-              <nav className="navpills" aria-label="Main">
-                <NavLink end to="/" className={({ isActive }) => `navpill sl ${isActive ? "active" : ""}`}><Icon name="explore" /><span className="lbl">Explore</span></NavLink>
-              </nav>
-            )}
+            ) : null}
             <span className="spacer" />
             <span className="powered no-print" title="AI features run on Gemini via Vertex AI; data and compute on Google Cloud">
               <Icon name="auto_awesome" className="sm spark" /> Gemini · Google Cloud
@@ -62,7 +58,7 @@ export default function App() {
             <NavLink to="/methods" className={({ isActive }) => `navpill sl ${isActive ? "active" : ""}`}><Icon name="menu_book" /><span className="lbl">Methods</span></NavLink>
             <IconButton icon={dark ? "light_mode" : "dark_mode"} label={dark ? "Light theme" : "Dark theme"} onClick={toggleTheme} />
           </header>
-          <Disclaimer className="global" />
+          {aoiId && <Disclaimer className="global" />}
           <div className="page"><Outlet /></div>
         </div>
       </SnackbarProvider>
