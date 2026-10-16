@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 import geopandas as gpd
 import numpy as np
+import shapely
 from scipy.spatial import cKDTree
 from shapely.geometry import LineString, mapping, shape
 
@@ -199,7 +200,7 @@ def plan(area, p: ScenarioParams, depth: np.ndarray, lsi_dyn: np.ndarray | None,
     staging = _staging(area, p, depth, exposure_ctx.get("clusters", []), first, net)
 
     roads_fc = {"type": "FeatureCollection", "features": [
-        {"type": "Feature", "geometry": mapping(g), "properties": {
+        {"type": "Feature", "geometry": mapping(shapely.set_precision(g, 1e-6)), "properties": {
             "first_closed_hour": None if first[i] >= routing.NEVER else int(first[i]), "reason": reason[i] or None,
             "bridge": bool(E.at[i, "bridge"]), "name": E.at[i, "name"], "highway": E.at[i, "highway"],
             "length_m": round(float(E.at[i, "length_m"]), 1), "lsi_max": int(edge_lsi[i].max()) if H else 0}}
@@ -209,7 +210,7 @@ def plan(area, p: ScenarioParams, depth: np.ndarray, lsi_dyn: np.ndarray | None,
     return {"shelters": shelters_out, "bridges": bridges, "capacity_gap_people": int(gap),
             "assembly_points": [{k: v for k, v in s.items() if k in ("id", "name", "lon", "lat", "capacity", "area_m2", "label")}
                                 for s in supply if s["source"] == "assembly"],
-            "staging_points": staging, "roads_geojson": json.dumps(roads_fc), "routes_geojson": json.dumps(routes_fc),
+            "staging_points": staging, "roads_geojson": json.dumps(roads_fc, separators=(",", ":")), "routes_geojson": json.dumps(routes_fc, separators=(",", ":")),
             "routes_summary": [r["properties"] for r in routes_fc["features"]][:50],
             "people_to_evacuate": int(sum(demand.values()))}
 

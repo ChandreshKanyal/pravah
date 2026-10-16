@@ -216,7 +216,7 @@ export default function Workspace() {
             </div>
           ) : (
             <Button block size="lg" icon={running ? undefined : "play_arrow"} disabled={!ready || running} onClick={doRun}>
-              {running ? <><span className="spinner small" style={{ borderTopColor: "currentColor" }} /> Running scenario…</> : "Run scenario"}
+              {running ? <><span className="spinner small" style={{ borderTopColor: "currentColor" }} /> Running scenario, about a minute…</> : "Run scenario"}
             </Button>
           )}
         </div>

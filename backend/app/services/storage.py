@@ -1,4 +1,5 @@
 """Cloud Storage I/O (S1.11): layer groups as .npz + grid.json, vectors as parquet/GraphML, overlay PNGs."""
+import gzip
 import io
 import json
 import os
@@ -10,8 +11,12 @@ import networkx as nx
 import numpy as np
 import osmnx as ox
 from google.cloud import storage
+from google.cloud.storage.retry import DEFAULT_RETRY
 
 from app.config import get_settings
+
+UPLOAD_TIMEOUT_S = 300  # slow home uplinks: an 11 MB GeoJSON timed out at the 60 s default
+UPLOAD_RETRY = DEFAULT_RETRY.with_timeout(600)  # overall retry budget (library default 120 s)
 from app.models.grid import GridSpec
 
 
@@ -30,7 +35,7 @@ def exists(aoi_id: str, name: str) -> bool:
 
 
 def put_bytes(aoi_id: str, name: str, data: bytes, content_type: str = "application/octet-stream") -> None:
-    _bucket().blob(_path(aoi_id, name)).upload_from_string(data, content_type=content_type)
+    _bucket().blob(_path(aoi_id, name)).upload_from_string(data, content_type=content_type, timeout=UPLOAD_TIMEOUT_S, retry=UPLOAD_RETRY)
 
 
 def get_bytes(aoi_id: str, name: str) -> bytes:
@@ -97,8 +102,15 @@ def save_png(aoi_id: str, name: str, png: bytes) -> str:
     return f"/api/layers/{aoi_id}/{name}.png"
 
 
+
 def put_run(run_id: str, name: str, data: bytes, content_type: str = "application/octet-stream") -> None:
-    _bucket().blob(f"runs/{run_id}/{name}").upload_from_string(data, content_type=content_type)
+    """JSON/GeoJSON is stored gzip-encoded (about 10x smaller); GCS decompresses on download for clients that do not
+    ask for gzip, so get_run still returns the plain bytes."""
+    blob = _bucket().blob(f"runs/{run_id}/{name}")
+    if name.endswith((".json", ".geojson")) and len(data) > 4096:
+        blob.content_encoding = "gzip"
+        data = gzip.compress(data, 6)
+    blob.upload_from_string(data, content_type=content_type, timeout=UPLOAD_TIMEOUT_S, retry=UPLOAD_RETRY)
 
 
 def get_run(run_id: str, name: str) -> bytes:
