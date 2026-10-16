@@ -1,35 +1,54 @@
 # Pravah progress
 
-## Current status (hand-off, 2026-10-16 02:45 IST)
+## Current status (hand-off, 2026-10-17 IST, after the policy-maker review)
 
-**Where we are:** S0-S19 built, tested and committed **locally**. Backend tests 65/65 (`cd backend && .venv/bin/pytest -q`);
-frontend `npm run build` passes; local smoke test passes (`scripts/smoke_test.sh http://localhost:8080`). UI checked with
-headless Chrome screenshots (Explore, Workspace, Advisory, Verify, Methods, 3D, Mumbai urban).
-**Deployed:** still only S0. Cloud Run + Firebase serve the S0 build until the human redeploys.
+**Where we are:** S0-S19 plus a policy-maker review pass, all committed **locally**. Backend tests 75/75
+(`cd backend && .venv/bin/pytest -q`); frontend `npm run build` passes; local smoke test passes
+(`scripts/smoke_test.sh http://localhost:8080`). UI checked in a real Chrome window (Brief, Map, Compare, Methods track
+record, Field check at phone width). **Deployed:** still only S0; the human redeploys.
 **Local preview:** backend `cd backend && .venv/bin/uvicorn app.main:app --port 8080`, frontend `cd frontend && npx vite`
--> http://localhost:5173 (Rudraprayag `/area/56f044f26351`, Mumbai `/area/d277268c1783`). Last smoke test (local) passed;
-it left Rudraprayag's latest run as `00326e8c0801` (record rain, Gemini advisory ready).
+-> http://localhost:5173. Decision view is the default (top-right switch); Analyst view shows every control.
+
+**What changed in the policy review (17 Oct):**
+- Brief rebuilt for a District Magistrate: deterministic bottom line (who moves, from where, by when, shelter gap), rounded
+  figures with a sensitivity range (depth +-30 %, population +-20 %), "who must move" breakdown, OSM place names and landmarks
+  instead of ids, one responsible department and a deadline per action, Sphere supplies, official IMD/CWC panel (typed by
+  staff) with IMD, CWC and Google Flood Hub links, Draft -> Reviewed -> Approved with immutable versions and an audit trail,
+  Hindi (numbers checked), WhatsApp / 2G plain text.
+- Map: clock times for forecast scenarios and an evacuation-window marker, IMD rain presets, pilgrims/tourists input,
+  gauge-style river input, searchable shelters, only used shelters drawn, one meaning per colour (red = closed), dashed
+  white area boundary, scenario comparison tab, technical layers and 3D only in Analyst view.
+- Field check works offline on phones (IndexedDB queue, device location). Sign-in and roles coded, **off by default**
+  (enable: docs/CONFIG.md). Old areas can be archived from Explore.
+- Evidence: `scripts/event_replay.py` replays IMERG rain of recorded events; results on Methods -> Track record.
+  **Finding:** the Himalayan landslide trigger was NOT reached for any of 3 recorded Rudraprayag events (0.36-0.95 of the
+  threshold) -> stated in Methods, limitations and every brief where the trigger is not reached. Mumbai: reached for both.
 
 **Human to-do (in order):**
 1. Deploy (agent deploys are blocked):
    `./scripts/deploy_backend.sh` then `cd frontend && npm run build && cd .. && ~/.npm-global/bin/firebase deploy --only hosting --project project-0fd9c4ae-bf90-452f-a80`
-2. Smoke test the live URL: `./scripts/smoke_test.sh` (health -> demo AOI -> run -> rules + Gemini advisory).
-3. Demo day only: `MIN_INSTANCES=1 ./scripts/deploy_backend.sh`; set back to 0 afterwards.
-4. Click through: Explore -> Rudraprayag -> Run -> hours -> close a shelter -> rerun -> Advisory -> Print; Ask Pravah; 3D; Verify.
-5. S18.5: confirm submission requirements on the Hack2skill dashboard (repo, video, deck, write-up).
-6. Optional: confirm NASA GLC and GRIP4 licence terms; Weather API caching period.
+2. Smoke test the live URL: `./scripts/smoke_test.sh`.
+3. Decide on sign-in for the demo (docs/CONFIG.md steps; leaving it off lets judges try everything, approvals then record
+   typed names as unverified).
+4. Demo day only: `MIN_INSTANCES=1 ./scripts/deploy_backend.sh`; set back to 0 afterwards.
+5. Click through (Decision view): Explore -> Rudraprayag -> Brief (Hindi, Share, Approve) -> Map (hours, compare) -> Methods
+   track record; Analyst view: scenario presets, 3D, Ask Pravah.
+6. S18.5: confirm submission requirements on the Hack2skill dashboard (repo, video, deck, write-up).
+7. Optional: confirm NASA GLC and GRIP4 licence terms; Weather API caching period.
 
-**Demo areas** (cached, latest run + Gemini advisory ready): Rudraprayag `56f044f26351` (river, record rain: 2,295 to move,
-gap 1,367) and Mumbai Kurla-Mithi `d277268c1783` (urban, 60 mm/h early-peak 3 h: 1.7 km2 ponding, 10,869 to move, gap 839,
-20 drains ranked). Re-run `scripts/preprocess_demo_aoi.py all` after any engine change.
+**Demo areas** (cached; latest run + Gemini brief ready): Rudraprayag `56f044f26351` (record rain, run `cd03a7237c8c`:
+about 2,300 to move, range 1,850-2,750, gap about 1,350, move before hour 4) and Mumbai Kurla-Mithi `d277268c1783`
+(60 mm/h early peak 3 h, run `b72eb7c305fb`: about 10,900 to move, range 3,450-22,600, gap about 840, named
+neighbourhoods). Re-run `scripts/preprocess_demo_aoi.py all` after engine changes; `scripts/rerender_pngs.py` after
+render changes; `scripts/event_replay.py` to refresh the track record (it changes each area's latest run, so run a demo
+scenario afterwards).
 
-**Key config knobs** (`backend/app/config.py`): Gemini model/thinking; `lsi_threshold` (auto: Dahal & Hasegawa in the Himalaya,
-Caine elsewhere); `lsi_modulation` (class_shift); `lsi_close_share` 0.2; `apply_arf`; `urban_drain_capacity_mm_h` 25;
-`urban_evac_depth_m` 0.5 / `_fragile_m` 0.3; `landslide_max_accuracy_km` 1.
+**Key config knobs** (`backend/app/config.py`): Gemini model/thinking; `lsi_threshold`; `lsi_modulation`; `lsi_close_share`;
+`apply_arf`; `urban_drain_capacity_mm_h`; `urban_evac_depth_m` / `_fragile_m`; `auth_required`, `admin_emails`, `default_role`.
 
-**Known limits:** HAND/rational screening, no gauges; landslide = susceptibility with a rain gate; urban = ponding only (no
-river overflow/tides); OSM gaps in hill towns; Gemini HIGH thinking takes 1-2 min per advisory (background job, pre-generated
-for demo runs); GFD shows no observed floods inside either demo box (backtest reports that honestly).
+**Known limits:** HAND/rational screening, no gauges; landslide trigger misses satellite-rain cloudbursts (see track
+record); urban = ponding only (no Mithi overflow or tides); OSM gaps in hill towns; clock times only for forecast
+scenarios; Gemini HIGH thinking takes about 1 min per brief (background job); IMD/CWC values are typed in, not fetched.
 
 ## Stage log
 
@@ -63,6 +82,7 @@ for demo runs); GFD shows no observed floods inside either demo box (backtest re
 | S17 deployment | scripts ready, **not deployed** | 2026-10-16 02:00 | `scripts/smoke_test.sh` (passes locally), deploy script sets Firebase CORS + `MIN_INSTANCES`; httpx URL logging silenced (keys were in query strings). | | | Run the deploy + smoke test (hand-off above). |
 | S18 demo prep | done (local) | 2026-10-16 02:25 | `scripts/preprocess_demo_aoi.py` (both demo AOIs + run + advisory), `scripts/backtest.py` (GFD POD/FAR/CSI -> `meta.backtest`, shown on Methods). Both boxes have no GFD pixels: reported as such. | | | Record the 3-minute demo video (S18.3). |
 | S19 3D view | done (local) | 2026-10-16 02:30 | `api/view3d.py` (DEM float32 mesh, hillshade + depth texture per hour, buildings with ground z, height and run risk), `pages/View3D.tsx` (standalone deck.gl, SimpleMeshLayer terrain + extruded PolygonLayer, exaggeration, time slider). | TerrainLayer did not render in this setup; a custom mesh in UTM metre offsets aligns exactly with buildings. No Google 3D tiles / Elevation API. | | |
+| Policy review | done (local), not deployed | 2026-10-17 | See hand-off. Backend: `services/places.py`, `auth.py`, facts (round_people, deadlines, bottom_line, supplies, road/shelter names), runs API (versions, review, audit, translate, share.txt), aoi API (runs list, official, archive), run fields (start_local, evac_window_h, demand_breakdown/range, gap_range), params (preset_label, visitors, rain_series_override), IMERG hourly; `scripts/event_replay.py`. Frontend: Decision/Analyst (`mode.ts`), Brief page, OfficialStatus, CompareRuns, TimeSlider clock + window, ScenarioPanel presets, LayerPanel gating, offline field check, sign-in (`auth.ts`). Tests `tests/test_policy.py` (10). | Ranges are a what-if band (depth +-30 %, population +-20 %), not a statistical interval. deck.gl overlay is non-interleaved in all browsers (9.4 interleaved race). Approvals without sign-in record typed names as unverified. IMD/CWC entered by staff (no scraping). | Satellite-rain landslide trigger (LHASA-style percentile) not yet built. | Deploy; decide sign-in. |
 
 ## Decisions
 - `pravah/` has its own git repo (`git init` inside it); the parent home directory is also a git repo, left untouched.
@@ -79,3 +99,14 @@ for demo runs); GFD shows no observed floods inside either demo box (backtest re
   urban/scope fixes found while testing Mumbai. Human (16 Oct): UI must look and feel like a Google product -> Material 3.
 - Landslide modulation changed from graded g (16 Oct "soften + scope") to class shift + LHASA-style rain gate (configurable,
   `lsi_modulation=graded_g` restores the old behaviour).
+- Policy review (17 Oct, human "do all" after a critique): Decision view is the default; analysts switch to Analyst view.
+- Brief headline is deterministic (bottom line); Gemini writes the situation summary and recommendations, still validated.
+- Uncertainty is shown as a sensitivity range: demand re-counted with flood depth x0.7/x1.3 and population x0.8/x1.2.
+- Every action has one owner from a fixed list of Indian district departments and a model-derived deadline.
+- Supplies follow Sphere 2018 minimums (water 15 L/p/d, food 2,100 kcal/p/d, latrine per 20, 3.5 m2, blanket, hygiene kit per 5).
+- Place names come from OSM place=* (cached per AOI); Google geocoding is not used for labels (no caching of Maps content).
+- Sign-in uses Firebase Authentication (Google accounts) behind `AUTH_REQUIRED` (default false); roles viewer/field/analyst/approver/admin.
+- Official IMD/CWC values are typed in by staff and stored with name and time; the app links to IMD, CWC and Google Flood Hub.
+- deck.gl GoogleMapsOverlay runs non-interleaved everywhere: 9.4's interleaved mode can create the Deck before the map's GL
+  context arrives, leaving a 300x150 canvas (layers clipped); seen in Chrome and Safari.
+- Event replays use IMERG V07 hourly rain; the landslide trigger miss in Rudraprayag is published, not tuned away.
