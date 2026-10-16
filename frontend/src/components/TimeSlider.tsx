@@ -16,12 +16,9 @@ export default function TimeSlider({ hours, hour, setHour, rain }: { hours: numb
       <div className="grow stack-s" style={{ gap: 0 }}>
         <div className="rainbars" aria-hidden>{rain.map((r, i) => <i key={i} className={i < hour ? "on" : ""} style={{ height: `${10 + 90 * (r / max)}%` }} title={`${r.toFixed(1)} mm/h`} />)}</div>
         {hours > 1 ? <Slider label="" value={hour} min={1} max={hours} onChange={setHour} format={() => ""} />
-          : <div style={{ height: 44 }} />}
+          : <div style={{ height: 28 }} />}
       </div>
-      <div className="stack-s" style={{ gap: 0, alignItems: "flex-end" }}>
-        <span className="hour">Hour {hour} / {hours}</span>
-        <span className="body-s muted num">{rain[hour - 1]?.toFixed(1) ?? "–"} mm/h</span>
-      </div>
+      <span className="hour">Hour {hour}/{hours} <span className="muted num">· {rain[hour - 1]?.toFixed(1) ?? "–"} mm/h</span></span>
     </div>
   );
 }

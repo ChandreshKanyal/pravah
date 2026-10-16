@@ -9,6 +9,7 @@ import ForecastStrip from "../components/ForecastStrip";
 import HistoryPanel from "../components/HistoryPanel";
 import LayerPanel, { type LayerKey } from "../components/LayerPanel";
 import { Button, Dialog, Fab, Field, Icon, Linear, Tabs, nf, useSnackbar } from "../components/m3";
+import MapLegend from "../components/MapLegend";
 import { AreaOutline, MapCanvas, type MapType } from "../components/MapCanvas";
 import Results from "../components/Results";
 import ScenarioPanel from "../components/ScenarioPanel";
@@ -217,7 +218,7 @@ export default function Workspace() {
       <main className="ws-map">
         <MapCanvas center={{ lat: 30.28, lng: 78.98 }} zoom={12} layers={layers} mapTypeId={mapType}>
           <FlyTo target={fly} />
-          <AreaOutline bbox={status?.bbox} fitKey={fitT} padding={{ top: 150, right: 72, bottom: 150, left: 48 }} />
+          <AreaOutline bbox={status?.bbox} fitKey={fitT} padding={{ top: 64, right: 200, bottom: 88, left: 32 }} />
           <Traffic on={on.has("traffic")} />
           <DrawControl mode={drawMode}
             onFinish={(poly) => { setDrawMode(null); set({ blocked_polygons: [...p.blocked_polygons, poly] }); snack("Road block added. Run the scenario to reroute."); }}
@@ -227,6 +228,11 @@ export default function Workspace() {
         <div className="top">
           <ForecastStrip fc={fc} selected={["forecast", "worst", "best"].includes(p.rain_source) ? p.forecast_day_index : null}
             onPick={(i) => { set({ forecast_day_index: i, rain_source: ["worst", "best"].includes(p.rain_source) ? p.rain_source : "forecast" }); setTab("scenario"); }} />
+          {status?.bbox && (
+            <button className="fc-chip sl" onClick={() => setFitT(Date.now())} title="Zoom to the simulated area">
+              <span className="sq" />{status.name ?? "Simulated area"}<Icon name="center_focus_strong" className="sm" />
+            </button>
+          )}
         </div>
 
         {drawMode && (
@@ -237,18 +243,12 @@ export default function Workspace() {
           </div>
         )}
 
-        {status?.bbox && (
-          <div className="area-chip">
-            <button className="chip elevated sl" onClick={() => setFitT(Date.now())} title="Zoom to the simulated area">
-              <span className="sq" /> Simulated area · {status.name ?? "this area"}<Icon name="center_focus_strong" className="sm" />
-            </button>
-          </div>
-        )}
+        <MapLegend on={on} hasRun={!!run} blocked={p.blocked_polygons.length > 0} />
 
         <div className="bottom">
           <LayerPanel on={on} toggle={toggle} hasRun={!!run} mapType={mapType} setMapType={setMapType} urban={status?.mode === "urban"} />
           {run ? <TimeSlider hours={run.rain_series_mm_h.length} hour={hour} setHour={setHour} rain={run.rain_series_mm_h} /> : <span className="spacer" />}
-          <div style={{ marginRight: 56 }}><Fab icon="auto_awesome" label="Ask Pravah" variant="gemini" onClick={() => setChatOpen(true)} /></div>
+          <div style={{ marginRight: 56 }}><Fab icon="auto_awesome" label="Ask Pravah" variant="gemini" small onClick={() => setChatOpen(true)} /></div>
         </div>
 
         {!ready && (
