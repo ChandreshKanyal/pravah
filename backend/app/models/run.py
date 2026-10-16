@@ -76,4 +76,9 @@ class RunResult(BaseModel):
     timings_s: dict[str, float] = {}
     methods: dict = {}
     drains: list[dict] = []  # S13 urban: ranked drain/culvert inspection points (D1..)
-    ponding_png_url: str = ""  # S13 urban: ponding likelihood at the last hour  # which formulas/thresholds this run used (shown on Methods and in the advisory)
+    ponding_png_url: str = ""
+    start_local: str | None = None  # local clock time of hour 1 (forecast scenarios), "YYYY-MM-DDTHH:00"; None = hypothetical
+    evac_window_h: int | None = None  # first hour an evacuation route or bridge is cut: move people before this hour
+    demand_breakdown: dict = {}  # people who need to move: {"flood", "landslide", "both"}
+    demand_range: list[int] = []  # [low, high] sensitivity: flood depth -/+30 %, population -/+20 %
+    gap_range: list[int] = []  # capacity gap at the low/high demand (placed capacity held fixed; approximate)  # S13 urban: ponding likelihood at the last hour  # which formulas/thresholds this run used (shown on Methods and in the advisory)

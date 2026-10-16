@@ -98,6 +98,7 @@ def plan(area, p: ScenarioParams, depth: np.ndarray, lsi_dyn: np.ndarray | None,
             demand_f[node] = demand_f.get(node, 0.0) + float(people)
             access_pm[node] = access_pm.get(node, 0.0) + float(people) * float(dm)
     demand = {n: int(math.ceil(v)) for n, v in demand_f.items() if v >= 0.5}
+    why = _demand_breakdown(exposure_ctx, depth, lsi_dyn, thr_b, thr_un, cfg.lsi_demand_class)
     # mean access walk per node (straight line x 1.3 detour factor, flat Tobler speed)
     access_s = {n: 1.3 * access_pm.get(n, 0.0) / max(demand_f[n], 1e-9) / (routing.WALK_FLAT_KMH / 3.6) for n in demand}
     # actual travel time per edge: free-flow time slowed by crowding; the landslide/slope factors in `w` are risk
@@ -143,6 +144,10 @@ def plan(area, p: ScenarioParams, depth: np.ndarray, lsi_dyn: np.ndarray | None,
     # S8.5-S8.7 travel times, assignment, routes
     times = routing.travel_times(G, nodes_of, p.max_travel_min * 60)
     alloc, gap, _ = routing.transport_solve(demand, caps, times)
+    total = int(sum(demand.values()))
+    ratio = total / why["central"] if why["central"] > 0 else 0.0
+    lo, hi = int(round(why["low"] * ratio)), int(round(why["high"] * ratio))
+    placed = total - int(gap) if gap > 0 else sum(caps.values())  # reachable capacity (lower bound when gap > 0)
     assigned = {sid: 0 for sid in caps}
     routes = []
     import networkx as nx
@@ -212,7 +217,35 @@ def plan(area, p: ScenarioParams, depth: np.ndarray, lsi_dyn: np.ndarray | None,
                                 for s in supply if s["source"] == "assembly"],
             "staging_points": staging, "roads_geojson": json.dumps(roads_fc, separators=(",", ":")), "routes_geojson": json.dumps(routes_fc, separators=(",", ":")),
             "routes_summary": [r["properties"] for r in routes_fc["features"]][:50],
-            "people_to_evacuate": int(sum(demand.values()))}
+            "people_to_evacuate": total,
+            "demand_breakdown": {k: int(round(why[k] * ratio)) for k in ("flood", "landslide", "both")},
+            "demand_range": [min(lo, total), max(hi, total)],
+            "gap_range": [max(0, lo - placed), max(0, hi - placed)]}
+
+
+# Sensitivity for the decision brief: HAND/rational depths are uncalibrated (errors of tens of percent are normal) and
+# gridded population is uncertain at village scale, so the range re-counts demand with depth x0.7 / x1.3 and people
+# x0.8 / x1.2. It is a what-if band, not a statistical confidence interval.
+DEPTH_SENS, POP_SENS = 0.3, 0.2
+
+
+def _demand_breakdown(ctx: dict, depth: np.ndarray, lsi_dyn, thr_b, thr_un, ls_class: int) -> dict:
+    pop_b, pop_un = ctx["pop_b"], ctx["pop_un"]
+    d_b = np.nan_to_num(ctx["d_b"]).max(axis=0)
+    ls_b = (ctx["ls_b"] >= ls_class).any(axis=0)
+    d_un = np.nan_to_num(depth).max(axis=0)
+    ls_un = lsi_dyn.max(axis=0) >= ls_class if lsi_dyn is not None else np.zeros(d_un.shape, bool)
+
+    def count(scale: float) -> tuple[float, np.ndarray, np.ndarray]:
+        fb, fu = d_b * scale >= thr_b, d_un * scale >= thr_un
+        return float(pop_b[fb | ls_b].sum() + pop_un[fu | ls_un].sum()), fb, fu
+
+    central, fb, fu = count(1.0)
+    return {"central": central,
+            "flood": float(pop_b[fb & ~ls_b].sum() + pop_un[fu & ~ls_un].sum()),
+            "landslide": float(pop_b[ls_b & ~fb].sum() + pop_un[ls_un & ~fu].sum()),
+            "both": float(pop_b[fb & ls_b].sum() + pop_un[fu & ls_un].sum()),
+            "low": count(1 - DEPTH_SENS)[0] * (1 - POP_SENS), "high": count(1 + DEPTH_SENS)[0] * (1 + POP_SENS)}
 
 
 def routing_wet() -> float:

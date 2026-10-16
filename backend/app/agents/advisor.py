@@ -15,8 +15,12 @@ Produce 6-12 recommendations across three horizons:
 - seasonal (pre-monsoon: drains to clear, roads/slopes to inspect, shelters to stock),
 - structural (long-term: where permanent shelters/medical facilities or better evacuation roads are justified).
 Each recommendation must list evidence_ids that exist in the facts and a 'why' that quotes numbers from those facts.
+Write for a District Magistrate: name places (the place/name fields: villages, wards, roads, shelters) in action and
+location_label; never use a bare id like "C1" there (ids go only in evidence_ids). Pick the one responsible department
+(owner) per action. Prefer rounded people figures ("rounded") when you quote key numbers.
 Do not invent numbers, places or ids. Every number in 'why' must appear in the facts you cite. Priority P1 = life-safety
-within the scenario window. Use the words estimated, susceptibility, suggested; never say "will flood" or "safe"
+within the scenario window. The headline is a 2-sentence situation summary (what is coming, where the risk is).
+Use the words estimated, susceptibility, suggested; never say "will flood" or "safe"
 (shelters are "reachable in this scenario"). Building classes are proxies ("likely ..."). Include 3-5 limitations.
 
 FACTS JSON:
@@ -37,21 +41,14 @@ def generate_advisory(run: dict, area_extra: dict | None = None, use_gemini: boo
                 if not any(r.horizon == h for r in kept):
                     kept += [r for r in rules if r.horizon == h][:2]
             if kept:
-                headline = draft.headline
+                summary = draft.headline
                 vals = F._fact_numbers([x for x in facts["key_numbers"]] + list(F.fact_index(facts).values()), facts)
-                if any(not F._ok_number(n, vals) for n in F._numbers(headline)):
-                    dropped.append({"action": "headline", "reason": "numbers not in facts; replaced"})
-                    headline = _rules_headline(facts)
-                return F.finalize(run["run_id"], facts, kept, headline, draft.limitations, "gemini", dropped,
-                                  gemini.model_name("pro"))
+                if any(not F._ok_number(n, vals) for n in F._numbers(summary)):
+                    dropped.append({"action": "summary", "reason": "numbers not in facts; removed"})
+                    summary = ""
+                return F.finalize(run["run_id"], facts, kept, F.bottom_line(facts), draft.limitations, "gemini", dropped,
+                                  gemini.model_name("pro"), summary=summary)
         except Exception as e:  # any Gemini/parse failure -> deterministic brief
             log.warning("advisor fell back to rules: %s", e)
-    headline = _rules_headline(facts)
     recs, _ = F.validate(rules, facts)  # attaches locations; rules cite only existing ids
-    return F.finalize(run["run_id"], facts, recs or rules, headline, F.RULE_LIMITATIONS, "rules_fallback")
-
-
-def _rules_headline(facts: dict) -> str:
-    k = {x["id"]: x["value"] for x in facts["key_numbers"]}
-    return (f"An estimated {k['K7']} people need to move in this scenario; capacity gap {k['K3']}, "
-            f"{k['K4']} bridges closing, {k['K1']} people in flood water at the peak.")
+    return F.finalize(run["run_id"], facts, recs or rules, F.bottom_line(facts), F.RULE_LIMITATIONS, "rules_fallback")

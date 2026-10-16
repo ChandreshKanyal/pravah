@@ -8,12 +8,13 @@ import threading
 from functools import lru_cache
 
 import numpy as np
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Response
 from google.api_core.exceptions import NotFound
 from PIL import Image
 
 from scipy import ndimage
 
+from app.auth import require
 from app.engines.render import DEPTH_COLORS, DEPTH_EDGES, _rgb, _smooth_mask
 from app.services import firestore as fs, storage
 
@@ -159,13 +160,13 @@ def base_texture(aoi_id: str):
 
 
 @router.get("/api/aoi/{aoi_id}/3d/buildings.json")
-def buildings_static(aoi_id: str):
+def buildings_static(aoi_id: str, user: dict = Depends(require("viewer"))):
     """Buildings before any run: same format, risk unknown (shown as low)."""
-    return buildings("none", aoi_id)
+    return buildings("none", aoi_id, user)
 
 
 @router.get("/api/runs/{run_id}/3d/buildings.json")
-def buildings(run_id: str, aoi_id: str):
+def buildings(run_id: str, aoi_id: str, user: dict = Depends(require("viewer"))):
     """[{p: [[x, y], ...] metre offsets, z: ground m, h: height m, r: risk 0 critical..3 low}] (cached per run)."""
     if run_id != "none":
         try:

@@ -197,8 +197,9 @@ def historical_max_mm(area: Area) -> float:
     return mm
 
 
-def rain_series(p: ScenarioParams, area: Area) -> tuple[list[float], str, list[str]]:
-    """S10.5: forecast / worst / best / historical_extreme / manual hourly series (mm/h) and a human label."""
+def rain_series(p: ScenarioParams, area: Area) -> tuple[list[float], str, list[str], str | None]:
+    """S10.5: forecast / worst / best / historical_extreme / manual hourly series (mm/h), a human label, warnings and
+    the local clock time of hour 1 for forecast scenarios (None for hypothetical rain)."""
     from datetime import date as _date
     from app.services.weather import get_provider
     H, warnings = p.duration_h, []
@@ -218,7 +219,7 @@ def rain_series(p: ScenarioParams, area: Area) -> tuple[list[float], str, list[s
                 label += f", {src.value} case x{mult:g}"
             if sum(series) == 0:
                 warnings.append("The forecast shows no rain for this window; try historical extreme or manual rain")
-            return series, label, warnings
+            return series, label, warnings, f"{day}T{start:02d}:00"
         except Exception as e:  # provider down or no key: fall back, never fail the run
             warnings.append(f"Forecast unavailable ({e.__class__.__name__}); used manual rain instead")
     elif src == RainSource.historical_extreme:
@@ -229,12 +230,12 @@ def rain_series(p: ScenarioParams, area: Area) -> tuple[list[float], str, list[s
             depth = rainfall.daily_to_duration_mm(mm, H)
             series = rainfall.distribute_total(depth, H, p.hyetograph)
             return series, (f"Historical extreme: wettest {H} h of a {mm:.0f} mm day (CHIRPS 2001-2024 max within 5 km; "
-                            f"{depth:.0f} mm by the IMD 1/3 rule)"), warnings
+                            f"{depth:.0f} mm by the IMD 1/3 rule)"), warnings, None
         except Exception as e:
             warnings.append(f"Historical extreme unavailable ({e.__class__.__name__}); used manual rain instead")
     series = rainfall.manual_series(p.manual_intensity_mm_h, H, p.hyetograph)
-    label = f"Manual {p.manual_intensity_mm_h:g} mm/h for {H} h ({p.hyetograph.replace('_', ' ')})"
-    return series, label, warnings
+    label = p.preset_label or f"Manual {p.manual_intensity_mm_h:g} mm/h for {H} h ({p.hyetograph.replace('_', ' ')})"
+    return series, label, warnings, None
 
 
 def screening(area: Area, daily: list[dict], hourly: list[dict], duration_h: int) -> list[dict]:
@@ -268,7 +269,7 @@ def run_pipeline(p: ScenarioParams) -> RunResult:
     run_id = uuid.uuid4().hex[:12]
 
     cfg = get_settings()
-    rain, rain_label, warnings = rain_series(p, area)
+    rain, rain_label, warnings, start_local = rain_series(p, area)
     C, tc_h, A_loc = reach_params(area, cfg.runoff_c)
     h, _Q = flood.hourly_envelope(rain, tc_h, C, A_loc, get_src(area, p.manning_n), p.river_offset_m,
                                   inflow_m3s=external_inflow(area, p.upstream_inflow_m3s), arf=cfg.apply_arf)
@@ -397,7 +398,11 @@ def run_pipeline(p: ScenarioParams) -> RunResult:
         roads_geojson_url=f"/api/runs/{run_id}/files/roads.geojson" if ev else "",
         drains=drains_out, ponding_png_url=f"/api/runs/{run_id}/layers/ponding.png" if pond_png is not None else "",
         routes_geojson_url=f"/api/runs/{run_id}/files/routes.geojson" if ev else "",
+        start_local=start_local, evac_window_h=_evac_window(ev),
+        demand_breakdown=ev.get("demand_breakdown", {}), demand_range=ev.get("demand_range", []),
+        gap_range=ev.get("gap_range", []),
     )
+    _label_places(area, result)
     timings["total"] = round(time.time() - t0, 2)
     result.timings_s = timings
     result.methods = methods
@@ -405,6 +410,39 @@ def run_pipeline(p: ScenarioParams) -> RunResult:
     fs.update_aoi(p.aoi_id, {"latest_run_id": run_id})
     log.info("run %s: %s", run_id, timings)
     return result
+
+
+def _evac_window(ev: dict) -> int | None:
+    """First hour an evacuation route stops being passable, else the first bridge closure: the 'move before' hour."""
+    hrs = [r["passable_until_h"] for r in ev.get("routes_summary", []) if r.get("passable_until_h")]
+    if not hrs:
+        hrs = [b["first_closed_hour"] for b in ev.get("bridges", []) if b.get("first_closed_hour")]
+    return int(min(hrs)) if hrs else None
+
+
+def _label_places(area: Area, result: RunResult) -> None:
+    """Nearest OSM settlement for clusters, staging and assembly points, bridges and routes (best effort)."""
+    try:
+        from app.services import places
+        pl = places.area_places(area.aoi_id, area.grid)
+        lm = places.area_landmarks(area.aoi_id)
+    except Exception as e:
+        log.info("place labels unavailable: %s", e)
+        return
+    if not pl:
+        return
+    for c in result.exposure.clusters:
+        c["place"] = places.label(pl, *c["centroid"], landmarks=lm)
+        c["place_hi"] = places.label(pl, *c["centroid"], hindi=True, landmarks=lm)
+    for coll in (result.staging_points, result.assembly_points, result.routes):
+        for x in coll:
+            lon, lat = (x.get("lon"), x.get("lat")) if "lon" in x else (x.get("from_lon"), x.get("from_lat"))
+            if lon is not None:
+                x["place"] = places.label(pl, lon, lat, landmarks=lm)
+    for b in result.bridges:
+        b.place = places.label(pl, b.lon, b.lat)  # BridgeStatus/ShelterResult allow extra fields
+    for s in result.shelters:
+        s.place = places.label(pl, s.lon, s.lat)
 
 
 def _exposure(area: Area, p: ScenarioParams, depth: np.ndarray, lsi_dyn: np.ndarray | None,
@@ -418,6 +456,14 @@ def _exposure(area: Area, p: ScenarioParams, depth: np.ndarray, lsi_dyn: np.ndar
     k = population.scale_factor(base_total, p.pop_multiplier, p.pop_total_override)
     # exposure counts only people inside the drawn area (the 3 km buffer is for hydrology, and has no buildings)
     pop_b, pop_un = b["pop_base"] * k, area.pop_unattr * area.aoi_mask * k
+    if p.visitors > 0:  # pilgrims/tourists: spread over the crowding index inside the drawn area (S9 attractors)
+        try:
+            crowd = np.nan_to_num(storage.load_layers(area.aoi_id, "crowding")["crowd"]) * area.aoi_mask
+            if crowd.sum() > 0:
+                pop_un = pop_un + p.visitors * crowd / crowd.sum()
+                warnings.append(f"{p.visitors:,} visitors added where the crowding index is high (temples, markets, hotels)")
+        except Exception as e:
+            warnings.append(f"Visitors not added: crowding layer unavailable ({e.__class__.__name__})")
     share = float(b["pop_base"].sum()) / base_total if base_total else 0.0
     if share < 0.5:
         warnings.append(f"Only {share:.0%} of residents could be placed in mapped buildings (Open Buildings coverage); "

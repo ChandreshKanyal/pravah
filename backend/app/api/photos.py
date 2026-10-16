@@ -7,11 +7,12 @@ import uuid
 from datetime import datetime, timezone
 from typing import Literal
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from google.genai import types
 from PIL import ExifTags, Image
 
+from app.auth import require
 from app.models.photo import PHOTO_TO_BUILDING, BuildingPhotoResult, DrainPhotoResult
 from app.services import firestore as fs
 from app.services import gemini, storage
@@ -86,7 +87,8 @@ def classify(data: bytes, kind: str):
 @router.post("/api/photos")
 async def upload_photo(file: UploadFile = File(...), aoi_id: str = Form(...),
                        kind: Literal["building", "drain"] = Form("building"),
-                       lat: float | None = Form(None), lng: float | None = Form(None)):
+                       lat: float | None = Form(None), lng: float | None = Form(None),
+                       user: dict = Depends(require("field"))):
     raw = await file.read()
     if len(raw) > MAX_BYTES:
         raise HTTPException(413, "Photo larger than 12 MB")
@@ -132,6 +134,8 @@ async def upload_photo(file: UploadFile = File(...), aoi_id: str = Form(...),
                                   f"{PHOTO_TO_BUILDING[cls]}. Applied on the next run.")
             else:
                 doc["message"] = f"Drain {linked} marked {cls}. Applied on the next run (urban drain priority)."
+    doc["uploaded_by"] = user.get("name") or "unverified user"
+    doc["uploader_verified"] = bool(user.get("verified"))
     fs.set_doc("photos", photo_id, doc)
     return doc
 

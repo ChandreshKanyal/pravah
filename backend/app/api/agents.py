@@ -1,9 +1,10 @@
 """S14 endpoints: /api/plan (language -> params diff, nothing runs) and /api/chat (analyst with tools)."""
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from app.auth import require
 from app.models.scenario import ScenarioParams
 from app.services import storage
 
@@ -25,7 +26,7 @@ class ChatRequest(BaseModel):
 
 
 @router.post("/api/plan")
-async def plan(req: PlanRequest):
+async def plan(req: PlanRequest, user: dict = Depends(require("analyst"))):
     from app.agents.planner import plan as run_plan
     if not storage.exists(req.aoi_id, "shelters.json"):
         raise HTTPException(409, "Area not prepared yet")
@@ -38,7 +39,7 @@ async def plan(req: PlanRequest):
 
 
 @router.post("/api/chat")
-async def chat(req: ChatRequest):
+async def chat(req: ChatRequest, user: dict = Depends(require("analyst"))):
     from app.agents.analyst import chat as run_chat
     try:
         return await run_chat(req.session_id[:64], req.aoi_id, req.run_id, req.message[:2000])

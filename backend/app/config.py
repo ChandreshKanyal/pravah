@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     urban_evac_depth_m: float = 0.5
     urban_evac_depth_fragile_m: float = 0.3
     cors_origins: str = "http://localhost:5173,http://localhost:4173"
+    # Sign-in and roles (app/auth.py). Local default: open, anonymous users act as default_role.
+    auth_required: bool = False
+    admin_emails: str = ""  # comma-separated; these accounts get the admin role
+    default_role: str = "analyst"  # role for signed-in users without a users/{email} document (and anonymous when open)
 
 
 @lru_cache

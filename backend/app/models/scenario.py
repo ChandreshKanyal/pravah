@@ -36,3 +36,5 @@ class ScenarioParams(BaseModel):
     bridge_cut_stage_m: float = 3.0  # bridge closed when its reach stage >= this
     max_travel_min: int = 60
     sqm_per_person: float = 3.5  # Sphere minimum covered space
+    preset_label: str | None = None  # e.g. "IMD very heavy rain (204 mm/day)": shown instead of the manual label
+    visitors: int = 0  # pilgrims/tourists present on top of residents, spread by the crowding index (S9)
