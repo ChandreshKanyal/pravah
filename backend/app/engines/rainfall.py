@@ -61,34 +61,6 @@ def daily_to_duration_mm(p24_mm: float, duration_h: int) -> float:
     return float(p24_mm) * (t / 24) ** (1 / 3)
 
 
-# Rainfall intensity-duration landslide thresholds I = a * D^b (I mm/h, D h)
-LANDSLIDE_THRESHOLDS = {
-    "caine": (14.82, -0.39, "Caine (1980), global"),
-    "dahal_hasegawa": (73.90, -0.79, "Dahal & Hasegawa (2008), Nepal Himalaya"),
-}
-
-
-def himalayan(lon: float, lat: float) -> bool:
-    """Rough box for the Himalayan arc (Kashmir to Arunachal), where the regional threshold applies."""
-    return 26.5 <= lat <= 36.5 and 72.5 <= lon <= 97.5
-
-
-def threshold_name(setting: str, lon: float, lat: float) -> str:
-    if setting in LANDSLIDE_THRESHOLDS:
-        return setting
-    return "dahal_hasegawa" if himalayan(lon, lat) else "caine"
-
-
-def landslide_threshold(D_h, name: str = "caine"):
-    a, b, _ = LANDSLIDE_THRESHOLDS[name]
-    return a * np.asarray(D_h, dtype=float) ** b
-
-
-def caine_threshold(D_h):
-    """Caine (1980) global rainfall intensity-duration landslide threshold (mm/h)."""
-    return landslide_threshold(D_h, "caine")
-
-
 def design_storm_weights(duration_h: int) -> np.ndarray:
     """Hourly shares of an early-peaked design storm (sum 1): the alternating block method (Chow, Maidment & Mays 1988)
     on the IMD reduction curve P_t ~ t^(1/3), so every run of k consecutive hours around the peak holds the depth the

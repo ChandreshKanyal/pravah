@@ -43,14 +43,12 @@ def run_summary(run: dict) -> dict:
         "travel_mode": p.get("travel_mode"), "disabled_shelters": p.get("disabled_shelter_ids", []),
         "blocked_areas": len(p.get("blocked_polygons", [])), "extra_shelters": len(p.get("extra_shelters", [])),
         "people_in_flood_water_peak": max(e.get("exposed_pop_by_hour") or [0]),
-        "people_in_landslide_hazard_peak": max(e.get("landslide_exposed_pop_by_hour") or [0]),
         "buildings_high_or_critical": br.get("critical", 0) + br.get("high", 0),
         "flooded_km2_worst_hour": (run.get("flooded_area_km2_by_hour") or [0])[-1],
         "people_to_evacuate": run.get("people_to_evacuate", 0), "capacity_gap": run.get("capacity_gap_people", 0),
         "usable_shelters": sum(1 for s in shel if s["status"] == "usable"), "shelters_total": len(shel),
         "bridges_closing": [{"id": b["id"], "hour": b["first_closed_hour"]} for b in bridges if b.get("first_closed_hour")][:8],
         "top_clusters": [{"id": c["id"], "people": c["people"], "risk": c["risk_class"]} for c in e.get("clusters", [])[:5]],
-        "landslide_trigger_hours": run.get("methods", {}).get("landslide_trigger_hours", []),
         "warnings": [w[:160] for w in run.get("warnings", [])[:5]],
     }
 
@@ -154,7 +152,7 @@ def compare_runs(tool_context: ToolContext, run_id_a: str, run_id_b: str) -> dic
     """
     a, b = run_summary(load_run(run_id_a)), run_summary(load_run(run_id_b))
     diff = {}
-    for k in ("people_in_flood_water_peak", "people_in_landslide_hazard_peak", "buildings_high_or_critical",
+    for k in ("people_in_flood_water_peak", "buildings_high_or_critical",
               "flooded_km2_worst_hour", "people_to_evacuate", "capacity_gap", "usable_shelters"):
         diff[k] = {"a": a[k], "b": b[k], "change": round(b[k] - a[k], 3)}
     ba = {x["id"]: x["hour"] for x in a["bridges_closing"]}
@@ -188,8 +186,7 @@ def list_bridges(tool_context: ToolContext, run_id: str | None = None) -> dict:
 
 
 def list_closed_roads(tool_context: ToolContext, hour: int | None = None, run_id: str | None = None) -> dict:
-    """Roads closed by a given hour, grouped by road name, longest first, with the reason (flood, bridge, landslide,
-    blocked).
+    """Roads closed by a given hour, grouped by road name, longest first, with the reason (flood, bridge, blocked).
 
     Args:
         hour: scenario hour (1-based); omit for the last hour.
@@ -217,7 +214,7 @@ def find_shelter_by_name(tool_context: ToolContext, name: str) -> dict:
 
 
 def get_historical_summary(tool_context: ToolContext) -> dict:
-    """Recorded past floods (Global Flood Database) and landslides (NASA catalog) for the current area, plus web leads
+    """Recorded past floods (Global Flood Database) for the current area, plus web leads
     if they were fetched."""
     from app.services import history
     h = history.aoi_history(tool_context.state["aoi_id"], fetch_web=False)

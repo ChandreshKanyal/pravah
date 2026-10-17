@@ -9,7 +9,6 @@ class ExposureSummary(BaseModel):
     total_pop: int = 0
     exposed_pop_by_hour: list[int] = []  # depth >= 0.05 m
     exposed_by_depth_band: dict[str, int] = {}  # "0.05-0.5","0.5-1.5",">1.5" at worst hour
-    landslide_exposed_pop_by_hour: list[int] = []  # lsi_dyn class >= 4
     buildings_by_risk: dict[str, int] = {}
     clusters: list[dict] = []  # id "C1".., centroid, people, max_depth, dominant_class, risk
 
@@ -28,7 +27,7 @@ class BridgeStatus(BaseModel):
     lon: float
     lat: float
     first_closed_hour: int | None  # None = stays open in this scenario
-    reason: str | None  # flood | bridge | landslide | blocked
+    reason: str | None  # flood | bridge | blocked
 
 
 class ShelterResult(BaseModel):
@@ -41,7 +40,7 @@ class ShelterResult(BaseModel):
     capacity: int
     assigned: int
     spare: int
-    status: str  # usable | flooded | landslide_risk | disabled | unreachable
+    status: str  # usable | flooded | disabled | unreachable
     note: str = ""
     capacity_confidence: str = "low"
 
@@ -61,7 +60,6 @@ class RunResult(BaseModel):
     stage_by_reach_m: dict[str, list[float]]  # reach_id -> stage per hour (envelope)
     flooded_area_km2_by_hour: list[float]
     depth_png_urls: list[str]  # one URL per hour (coloured overlay)
-    lsi_png_url: str = ""
     overlay_bounds: tuple[float, float, float, float]  # WGS84 bounds for overlays
     overlay_corners: list[list[float]] = []  # 4 corners for deck.gl BitmapLayer (UTM grid rotation)
     exposure: ExposureSummary = ExposureSummary()
@@ -84,6 +82,6 @@ class RunResult(BaseModel):
     ponding_png_url: str = ""
     start_local: str | None = None  # local clock time of hour 1 (forecast scenarios), "YYYY-MM-DDTHH:00"; None = hypothetical
     evac_window_h: int | None = None  # first hour an evacuation route or bridge is cut: move people before this hour
-    demand_breakdown: dict = {}  # people who need to move: {"flood", "landslide", "both"}
+    demand_breakdown: dict = {}  # people who need to move: {"flood"}
     demand_range: list[int] = []  # [low, high] sensitivity: flood depth -/+30 %, population -/+20 %
     gap_range: list[int] = []  # capacity gap at the low/high demand (placed capacity held fixed; approximate)  # S13 urban: ponding likelihood at the last hour  # which formulas/thresholds this run used (shown on Methods and in the advisory)

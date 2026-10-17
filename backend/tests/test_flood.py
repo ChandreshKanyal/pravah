@@ -3,7 +3,7 @@ import pytest
 
 from app.engines.flood import depth_from_stage, depth_stack, flooded_area_km2, hourly_envelope
 from app.engines.hydrology import SRC_STAGES
-from app.engines.rainfall import caine_threshold, hack_length_km, kirpich_tc_min, manual_series, rational_q, runoff_c
+from app.engines.rainfall import hack_length_km, kirpich_tc_min, manual_series, rational_q, runoff_c
 
 
 def test_t1_rational_q():
@@ -16,10 +16,6 @@ def test_t2_kirpich():
 
 def test_t3_hack():
     assert hack_length_km(50) == pytest.approx(13.28, abs=0.01)
-
-
-def test_t4_caine():
-    assert caine_threshold([1, 4, 24]) == pytest.approx([14.82, 8.63, 4.29], abs=0.01)
 
 
 def test_t6_depth_from_stage():

@@ -83,12 +83,11 @@ def test_place_label_prefers_bigger_places_and_reports_direction():
 
 def test_demand_breakdown_and_range():
     from app.pipeline.evac import _demand_breakdown
-    ctx = {"pop_b": np.array([10.0, 20.0, 30.0]), "pop_un": np.zeros((2, 2)),
-           "d_b": np.array([[0.4, 0.0, 0.06]]), "ls_b": np.array([[1, 5, 5]])}
-    out = _demand_breakdown(ctx, np.zeros((1, 2, 2)), None, 0.05, 0.05, 5)
-    assert out["flood"] == 10 and out["landslide"] == 20 and out["both"] == 30 and out["central"] == 60
-    # depth x0.7: 0.06 -> 0.042 is dry, but that building is still on a class-5 slope, so the low count is 60 x 0.8
-    assert out["low"] == pytest.approx(48.0) and out["high"] == pytest.approx(72.0)
+    ctx = {"pop_b": np.array([10.0, 20.0, 30.0]), "pop_un": np.zeros((2, 2)), "d_b": np.array([[0.4, 0.0, 0.06]])}
+    out = _demand_breakdown(ctx, np.zeros((1, 2, 2)), 0.05, 0.05)
+    assert out["flood"] == 40 and out["central"] == 40
+    # depth x0.7: 0.06 -> 0.042 is dry, so the low count is 10 x 0.8; x1.3 keeps both: 40 x 1.2
+    assert out["low"] == pytest.approx(8.0) and out["high"] == pytest.approx(48.0)
 
 
 def test_roles_and_auth_required(monkeypatch):

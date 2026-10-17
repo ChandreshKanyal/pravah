@@ -24,26 +24,6 @@ class Settings(BaseSettings):
     fsi_ahp_matrix: list[list[float]] = [
         [1, 1, 2, 2, 2, 2, 3], [1, 1, 1, 1, 1, 2, 2], [0.5, 1, 1, 1, 1, 2, 2], [0.5, 1, 1, 1, 1, 2, 2],
         [0.5, 1, 1, 1, 1, 1, 2], [0.5, 0.5, 0.5, 0.5, 1, 1, 1], [1 / 3, 0.5, 0.5, 0.5, 0.5, 1, 1]]
-    # S5.4 landslide AHP matrix, order [slope, rain, ndvi, drain, road, soil, curv, aspect]
-    lsi_ahp_matrix: list[list[float]] = [
-        [1, 1, 2, 2, 2, 2, 2, 3], [1, 1, 1, 2, 2, 2, 2, 3], [0.5, 1, 1, 1, 1, 1, 2, 2],
-        [0.5, 0.5, 1, 1, 1, 1, 1, 2], [0.5, 0.5, 1, 1, 1, 1, 1, 2], [0.5, 0.5, 1, 1, 1, 1, 1, 2],
-        [0.5, 0.5, 0.5, 1, 1, 1, 1, 1], [1 / 3, 1 / 3, 0.5, 0.5, 0.5, 0.5, 1, 1]]
-    # S5.2 says drop records worse than 10 km; 5-10 km points cannot inform 90 m slope classes (FR came out
-    # inverted for slope in Rudraprayag), so the default is 1 km. Set 10 to follow the spec literally.
-    landslide_max_accuracy_km: float = 1.0
-    # Landslide rain modulation and scope in routing (human decision 16 Oct: "soften + scope"; spec drift)
-    lsi_g_slope: float = 0.25
-    lsi_g_min: float = 0.75
-    lsi_g_max: float = 1.25
-    lsi_demand_class: int = 5  # buildings/grid people at or above this class need evacuation (spec: 4)
-    lsi_shelter_max_class: int = 4  # shelters above this class are ruled out (spec: 3)
-    lsi_close_share: float = 0.2  # road closes when this share of its length is class 5 (spec: any cell)
-    # Rainfall I-D threshold for landslide modulation: "auto" = Dahal & Hasegawa (2008) in the Himalayan arc,
-    # Caine (1980) elsewhere; or force "caine" / "dahal_hasegawa" (spec: Caine everywhere)
-    lsi_threshold: str = "auto"
-    # "class_shift": +-1 class by threshold exceedance (17 Oct); "graded_g": score x g (16 Oct); spec: score x clip(R)
-    lsi_modulation: str = "class_shift"
     # 2D flow model: 30 m cells x storm hours above this run on 60 m cells. 1.0 M (17 Oct, was 1.2 M): Rudraprayag 4 h
     # (1.15 M) took 142 s on Cloud Run at 30 m; at 60 m flooded area and people stayed within 4% (1.93 -> 2.00 km2,
     # 1,605 -> 1,608). Cities stay at 30 m: at 60 m Kalyan's people moved 2,525 -> 1,636 and Mumbai's 17,195 -> 21,172

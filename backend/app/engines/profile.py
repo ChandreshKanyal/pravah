@@ -6,7 +6,6 @@ physics applies where is decided per cell and per channel from the data, never b
   its rating curve in a run is dropped for that run;
 - waterlogging (ponding above storm-drain capacity) only in hollows whose catchment is mostly built-up: that is where
   storm drains exist and where water standing in streets matters; in fields and forest the rain soaks in (runoff C);
-- landslides on slopes of 15 deg or more (engines/landslide.actionable);
 - the flood depth is the deeper of the river and the waterlogging depth in each cell (compound flooding).
 
 The profile below describes the area from the same data; it sets defaults (ground conditioning for the flow model,
@@ -70,12 +69,10 @@ def area_profile(slope_deg: np.ndarray, lc_class: np.ndarray, mask: np.ndarray |
         hazards.append("river")
     if hollows_ok is not None and hollows_ok.any():
         hazards.append("waterlogging")
-    if steep >= 0.005:
-        hazards.append("landslide")
     river = ("a major river" if a_up >= 1000 else "a river" if a_up >= 50 else "streams") if ok.any() else None
     place = "Dense city" if built >= 0.6 else "Town" if urban else "Hill area" if hilly else "Rural area"
     head = f"{place}{' on ' + river if river else ''}{' with steep slopes' if hilly and place != 'Hill area' else ''}"
-    words = {"river": "river flooding", "waterlogging": "waterlogging", "landslide": "landslides"}
+    words = {"river": "river flooding", "waterlogging": "waterlogging"}
     line = head + (" · " + ", ".join(words[h] for h in hazards) if hazards else "")
     if urban and not ok.any() and reaches:
         line += " · channels act as storm drains"

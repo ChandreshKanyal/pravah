@@ -71,4 +71,4 @@ def test_profile_gates():
     ok = prof.built_hollows({"ws_label": ws, "v_dep": np.zeros(3)}, lc)
     assert ok.tolist() == [False, True, False]  # hollow 1 is 75% built, hollow 2 is 25%
     p = prof.area_profile(np.full((2, 4), 20.0), lc, None, reaches, ok)
-    assert p["hazards"] == ["river", "waterlogging", "landslide"] and p["tidal"]
+    assert p["hazards"] == ["river", "waterlogging"] and p["tidal"]

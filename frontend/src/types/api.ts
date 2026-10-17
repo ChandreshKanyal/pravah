@@ -13,7 +13,7 @@ export interface AOI {
 /** What the data says about an area (backend engines/profile.py): sets defaults and words, never switches a hazard off. */
 export interface AreaProfile {
   built_share: number; slope_p50: number; slope_p90: number; steep_share: number; largest_river_km2: number;
-  tidal: boolean; urban: boolean; hilly: boolean; flat: boolean; hazards: ("river" | "waterlogging" | "landslide")[];
+  tidal: boolean; urban: boolean; hilly: boolean; flat: boolean; hazards: ("river" | "waterlogging")[];
   summary: string; channels_river_physics?: number; channels_other?: number;
 }
 export const profileOf = (s: { meta?: Record<string, any> | null } | null | undefined): AreaProfile | null => s?.meta?.profile ?? null;
@@ -54,7 +54,7 @@ export interface GeocodeResult { label: string; lat: number; lng: number; viewpo
 export interface Shelter {
   id: string; name: string; kind: string; lon: number; lat: number;
   area_m2?: number; floors?: number; capacity_confidence?: string; note?: string;
-  hand_m?: number; lsi_class?: number; primary?: boolean;
+  hand_m?: number; primary?: boolean;
 }
 
 export interface Hotspot { id: string; lon: number; lat: number; upa_km2: number; type: string; depth_m?: number | null; stage_m?: number | null; in_river_channel?: boolean }
@@ -127,7 +127,6 @@ export interface ExposureSummary {
   total_pop: number;
   exposed_pop_by_hour: number[];
   exposed_by_depth_band: Record<string, number>;
-  landslide_exposed_pop_by_hour: number[];
   buildings_by_risk: Record<string, number>;
   clusters: { id: string; centroid: LonLat; people: number; max_depth: number; risk: number; risk_class: string; dominant_class: string; place?: string; place_hi?: string }[];
 }
@@ -146,7 +145,7 @@ export interface RunResult {
   rain_series_mm_h: number[]; rain_label: string; title?: string | null; notes?: string; starred?: boolean;
   stage_by_reach_m: Record<string, number[]>;
   flooded_area_km2_by_hour: number[];
-  depth_png_urls: string[]; lsi_png_url: string;
+  depth_png_urls: string[];
   overlay_bounds: [number, number, number, number]; overlay_corners: LonLat[];
   exposure: ExposureSummary; triage: TriageRow[];
   roads_geojson_url: string; routes_geojson_url: string;
@@ -165,7 +164,7 @@ export interface RunResult {
   ponding_png_url?: string;
   start_local?: string | null;
   evac_window_h?: number | null;
-  demand_breakdown?: { flood?: number; landslide?: number; both?: number };
+  demand_breakdown?: { flood?: number };
   demand_range?: number[];
   gap_range?: number[];
 }
@@ -202,7 +201,7 @@ export interface Advisory {
   key_numbers: { label: string; value: number; unit: string; evidence_id: string; rounded?: number | null; range?: number[] | null }[];
   recommendations: Recommendation[]; limitations: string[]; disclaimer: string;
   generated_by: "gemini" | "rules_fallback"; dropped: { action: string; reason: string }[]; model: string;
-  summary?: string; start_local?: string | null; evac_window_h?: number | null; breakdown?: { flood?: number; landslide?: number; both?: number };
+  summary?: string; start_local?: string | null; evac_window_h?: number | null; breakdown?: { flood?: number };
   supplies?: Supply[]; supply_days?: number; version?: number; last_version?: number; approved_version?: number;
   review?: Review; translations?: Record<string, Translation>; created_at?: string;
 }
@@ -211,13 +210,12 @@ export interface PlanResponse { params: ScenarioParams; diff: Record<string, [un
 export interface ChatResponse { reply: string; new_run_id: string | null; tools_called: string[] }
 export interface HistoryAoi {
   gfd_events: { start: string; end: string; cause: string; dead: number; displaced: number; severity: number; flooded_km2_in_area: number }[];
-  landslides: { lon: number; lat: number; date: string; title: string; type: string; trigger: string; fatalities: number | null; location_accuracy: string; source_url: string }[];
   agreement_pct: number | null; gfd_cells: number; note?: string;
   web?: { type: string; date: string; place: string; summary: string; source_urls: string[]; marker: { lat: number; lng: number } | null }[];
   web_sources?: { title: string; uri: string }[]; search_entry_point?: string; web_label?: string;
   labels?: Record<string, string>;
 }
-export interface HistoryIndia { gfd_tiles: string; landslides: { lon: number; lat: number; date: string; fatalities: number; type: string }[]; labels: Record<string, string>; note: string }
+export interface HistoryIndia { gfd_tiles: string; labels: Record<string, string>; note: string }
 export interface PhotoDoc {
   photo_id: string; aoi_id: string; kind: "building" | "drain"; lon: number; lat: number; result: Record<string, any>;
   accepted: boolean; message: string; linked_bid?: string; previous_class?: string; override_class?: string; created_at: string;

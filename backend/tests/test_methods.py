@@ -1,4 +1,4 @@
-"""Tests for the 17 Oct method fixes: flow-path tc, areal reduction, IMD duration rule, regional landslide threshold,
+"""Tests for the 17 Oct method fixes: flow-path tc, areal reduction, IMD duration rule,
 AUC, per-segment Tobler, coarse terrain and SRC at zero flow."""
 import math
 
@@ -8,9 +8,7 @@ from shapely.geometry import LineString
 
 from app.engines.grid import make_grid, terrain_coarse
 from app.engines.hydrology import HydroGrid, downstream_index, flow_path, src_stage
-from app.engines.landslide import auc, exceedance, rain_modulation
-from app.engines.rainfall import (areal_reduction_factor, daily_to_duration_mm, kirpich_tc_min, landslide_threshold,
-                                  tc_hours_path, threshold_name)
+from app.engines.rainfall import areal_reduction_factor, daily_to_duration_mm, kirpich_tc_min, tc_hours_path
 from app.engines.roads import tobler_kmh, tobler_time_s
 
 
@@ -45,23 +43,6 @@ def test_imd_one_third_rule():
     assert daily_to_duration_mm(201, 4) == pytest.approx(201 * (4 / 24) ** (1 / 3))
     assert daily_to_duration_mm(201, 4) == pytest.approx(110.6, abs=0.1)
     assert daily_to_duration_mm(100, 24) == pytest.approx(100)
-
-
-def test_dahal_hasegawa_threshold_and_auto_choice():
-    assert landslide_threshold([1, 24], "dahal_hasegawa") == pytest.approx([73.90, 6.00], abs=0.02)
-    assert threshold_name("auto", 78.98, 30.28) == "dahal_hasegawa"  # Rudraprayag
-    assert threshold_name("auto", 72.88, 19.07) == "caine"  # Mumbai
-    assert threshold_name("caine", 78.98, 30.28) == "caine"
-    # 6 mm/h for 24 h sits exactly on the Himalayan threshold: R = 1 -> g = 1
-    assert exceedance([6.0] * 24, "dahal_hasegawa")[-1] == pytest.approx(1.0, abs=0.01)
-    assert rain_modulation([6.0] * 24, threshold="dahal_hasegawa")[-1] == pytest.approx(1.0, abs=0.01)
-
-
-def test_auc():
-    assert auc([0.1, 0.2, 0.8, 0.9], [False, False, True, True]) == pytest.approx(1.0)
-    assert auc([0.9, 0.8, 0.2, 0.1], [False, False, True, True]) == pytest.approx(0.0)
-    assert auc([0.5, 0.5, 0.5, 0.5], [False, True, False, True]) == pytest.approx(0.5)
-    assert auc([0.1, 0.2], [False, False]) is None
 
 
 def test_tobler_per_segment_counts_up_and_down():

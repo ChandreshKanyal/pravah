@@ -10,25 +10,19 @@ OVERFLOW_COST = 10_000_000
 WALK_FLAT_KMH = 6 * math.exp(-3.5 * 0.05)  # Tobler on flat ground, 5.04 km/h
 
 
-def edge_states(cells: list[list[int]], blocked: np.ndarray, depth: np.ndarray, lsi_dyn: np.ndarray | None,
-                depth_limit_m: float, bridge_first: np.ndarray | None = None, bridge_cells: list[set] | None = None,
-                lsi_close_share: float = 0.2) -> tuple[np.ndarray, list[str], np.ndarray]:
-    """first_closed_hour (1-based, NEVER if open), reason, and edge_lsi[e, t] (max LSI class along edge).
+def edge_states(cells: list[list[int]], blocked: np.ndarray, depth: np.ndarray, depth_limit_m: float,
+                bridge_first: np.ndarray | None = None, bridge_cells: list[set] | None = None) -> tuple[np.ndarray, list[str]]:
+    """first_closed_hour (1-based, NEVER if open) and reason per edge.
 
-    NOTE(spec-drift, human decision 16 Oct "soften + scope"):
-    - landslide closes an edge only when >= lsi_close_share of its sample cells are class 5 (spec: any cell);
-      roads score high LSI by construction (distance-to-road factor) and OSM edges here are long;
-    - bridges (engines/bridges.py) close only when OSM marks them under construction/closed or the river reaches
-      their deck; `bridge_first[e]` is the first such hour for the spans edge e runs over (NEVER if none). The cells
-      over a span (`bridge_cells[e]`) are left out of the flood and landslide tests: they lie above the water.
+    Bridges (engines/bridges.py) close only when OSM marks them under construction/closed or the river reaches their
+    deck; `bridge_first[e]` is the first such hour for the spans edge e runs over (NEVER if none). The cells over a span
+    (`bridge_cells[e]`) are left out of the flood test: they lie above the water.
     """
     H = depth.shape[0]
     d_flat = depth.reshape(H, -1)
-    l_flat = lsi_dyn.reshape(H, -1) if lsi_dyn is not None else None
     E = len(cells)
     first = np.full(E, NEVER, np.int64)
     reason = [""] * E
-    edge_lsi = np.zeros((E, H), np.uint8)
     for e, c in enumerate(cells):
         if blocked[e]:
             first[e], reason[e] = 1, "blocked"
@@ -43,26 +37,19 @@ def edge_states(cells: list[list[int]], blocked: np.ndarray, depth: np.ndarray, 
                 first[e], reason[e] = bf, "bridge"
             continue
         dc = np.nan_to_num(d_flat[:, c])  # NaN = permanent river, not flood
-        slide5 = np.zeros(H, bool)
-        if l_flat is not None:
-            lc = l_flat[:, c]
-            edge_lsi[e] = lc.max(axis=1)
-            slide5 = (lc == 5).mean(axis=1) >= lsi_close_share
         bridge_now = np.arange(1, H + 1) >= bf
-        causes = [("bridge", bridge_now), ("flood", dc.max(axis=1) > depth_limit_m), ("landslide", slide5)]
+        causes = [("bridge", bridge_now), ("flood", dc.max(axis=1) > depth_limit_m)]
         for t in range(H):
             hit = [name for name, m in causes if m[t]]
             if hit:
                 first[e], reason[e] = t + 1, hit[0]
                 break
-    return first, reason, edge_lsi
+    return first, reason
 
 
-def edge_weight(t0_s, edge_lsi_eval, crowd_e, slope_adjacent) -> np.ndarray:
-    """w = t0 x landslide factor x (1 + 0.3 crowd) x (1.2 if steep slope beside the road)."""
-    lsi = np.asarray(edge_lsi_eval)
-    f_lsi = np.where(lsi == 4, 1.5, np.where(lsi == 3, 1.2, 1.0))
-    return np.asarray(t0_s) * f_lsi * (1 + 0.3 * np.asarray(crowd_e)) * np.where(np.asarray(slope_adjacent), 1.2, 1.0)
+def edge_weight(t0_s, crowd_e, slope_adjacent) -> np.ndarray:
+    """w = t0 x (1 + 0.3 crowd) x (1.2 if steep slope beside the road)."""
+    return np.asarray(t0_s) * (1 + 0.3 * np.asarray(crowd_e)) * np.where(np.asarray(slope_adjacent), 1.2, 1.0)
 
 
 def build_graph(u, v, w, open_mask) -> nx.DiGraph:
@@ -128,13 +115,11 @@ def demand_key(s: str, demand: dict):
     return s
 
 
-def assembly_points(max_depth: np.ndarray, hand: np.ndarray, slope_deg: np.ndarray, lsi_class: np.ndarray | None,
+def assembly_points(max_depth: np.ndarray, hand: np.ndarray, slope_deg: np.ndarray,
                     dist_road_m: np.ndarray, cell: float, top: int = 10) -> list[dict]:
-    """S7.7: dry, high, flat, stable open ground near a road; components >= 1,000 m2; capacity = area x 0.5 / 2."""
+    """S7.7: dry, high, flat open ground near a road; components >= 1,000 m2; capacity = area x 0.5 / 2."""
     m = (np.nan_to_num(max_depth, nan=1) == 0) & (np.nan_to_num(hand) >= 10) & (np.nan_to_num(slope_deg, nan=90) <= 10) \
         & (np.nan_to_num(dist_road_m, nan=1e9) <= 150)
-    if lsi_class is not None:
-        m &= lsi_class <= 2
     lab, n = ndimage.label(m)
     if n == 0:
         return []

@@ -9,7 +9,6 @@ import shapely
 from scipy.spatial import cKDTree
 from shapely.geometry import LineString, mapping, shape
 
-from app.config import get_settings
 from app.engines import bridges as brg
 from app.engines import routing
 from app.engines.grid import rowcol_to_lonlat
@@ -36,7 +35,7 @@ def _cell_xy(grid, r, c):
     return grid.x0 + (c + 0.5) * grid.cell, grid.y0 - (r + 0.5) * grid.cell
 
 
-def plan(area, p: ScenarioParams, depth: np.ndarray, lsi_dyn: np.ndarray | None, stage: np.ndarray,
+def plan(area, p: ScenarioParams, depth: np.ndarray, stage: np.ndarray,
          exposure_ctx: dict, warnings: list[str]) -> dict:
     net: Network | None = area.networks.get(p.travel_mode)
     if net is None:
@@ -65,12 +64,10 @@ def plan(area, p: ScenarioParams, depth: np.ndarray, lsi_dyn: np.ndarray | None,
         if e < len(E):
             bridge_first[e] = min(int(s_first[k]) for k in ks)
             bridge_cells[e] = set().union(*(spans[k]["cells"] for k in ks))
-    first, reason, edge_lsi = routing.edge_states(E["cells"].tolist(), blocked, depth, lsi_dyn, limit,
-                                                  bridge_first, bridge_cells, get_settings().lsi_close_share)
+    first, reason = routing.edge_states(E["cells"].tolist(), blocked, depth, limit, bridge_first, bridge_cells)
     # S8.2 adjusted network at the evaluation hour
     t_eval = min(H, p.evac_start_hour + 1)
-    w = routing.edge_weight(E["t0_s"].to_numpy(), edge_lsi[:, t_eval - 1], E["crowd_e"].to_numpy(),
-                            E["slope_adjacent"].to_numpy())
+    w = routing.edge_weight(E["t0_s"].to_numpy(), E["crowd_e"].to_numpy(), E["slope_adjacent"].to_numpy())
     G = routing.build_graph(E["u"].to_numpy(), E["v"].to_numpy(), w, first > t_eval)
 
     def nearest_node(x, y):
@@ -80,7 +77,6 @@ def plan(area, p: ScenarioParams, depth: np.ndarray, lsi_dyn: np.ndarray | None,
     demand_f: dict = {}
     access_pm: dict = {}  # people x metres from the home cell to the snapped node (access walk)
     rows, cols, pop_b = exposure_ctx["rows"], exposure_ctx["cols"], exposure_ctx["pop_b"]
-    cfg = get_settings()
     # people move where the flood hazard rating reaches "danger for some" (DEFRA FD2321): moving river water vs
     # standing street water, one rule for every area
     ed = exposure_ctx.get("evac_depth")  # (ordinary, fragile) depth grids from engines/profile.evac_depths
@@ -89,12 +85,7 @@ def plan(area, p: ScenarioParams, depth: np.ndarray, lsi_dyn: np.ndarray | None,
         thr_un = ed[1]  # unknown structure: assume fragile
     else:
         thr_b, thr_un = routing_wet(), routing_wet()
-    ex_b = (exposure_ctx["d_b"] >= thr_b).any(axis=0) | (exposure_ctx["ls_b"] >= cfg.lsi_demand_class).any(axis=0)
-    sus = exposure_ctx.get("ls_b_sus", exposure_ctx["ls_b"])  # uncapped susceptibility classes
-    watch = int(((sus >= 4).any(axis=0) & ~ex_b).sum())
-    if watch:
-        warnings.append(f"{watch} buildings sit on landslide susceptibility class 4-5 slopes in this scenario: monitor "
-                        "slopes and be ready to move people (not counted as evacuation demand)")
+    ex_b = (exposure_ctx["d_b"] >= thr_b).any(axis=0)
     if ex_b.any():
         xs, ys = _cell_xy(grid, rows[ex_b], cols[ex_b])
         dist, idx = net.tree.query(np.column_stack([xs, ys]))
@@ -103,8 +94,6 @@ def plan(area, p: ScenarioParams, depth: np.ndarray, lsi_dyn: np.ndarray | None,
             access_pm[node] = access_pm.get(node, 0.0) + float(people) * float(dm)
     pop_un = exposure_ctx["pop_un"]
     wet_un = (np.nan_to_num(depth).max(axis=0) >= thr_un)
-    if lsi_dyn is not None:
-        wet_un |= lsi_dyn.max(axis=0) >= cfg.lsi_demand_class
     rr, cc = np.nonzero(wet_un & (pop_un > 0))
     if len(rr):
         xs, ys = _cell_xy(grid, rr, cc)
@@ -113,16 +102,16 @@ def plan(area, p: ScenarioParams, depth: np.ndarray, lsi_dyn: np.ndarray | None,
             demand_f[node] = demand_f.get(node, 0.0) + float(people)
             access_pm[node] = access_pm.get(node, 0.0) + float(people) * float(dm)
     demand = {n: int(math.ceil(v)) for n, v in demand_f.items() if v >= 0.5}
-    why = _demand_breakdown(exposure_ctx, depth, lsi_dyn, thr_b, thr_un, cfg.lsi_demand_class)
+    why = _demand_breakdown(exposure_ctx, depth, thr_b, thr_un)
     # mean access walk per node (straight line x 1.3 detour factor, flat Tobler speed)
     access_s = {n: 1.3 * access_pm.get(n, 0.0) / max(demand_f[n], 1e-9) / (routing.WALK_FLAT_KMH / 3.6) for n in demand}
-    # actual travel time per edge: free-flow time slowed by crowding; the landslide/slope factors in `w` are risk
-    # aversion for choosing routes, not time, so ETAs leave them out
+    # actual travel time per edge: free-flow time slowed by crowding; the slope factor in `w` is risk aversion for
+    # choosing routes, not time, so ETAs leave it out
     tt = E["t0_s"].to_numpy() * (1 + 0.3 * E["crowd_e"].to_numpy())
 
     # S8.4 supply: shelters (minus disabled, plus extra) and assembly points
     max_depth = depth.max(axis=0)  # NaN where permanent water
-    ap = routing.assembly_points(max_depth, area.hand, area.slope_deg, area.lsi_class, area.dist_road_m, grid.cell)
+    ap = routing.assembly_points(max_depth, area.hand, area.slope_deg, area.dist_road_m, grid.cell)
     supply = []
     for s in area.shelters:
         supply.append({**s, "capacity": capacity(s["area_m2"], s["floors"], p.sqm_per_person),
@@ -148,8 +137,6 @@ def plan(area, p: ScenarioParams, depth: np.ndarray, lsi_dyn: np.ndarray | None,
             status[s["id"]] = "disabled"
         elif np.isnan(d_here).any() or np.nanmax(d_here) > 0:
             status[s["id"]] = "flooded"
-        elif lsi_dyn is not None and lsi_dyn[:, r, c].max() > cfg.lsi_shelter_max_class:
-            status[s["id"]] = "landslide_risk"
         elif s["node"] not in G:
             status[s["id"]] = "unreachable"
         else:
@@ -220,16 +207,14 @@ def plan(area, p: ScenarioParams, depth: np.ndarray, lsi_dyn: np.ndarray | None,
     # from every hour the cause holds (roads do not reopen in a scenario)
     pieces: dict[int, list] = {}
     flood_any = (np.nan_to_num(depth) > limit).any(axis=0).ravel()
-    slide_any = (lsi_dyn == 5).any(axis=0).ravel() if lsi_dyn is not None else None
     for i in np.flatnonzero(first < routing.NEVER):
-        hit = flood_any if reason[i] == "flood" else slide_any if reason[i] == "landslide" else None
-        if hit is not None:
-            pieces[int(i)] = routing.hazard_pieces(E.geometry.iloc[i], grid, hit, skip=bridge_cells[i] or None)
+        if reason[i] == "flood":
+            pieces[int(i)] = routing.hazard_pieces(E.geometry.iloc[i], grid, flood_any, skip=bridge_cells[i] or None)
     roads_fc = {"type": "FeatureCollection", "features": [
         {"type": "Feature", "geometry": mapping(shapely.set_precision(g, 1e-6)), "properties": {
             "first_closed_hour": None if first[i] >= routing.NEVER else int(first[i]), "reason": reason[i] or None,
             "bridge": bool(E.at[i, "bridge"]), "name": E.at[i, "name"], "highway": E.at[i, "highway"],
-            "length_m": round(float(E.at[i, "length_m"]), 1), "lsi_max": int(edge_lsi[i].max()) if H else 0,
+            "length_m": round(float(E.at[i, "length_m"]), 1),
             # flat [a0, b0, a1, b1, ...]: Firestore stores no nested arrays
             **({"hazard": [f for ab in pieces[i] for f in ab]} if pieces.get(i) else {})}}
         for i, g in enumerate(net.edges_ll.geometry)]}
@@ -241,7 +226,7 @@ def plan(area, p: ScenarioParams, depth: np.ndarray, lsi_dyn: np.ndarray | None,
             "staging_points": staging, "roads_geojson": json.dumps(roads_fc, separators=(",", ":")), "routes_geojson": json.dumps(routes_fc, separators=(",", ":")),
             "routes_summary": [r["properties"] for r in routes_fc["features"]][:50],
             "people_to_evacuate": total,
-            "demand_breakdown": {k: int(round(why[k] * ratio)) for k in ("flood", "landslide", "both")},
+            "demand_breakdown": {"flood": int(round(why["flood"] * ratio))},
             "demand_range": [min(lo, total), max(hi, total)],
             "gap_range": [max(0, lo - placed), max(0, hi - placed)]}
 
@@ -252,23 +237,17 @@ def plan(area, p: ScenarioParams, depth: np.ndarray, lsi_dyn: np.ndarray | None,
 DEPTH_SENS, POP_SENS = 0.3, 0.2
 
 
-def _demand_breakdown(ctx: dict, depth: np.ndarray, lsi_dyn, thr_b, thr_un, ls_class: int) -> dict:
+def _demand_breakdown(ctx: dict, depth: np.ndarray, thr_b, thr_un) -> dict:
     pop_b, pop_un = ctx["pop_b"], ctx["pop_un"]
     d_b = np.nan_to_num(ctx["d_b"]).max(axis=0)
-    ls_b = (ctx["ls_b"] >= ls_class).any(axis=0)
     d_un = np.nan_to_num(depth).max(axis=0)
-    ls_un = lsi_dyn.max(axis=0) >= ls_class if lsi_dyn is not None else np.zeros(d_un.shape, bool)
 
-    def count(scale: float) -> tuple[float, np.ndarray, np.ndarray]:
-        fb, fu = d_b * scale >= thr_b, d_un * scale >= thr_un
-        return float(pop_b[fb | ls_b].sum() + pop_un[fu | ls_un].sum()), fb, fu
+    def count(scale: float) -> float:
+        return float(pop_b[d_b * scale >= thr_b].sum() + pop_un[d_un * scale >= thr_un].sum())
 
-    central, fb, fu = count(1.0)
-    return {"central": central,
-            "flood": float(pop_b[fb & ~ls_b].sum() + pop_un[fu & ~ls_un].sum()),
-            "landslide": float(pop_b[ls_b & ~fb].sum() + pop_un[ls_un & ~fu].sum()),
-            "both": float(pop_b[fb & ls_b].sum() + pop_un[fu & ls_un].sum()),
-            "low": count(1 - DEPTH_SENS)[0] * (1 - POP_SENS), "high": count(1 + DEPTH_SENS)[0] * (1 + POP_SENS)}
+    central = count(1.0)
+    return {"central": central, "flood": central,
+            "low": count(1 - DEPTH_SENS) * (1 - POP_SENS), "high": count(1 + DEPTH_SENS) * (1 + POP_SENS)}
 
 
 def routing_wet() -> float:

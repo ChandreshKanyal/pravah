@@ -14,7 +14,7 @@ from app.config import get_settings
 log = logging.getLogger(__name__)
 APP = "pravah"
 
-INSTRUCTION = """You help district officials explore flood and landslide scenarios for one area (aoi {aoi_id}); the
+INSTRUCTION = """You help district officials explore flood scenarios for one area (aoi {aoi_id}); the
 current run is {run_id?}. Never state a number you did not get from a tool result. For what-if questions, call
 run_scenario with only the changed fields, then compare_runs against the previous run. To close a shelter by name,
 call find_shelter_by_name first. For a quick "what if X mm in Y hours" use instant_what_if (seconds, flood and

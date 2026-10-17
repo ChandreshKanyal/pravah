@@ -22,7 +22,7 @@ Do not invent numbers, places or ids. Every number in 'why' must appear in the f
 within the scenario window. The headline is a 2-sentence situation summary (what is coming, where the risk is).
 Use the words estimated, susceptibility, suggested; never say "will flood" or "safe"
 (shelters are "reachable in this scenario"). Building classes are proxies ("likely ..."). Only recommend hazards present in the
-facts (flood, water-logging, landslide); this is not a cyclone or earthquake tool. A bridge with reason "overtopped"
+facts (flood, water-logging); this is not a landslide, cyclone or earthquake tool. A bridge with reason "overtopped"
 closes when the river reaches its deck; one with reason construction, closed or disused is marked so in OpenStreetMap,
 not closed by the storm: suggest confirming its status with PWD, not closing it. Include 3-5 limitations.
 

@@ -43,11 +43,10 @@ def test_depth_damage_jrc_asia_residential():
 
 
 def test_building_risk_hand_computed():
-    # d=1.5 m (JRC damage 0.62), F=0.8, dist 150 m, ls 2: R = 0.5*0.62 + 0.3*0.8 + 0.2*0.5 = 0.65 -> high
-    # dry, ls 2 -> 0; dry, ls 4 -> R = 0.3*0.45 = 0.135, raised to high (landslide) so R becomes 0.5
-    R, cls, why = building_risk([1.5, 0.0, 0.0], [0.8, 0.8, 0.45], [150, 150, 400], [2, 2, 4])
-    assert R == pytest.approx([0.65, 0.0, 0.5])
-    assert list(cls) == ["high", "low", "high"] and list(why) == ["flood", "", "landslide"]
+    # d=1.5 m (JRC damage 0.62), F=0.8, dist 150 m: R = 0.5*0.62 + 0.3*0.8 + 0.2*0.5 = 0.65 -> high; dry -> 0
+    R, cls, why = building_risk([1.5, 0.0], [0.8, 0.8], [150, 150])
+    assert R == pytest.approx([0.65, 0.0])
+    assert list(cls) == ["high", "low"] and list(why) == ["flood", ""]
 
 
 def test_exposure_monotone_with_depth_and_triage_sorted():
@@ -56,7 +55,7 @@ def test_exposure_monotone_with_depth_and_triage_sorted():
     un = np.zeros((2, 2))
     shallow = np.array([[[0.1, 0], [0, 0.0]]])
     deep = np.array([[[0.1, 0], [0, 1.0]]])
-    assert per_hour(deep, None, rows, cols, pop_b, un)["exposed_pop_by_hour"][0] > \
-        per_hour(shallow, None, rows, cols, pop_b, un)["exposed_pop_by_hour"][0]
+    assert per_hour(deep, rows, cols, pop_b, un)["exposed_pop_by_hour"][0] > \
+        per_hour(shallow, rows, cols, pop_b, un)["exposed_pop_by_hour"][0]
     t = triage(["a", "b", "a"], ["low", "critical", "critical"], [5, 1, 9])
     assert [r["risk_class"] for r in t] == ["critical", "critical", "low"] and t[0]["people"] == 9

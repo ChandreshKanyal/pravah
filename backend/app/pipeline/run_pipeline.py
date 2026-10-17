@@ -13,9 +13,9 @@ import numpy as np
 
 from app.config import get_settings
 from app.engines import profile as prof
-from app.engines import drains as drn, exposure as ex_engine, flood, hydrology as hy, landslide as ls, pluvial, population, rainfall
+from app.engines import drains as drn, exposure as ex_engine, flood, hydrology as hy, pluvial, population, rainfall
 from app.engines.grid import corner_lonlats, lonlat_bounds, lonlat_to_rowcol, rowcol_to_lonlat
-from app.engines.render import DEPTH_COLORS, DEPTH_EDGES, WATER_COLOR, to_png_binned, to_png_classes
+from app.engines.render import DEPTH_COLORS, DEPTH_EDGES, WATER_COLOR, to_png_binned
 from app.models.grid import GridSpec
 from app.models.run import ExposureSummary, RunResult, TriageRow
 from app.models.scenario import RainSource, ScenarioParams
@@ -44,12 +44,9 @@ class Area:
     native: dict[str, np.ndarray]
     hotspots: list[dict]
     slope_deg: np.ndarray
-    lsi_static: np.ndarray | None
-    lsi_edges: list[float] | None
     dist_stream_m: np.ndarray
     bld: dict[str, np.ndarray] | None  # building arrays from buildings_proxy.parquet
     pop_unattr: np.ndarray | None
-    lsi_class: np.ndarray | None
     dist_road_m: np.ndarray
     shelters: list[dict]
     networks: dict
@@ -60,8 +57,6 @@ class Area:
     fsi: np.ndarray | None = None
     aoi_mask: np.ndarray | None = None  # cells inside the drawn bbox; the grid adds a 3 km hydrology buffer
     src_cache: dict = field(default_factory=dict)
-    lsi_noroad: np.ndarray | None = None  # landslide index with the distance-to-road factor neutral (road closures)
-    lsi_edges_noroad: list[float] | None = None
     bridges: dict | None = None  # {"spans": [...], "links": {mode: {edge row: [span index]}}} (engines/bridges.py)
     hollows_ok: np.ndarray | None = None  # per depression: waterlogs (catchment mostly built-up)
     reach_ok: np.ndarray | None = None  # per reach: river stage meaningful (not tidal, not a stub)
@@ -96,12 +91,9 @@ def load_area(aoi_id: str) -> Area:
         native=storage.load_layers(aoi_id, "hydro_native"),
         hotspots=storage.get_json(aoi_id, "hotspots.json"),
         slope_deg=terr["slope_deg"],
-        lsi_static=sus.get("lsi_static"),
-        lsi_edges=sus["lsi_edges"].tolist() if "lsi_edges" in sus else None,
         dist_stream_m=h30["dist_stream_m"],
         bld=_load_buildings(aoi_id),
         pop_unattr=storage.load_layers(aoi_id, "population").get("pop_unattributed"),
-        lsi_class=sus.get("lsi_class"),
         dist_road_m=storage.load_layers(aoi_id, "derived")["dist_road_m"],
         shelters=storage.get_json(aoi_id, "shelters.json") if storage.exists(aoi_id, "shelters.json") else [],
         networks={m: evac.load_network(storage.load_gdf(aoi_id, f"edges_{m}.parquet"),
@@ -114,8 +106,6 @@ def load_area(aoi_id: str) -> Area:
         fsi=sus.get("fsi"),
         aoi_mask=_bbox_mask(grid, doc.get("bbox")),
         bridges=storage.get_json(aoi_id, "bridges.json") if storage.exists(aoi_id, "bridges.json") else None,
-        lsi_noroad=sus.get("lsi_static_noroad"),
-        lsi_edges_noroad=sus["lsi_edges_noroad"].tolist() if "lsi_edges_noroad" in sus else None,
     ).with_urban_dem(terr["dem"])
     area.reach_ok = prof.reliable_reaches(area.reaches, _reach_built_share(area))
     if area.pluvial is not None:
@@ -484,49 +474,15 @@ def run_pipeline(p: ScenarioParams, flow_model: bool = True) -> RunResult:
         warnings.append(f"Flow model unavailable this run ({e.__class__.__name__}); water spreading over streets is not included")
     timings["flow_model"] = round(time.time() - tf, 2)
 
-    lon_c, lat_c = area_centroid(area)
-    thr = rainfall.threshold_name(cfg.lsi_threshold, lon_c, lat_c)
     methods = {
         "runoff": "rational method, C by land cover, A = local catchment area"
                   + (", TP-29 areal reduction (Leclerc & Schaake 1972)" if cfg.apply_arf else ""),
         "tc": "Kirpich (1940) on the DEM longest flow path, S = relief / length",
         "stage": "HAND synthetic rating curves (Zheng et al. 2018), worst-case envelope (no recession)",
-        "landslide_threshold": rainfall.LANDSLIDE_THRESHOLDS[thr][2],
-        "landslide_modulation": {"class_shift": "static class -1 below the threshold, +1 at twice it; decisions only in "
-                                                "hours above the threshold (LHASA-style)",
-                                 "graded_g": "score x clip(1 + 0.25 log2 R, 0.75, 1.25)"}.get(cfg.lsi_modulation, cfg.lsi_modulation),
-        "landslide_exceedance_max": None,
         "damage": "JRC global depth-damage curve, Asia residential (Huizinga et al. 2017)",
     }
-    lsi_dyn = None  # S5.6: rainfall-modulated susceptibility classes per hour
-    if area.lsi_static is not None:
-        lsi_dyn = ls.lsi_dynamic_classes(area.lsi_static, area.lsi_edges, rain, area.slope_deg, g_slope=cfg.lsi_g_slope,
-                                         g_min=cfg.lsi_g_min, g_max=cfg.lsi_g_max, threshold=thr,
-                                         mode=cfg.lsi_modulation)
-        R = ls.exceedance(rain, thr)
-        trig = R >= 1.0
-        methods["landslide_exceedance_max"] = round(float(R.max()), 2)
-        methods["landslide_trigger_hours"] = [int(t + 1) for t in np.flatnonzero(trig)]
-        lsi_act = ls.actionable(lsi_dyn, trig, slope_deg=area.slope_deg)
-        lsi_road = lsi_act  # road closures: the index without the road factor when the area has it
-        if area.lsi_noroad is not None:
-            lsi_road = ls.actionable(ls.lsi_dynamic_classes(area.lsi_noroad, area.lsi_edges_noroad, rain, area.slope_deg,
-                                                            g_slope=cfg.lsi_g_slope, g_min=cfg.lsi_g_min, g_max=cfg.lsi_g_max,
-                                                            threshold=thr, mode=cfg.lsi_modulation), trig, slope_deg=area.slope_deg)
-        if not trig.any():
-            warnings.append(f"Rain stays below the landslide trigger threshold ({rainfall.LANDSLIDE_THRESHOLDS[thr][2]}; "
-                            f"peak {R.max():.0%} of it): slopes are shown as susceptibility only, no landslide closures "
-                            "or evacuations. This does NOT rule landslides out: satellite and forecast rain under-read "
-                            "cloudbursts, and in replays of three recorded Rudraprayag landslide events the trigger was not "
-                            "reached either (Methods: Track record). For planning, also run a record or IMD preset scenario.")
-    else:
-        lsi_act = lsi_road = None
-        warnings.append("Landslide susceptibility not prepared for this area")
-
     t2 = time.time()
-    exposure, triage_rows, queue, ctx = _exposure(area, p, depth, lsi_act, warnings)
-    if ctx and lsi_dyn is not None:
-        ctx["ls_b_sus"] = lsi_dyn[:, ctx["rows"], ctx["cols"]]
+    exposure, triage_rows, queue, ctx = _exposure(area, p, depth, warnings)
     timings["exposure"] = round(time.time() - t2, 2)
 
     drains_out, pond_png = [], None
@@ -548,21 +504,16 @@ def run_pipeline(p: ScenarioParams, flow_model: bool = True) -> RunResult:
     # bridges close on river stage at the deck (reliable channels only) or on flooded approaches
     if ctx:  # depth at which people are in danger, per cell: FD2321 hazard rating, moving river vs standing water
         ctx["evac_depth"] = prof.evac_depths(area.reaches, reach_30, still, p.manning_n)
-    ev = evac.plan(area, p, depth, lsi_road, h, ctx, warnings) if ctx else {}
+    ev = evac.plan(area, p, depth, h, ctx, warnings) if ctx else {}
     timings["routing"] = round(time.time() - t3, 2)
 
     t1 = time.time()
     pngs = {f"depth_h{t + 1}": to_png_binned(depth[t], DEPTH_EDGES, DEPTH_COLORS, nan_color=WATER_COLOR)
             for t in range(depth.shape[0])}
-    if lsi_dyn is not None:
-        pngs.update({f"lsi_h{t + 1}": to_png_classes(lsi_dyn[t]) for t in range(lsi_dyn.shape[0])})
     if pond_png is not None:
         pngs["ponding"] = pond_png
     buf = io.BytesIO()
     np.savez_compressed(buf, depth=depth.astype(np.float16))
-    lbuf = io.BytesIO()
-    if lsi_dyn is not None:
-        np.savez_compressed(lbuf, lsi_dyn_class=lsi_dyn)
     with ThreadPoolExecutor(8) as ex:
         jobs = [ex.submit(storage.put_run, run_id, f"png/{k}.png", v, "image/png") for k, v in pngs.items()]
         jobs.append(ex.submit(storage.put_run, run_id, "depth.npz", buf.getvalue()))
@@ -570,8 +521,6 @@ def run_pipeline(p: ScenarioParams, flow_model: bool = True) -> RunResult:
             sbuf = io.BytesIO()
             np.savez_compressed(sbuf, depth=static_depth.astype(np.float16))
             jobs.append(ex.submit(storage.put_run, run_id, "static_depth.npz", sbuf.getvalue()))
-        if lsi_dyn is not None:
-            jobs.append(ex.submit(storage.put_run, run_id, "lsi.npz", lbuf.getvalue()))
         jobs.append(ex.submit(storage.put_run, run_id, "verification.json", json.dumps(queue).encode(), "application/json"))
         if ctx:  # per-building risk (0 critical .. 3 low) for the 3D view
             rb = io.BytesIO()
@@ -606,7 +555,6 @@ def run_pipeline(p: ScenarioParams, flow_model: bool = True) -> RunResult:
         flooded_area_km2_by_hour=[round(flood.flooded_area_km2(np.where(area.aoi_mask, depth[t], 0), area.grid.cell), 3)
                                   for t in range(len(rain))],
         depth_png_urls=[f"/api/runs/{run_id}/layers/{k}.png" for k in pngs if k.startswith("depth_")],
-        lsi_png_url=f"/api/runs/{run_id}/layers/lsi_h{len(rain)}.png" if lsi_dyn is not None else "",
         overlay_bounds=lonlat_bounds(area.grid), overlay_corners=corner_lonlats(area.grid),
         hotspots=hotspots, warnings=warnings, exposure=exposure, triage=triage_rows,
         shelters=ev.get("shelters", []), bridges=ev.get("bridges", []),
@@ -663,8 +611,7 @@ def _label_places(area: Area, result: RunResult) -> None:
         s.place = places.label(pl, s.lon, s.lat)
 
 
-def _exposure(area: Area, p: ScenarioParams, depth: np.ndarray, lsi_dyn: np.ndarray | None,
-              warnings: list[str]) -> tuple[ExposureSummary, list[TriageRow], list[dict], dict]:
+def _exposure(area: Area, p: ScenarioParams, depth: np.ndarray, warnings: list[str]) -> tuple[ExposureSummary, list[TriageRow], list[dict], dict]:
     """S6.4-S6.9 at run time: scaled population, per-hour exposure, risk at the worst hour, triage, clusters, queue."""
     if area.bld is None or area.pop_unattr is None:
         warnings.append("Buildings not prepared for this area; exposure unavailable")
@@ -688,9 +635,8 @@ def _exposure(area: Area, p: ScenarioParams, depth: np.ndarray, lsi_dyn: np.ndar
                         "the rest are counted from the population grid")
     rows = np.clip(b["row"].astype(int), 0, area.grid.height - 1)
     cols = np.clip(b["col"].astype(int), 0, area.grid.width - 1)
-    ph = ex_engine.per_hour(depth, lsi_dyn, rows, cols, pop_b, pop_un)
-    # worst case: flood depth peaks at the last hour (envelope); landslide class can peak earlier, so take its max
-    d_w, ls_w = ph["d_b"][-1], ph["ls_b"].max(axis=0)
+    ph = ex_engine.per_hour(depth, rows, cols, pop_b, pop_un)
+    d_w = ph["d_b"][-1]  # worst case: flood depth peaks at the last hour (envelope)
     # S6.3: accepted field photos replace the proxy class and fragility (copies; the cached area stays untouched)
     struct, frag, conf = b["structure_class"].astype(object).copy(), b["fragility"].astype(float).copy(), b["confidence"].astype(float).copy()
     from app.api.photos import building_overrides
@@ -701,23 +647,21 @@ def _exposure(area: Area, p: ScenarioParams, depth: np.ndarray, lsi_dyn: np.ndar
         n = int((src == "field_photo").sum())
         if n:
             warnings.append(f"{n} building(s) use field-photo verified classes")
-    R, risk, _reason = ex_engine.building_risk(d_w, frag, area.dist_stream_m[rows, cols], ls_w)
-    exposed = (d_w >= ex_engine.WET_M) | (ls_w >= 4)
+    R, risk, _reason = ex_engine.building_risk(d_w, frag, area.dist_stream_m[rows, cols])
+    exposed = d_w >= ex_engine.WET_M
     to_ll = lambda r, c: rowcol_to_lonlat(area.grid, r, c)  # noqa: E731
     cl = ex_engine.clusters(rows, cols, pop_b, R, risk, struct, d_w, exposed, depth[-1], pop_un,
-                            block=10, to_lonlat=to_ll, dist_stream_m=area.dist_stream_m,
-                            ls_worst=lsi_dyn.max(axis=0) if lsi_dyn is not None else None)
+                            block=10, to_lonlat=to_ll, dist_stream_m=area.dist_stream_m)
     summary = ExposureSummary(
         total_pop=int(round(pop_b.sum() + pop_un.sum())),
         exposed_pop_by_hour=ph["exposed_pop_by_hour"],
         exposed_by_depth_band=ph["exposed_by_depth_band"],
-        landslide_exposed_pop_by_hour=ph["landslide_exposed_pop_by_hour"],
         buildings_by_risk={c: int(np.count_nonzero(risk == c)) for c in ex_engine.RISK_ORDER},
         clusters=cl,
     )
     tri = [TriageRow(**r) for r in ex_engine.triage(struct, risk, pop_b)]
     queue = ex_engine.verification_queue(b["bid"], R, conf, pop_b, b["lon"], b["lat"], struct)
-    ctx = {"rows": rows, "cols": cols, "pop_b": pop_b, "pop_un": pop_un, "d_b": ph["d_b"], "ls_b": ph["ls_b"],
+    ctx = {"rows": rows, "cols": cols, "pop_b": pop_b, "pop_un": pop_un, "d_b": ph["d_b"],
            "risk_codes": np.array([ex_engine.RISK_ORDER.index(r) for r in risk], np.uint8), "frag": frag,
            "clusters": cl}
     return summary, tri, queue, ctx

@@ -11,7 +11,6 @@ const RISK_TAG: Record<string, string> = { critical: "crit", high: "high", moder
 const STATUS: Record<string, { label: string; tag: string; icon: string }> = {
   usable: { label: "Reachable in this scenario", tag: "ok", icon: "check_circle" },
   flooded: { label: "Flooded", tag: "info", icon: "water" },
-  landslide_risk: { label: "Landslide risk", tag: "high", icon: "landslide" },
   disabled: { label: "Closed by you", tag: "", icon: "block" },
   unreachable: { label: "Unreachable", tag: "", icon: "wrong_location" },
 };
@@ -54,7 +53,6 @@ export default function Results({ run, hour, onFly, previous }: { run: RunResult
   const e = run.exposure;
   const H = run.rain_series_mm_h.length;
   const peak = Math.max(0, ...e.exposed_pop_by_hour);
-  const lsPeak = Math.max(0, ...e.landslide_exposed_pop_by_hour);
   const NOT_OPEN = ["construction", "closed", "disused"];
   const closing = run.bridges.filter((b) => b.first_closed_hour != null && !NOT_OPEN.includes(b.reason ?? ""));  // closed by the storm
   const notOpen = run.bridges.filter((b) => NOT_OPEN.includes(b.reason ?? "")).length;
@@ -62,10 +60,8 @@ export default function Results({ run, hour, onFly, previous }: { run: RunResult
   const crit = (e.buildings_by_risk.critical ?? 0) + (e.buildings_by_risk.high ?? 0);
   const usable = run.shelters.filter((s) => s.status === "usable").length;
   const triage = run.triage.filter((t) => t.risk_class !== "low").slice(0, 10);
-  const trig = run.methods?.landslide_trigger_hours as number[] | undefined;
   const delta = (a: number, b: number) => (b === a ? "no change vs previous run" : `${b > a ? "+" : "−"}${nf(Math.abs(b - a))} vs previous run`);
   const rng = (r?: number[]) => (r && r.length === 2 && r[0] !== r[1] ? `range ${nf(roundPeople(r[0]))}–${nf(roundPeople(r[1]))}` : "");
-  const bd = run.demand_breakdown ?? {};
   const shName = (id: string) => { const s = run.shelters.find((x) => x.id === id); return s ? niceName(s) : id; };
   const atH = (h: number) => clockAt(run.start_local, h) ?? `hour ${h}`;
   const why = (r: string | null) => (r ? ` · ${REASON[r] ?? r}` : "");
@@ -79,21 +75,18 @@ export default function Results({ run, hour, onFly, previous }: { run: RunResult
           {run.capacity_gap_people > 0 ? <> about <b style={{ color: "var(--error)" }}>{nf(roundPeople(run.capacity_gap_people))}</b> have no reachable shelter place</> : <> all can reach one of {usable} shelters</>}.
           {first ? <> The first bridge closes at {clockAt(run.start_local, first.first_closed_hour!) ?? <>hour <b>{first.first_closed_hour}</b></>}.</> : null}
         </p>
-        {(bd.flood || bd.landslide) ? <span className="body-s muted">Why they move: {nf(bd.flood ?? 0)} flood water · {nf(bd.landslide ?? 0)} landslide-trigger slopes{bd.both ? ` · ${nf(bd.both)} both` : ""}</span> : null}
       </div>
 
       <div className="metrics">
         <Metric icon="water" label="In flood water (peak)" value={`≈ ${nf(roundPeople(peak))}`} sub={previous ? delta(Math.max(0, ...previous.exposure.exposed_pop_by_hour), peak) : undefined}
           tip="Estimated residents where water is at least 5 cm deep, at the worst hour." />
-        <Metric icon="landslide" label="On landslide-trigger slopes" value={`≈ ${nf(roundPeople(lsPeak))}`}
-          tip={trig && trig.length ? `People on class 4–5 slopes in hours when rain exceeds the trigger threshold (hours ${trig.join(", ")}).` : "Rain stays below the landslide trigger threshold in this scenario, so no one is counted."} />
         <Metric icon="directions_walk" label="Need to move" value={`≈ ${nf(roundPeople(run.people_to_evacuate))}`}
           sub={[rng(run.demand_range), previous ? delta(previous.people_to_evacuate, run.people_to_evacuate) : ""].filter(Boolean).join(" · ")}
-          tip="People in buildings or cells that flood, or that reach landslide class 5 above the rain threshold." />
+          tip="People in buildings or cells where the water reaches a dangerous depth (flood hazard rating)." />
         <Metric icon="no_accounts" label="No shelter place" value={`≈ ${nf(roundPeople(run.capacity_gap_people))}`}
           sub={[rng(run.gap_range), previous ? delta(previous.capacity_gap_people, run.capacity_gap_people) : ""].filter(Boolean).join(" · ")}
           alert={run.capacity_gap_people > 0} tip="People who need to move but have no reachable shelter place within the travel limit." />
-        <Metric icon="home_work" label="High-risk buildings" value={nf(crit)} tip="Buildings whose estimated risk (water depth damage curve, structure proxy, stream proximity, landslide) is high or critical." />
+        <Metric icon="home_work" label="High-risk buildings" value={nf(crit)} tip="Buildings whose estimated risk (water depth damage curve, structure proxy, stream proximity) is high or critical." />
         <Metric icon="pin_drop" label="Bridges closing" value={`${closing.length} / ${run.bridges.length}`} sub={notOpen ? `+ ${notOpen} not open (OSM)` : undefined}
           tip={first ? `First: ${first.name} at hour ${first.first_closed_hour} (${REASON[first.reason ?? ""] ?? first.reason}).` : "No bridge closes in this scenario."} />
       </div>
@@ -204,7 +197,7 @@ export default function Results({ run, hour, onFly, previous }: { run: RunResult
         </details>
       )}
       {run.methods && (
-        <p className="body-s muted"><Icon name="science" className="sm" /> {run.methods.landslide_threshold} landslide threshold · {run.methods.damage} ·{" "}
+        <p className="body-s muted"><Icon name="science" className="sm" /> {run.methods.damage} ·{" "}
           computed in {run.timings_s.total}s</p>
       )}
     </section>

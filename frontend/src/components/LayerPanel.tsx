@@ -4,18 +4,17 @@ import { Icon, IconButton, Switch } from "./m3";
 import { Sym, type SymKey } from "./MapLegend";
 
 export type LayerKey =
-  | "depth" | "lsi" | "fsi" | "lsi_static" | "hand" | "streams" | "crowd" | "roads" | "bridges" | "routes" | "shelters"
+  | "depth" | "fsi" | "hand" | "streams" | "crowd" | "roads" | "bridges" | "routes" | "shelters"
   | "all_shelters" | "assembly" | "staging" | "medical" | "hotspots" | "traffic" | "history" | "ponding" | "drains";
 /** Shaded layers that share a colour ramp replace each other, so a colour on the map has one meaning at a time. */
 export const SHADE_FAMILY: Partial<Record<LayerKey, "blue" | "warm">> = {
-  depth: "blue", ponding: "blue", hand: "blue", lsi: "warm", fsi: "warm", lsi_static: "warm", crowd: "warm",
+  depth: "blue", ponding: "blue", hand: "blue", fsi: "warm", crowd: "warm",
 };
 
 export const LAYERS: { key: LayerKey; label: string; icon: string; group: "scenario" | "area"; syms?: SymKey[]; note?: string; needsRun?: boolean }[] = [
   { key: "depth", label: "Flood depth", icon: "water", group: "scenario", syms: ["depth", "water"], note: "5 cm → 3 m+ · normal river level", needsRun: true },
   { key: "ponding", label: "Ponding likelihood", icon: "water_drop", group: "scenario", syms: ["ponding"], note: "low → high (fill ≥ 30 / 70 %)", needsRun: true },
   { key: "drains", label: "Drains to inspect", icon: "plumbing", group: "scenario", syms: ["drain"], note: "D1 = highest priority", needsRun: true },
-  { key: "lsi", label: "Landslide susceptibility", icon: "landslide", group: "scenario", syms: ["lsi"], note: "very low → very high, this hour", needsRun: true },
   { key: "roads", label: "Road status", icon: "road", group: "scenario", syms: ["roadOpen", "roadLater", "roadClosed"], note: "open · closes later · closed", needsRun: true },
   { key: "routes", label: "Evacuation routes", icon: "directions_walk", group: "scenario", syms: ["route", "routeClosed"], note: "width = people · dashed = closed", needsRun: true },
   { key: "bridges", label: "Bridges that close", icon: "do_not_disturb_on", group: "scenario", syms: ["bridgeLater", "bridgeClosed"], note: "the rest stay open (see Results)", needsRun: true },
@@ -25,11 +24,10 @@ export const LAYERS: { key: LayerKey; label: string; icon: string; group: "scena
   { key: "staging", label: "Staging points", icon: "local_shipping", group: "scenario", syms: ["staging"], note: "for response teams", needsRun: true },
   { key: "medical", label: "Hospitals & clinics", icon: "local_hospital", group: "scenario", syms: ["medical"], note: "from OpenStreetMap" },
   { key: "fsi", label: "Flood susceptibility", icon: "flood", group: "area", syms: ["fsi"], note: "static index (AHP)" },
-  { key: "lsi_static", label: "Landslide susceptibility (static)", icon: "terrain", group: "area", syms: ["lsiStatic"] },
   { key: "hand", label: "Height above drainage", icon: "height", group: "area", syms: ["hand"], note: "0 → 20 m above nearest stream" },
   { key: "streams", label: "Streams & confluences", icon: "waves", group: "area", syms: ["stream", "hotspot"], note: "dots = flow hotspots" },
   { key: "crowd", label: "Crowding (open data)", icon: "groups_3", group: "area", syms: ["crowdShade", "crowd"] },
-  { key: "history", label: "Past incidents", icon: "history", group: "area", syms: ["landslide", "webReport"], note: "records, not predictions", needsRun: true },
+  { key: "history", label: "Past incidents", icon: "history", group: "area", syms: ["webReport"], note: "records, not predictions", needsRun: true },
   { key: "traffic", label: "Live traffic", icon: "traffic", group: "area", syms: ["traffic"], note: "display only, not used by models" },
 ];
 

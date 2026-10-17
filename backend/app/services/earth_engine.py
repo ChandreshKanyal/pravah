@@ -21,11 +21,9 @@ GFD_ID = "GLOBAL_FLOOD_DB/MODIS_EVENTS/V1"
 GSW_ID = "JRC/GSW1_4/GlobalSurfaceWater"  # GSW1_5 does not exist (verified)
 WORLDPOP_ID = "WorldPop/GP/100m/pop"
 WORLDPOP_YEAR = 2020  # latest year for IND in the catalog (verified)
-LANDSLIDE_ID = "projects/sat-io/open-datasets/events/global_landslide_1970-2019"  # NASA GLC (verified access)
 GRIP_ID = "projects/sat-io/open-datasets/GRIP4/South-East-Asia"  # GRIP4 roads, region 6 (verified access)
 FABDEM_ID = "projects/sat-io/open-datasets/FABDEM"  # Copernicus DEM with forests and buildings removed (verified access)
 ROAD_SEARCH_M = 5000
-LANDSLIDE_ACCURACY_KM = {"exact": 0, "1km": 1, "5km": 5, "10km": 10, "25km": 25, "50km": 50}  # "unknown" dropped
 OB_ID = "GOOGLE/Research/open-buildings/v3/polygons"
 OBT_ID = "GOOGLE/Research/open-buildings-temporal/v1"
 
@@ -111,7 +109,7 @@ def layer_images(grid: GridSpec, today: date | None = None, bare_earth: bool = F
     """One ee.Image per layer group; band names are the §4.2 keys.
 
     bare_earth (urban mode): terrain from FABDEM instead of Copernicus GLO-30, whose buildings would turn streets into
-    pits and building edges into "slopes" (wrong ponding, landslide classes and walking times)."""
+    pits and building edges into "slopes" (wrong ponding and walking times)."""
     today = today or date.today()
     r = grid_region(grid)
 
@@ -171,26 +169,6 @@ def fetch_merit_native(hgrid) -> dict[str, np.ndarray]:
                  width=hgrid.width, height=hgrid.height)
     img = ee.Image(MERIT_ID).select(["hnd", "elv", "upa", "dir"], ["hnd", "elv", "upa", "d8"])
     return fetch_grid(img, g, ["hnd", "elv", "upa", "d8"])
-
-
-def fetch_training_layers(train_grid: GridSpec, bare_earth: bool = False) -> dict[str, np.ndarray]:
-    """dem, ndvi, soil_clay, rain_clim, upa and dist_road_m (GRIP4 global roads) on a coarse grid for the landslide
-    training region (S5.2). OSM is not fetched for the 100 km box; GRIP4 gives the road factor a real distribution."""
-    im = layer_images(train_grid, bare_earth=bare_earth)  # same DEM family as the AOI terrain
-    roads = (ee.FeatureCollection(GRIP_ID).filterBounds(grid_region(train_grid))
-             .distance(searchRadius=ROAD_SEARCH_M, maxError=30).unmask(ROAD_SEARCH_M).rename("dist_road_m"))
-    img = (im["terrain"].addBands(im["landcover"].select(["ndvi", "soil_clay"]))
-           .addBands(im["hazard_hist"].select(["rain_clim"])).addBands(im["hydro30"].select(["upa"])).addBands(roads))
-    return fetch_grid(img, train_grid, ["dem", "ndvi", "soil_clay", "rain_clim", "upa", "dist_road_m"])
-
-
-def fetch_landslides(train_grid: GridSpec, max_accuracy_km: float) -> list[tuple[float, float]]:
-    """NASA Global Landslide Catalog points (lon, lat) in the training region with location accuracy <= max_accuracy_km."""
-    init_ee()
-    fc = ee.FeatureCollection(LANDSLIDE_ID).filterBounds(grid_region(train_grid))
-    d = ee.Dictionary({k: fc.aggregate_array(k) for k in ("longitude", "latitude", "location_a")}).getInfo()
-    return [(float(lo), float(la)) for lo, la, acc in zip(d["longitude"], d["latitude"], d["location_a"])
-            if LANDSLIDE_ACCURACY_KM.get(str(acc), 1e9) <= max_accuracy_km]
 
 
 IMERG_ID = "NASA/GPM_L3/IMERG_V07"  # V06 deprecated (verified); half-hourly mm/h

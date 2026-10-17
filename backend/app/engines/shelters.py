@@ -73,16 +73,14 @@ def from_pois(pois: gpd.GeoDataFrame, bld: gpd.GeoDataFrame) -> tuple[list[dict]
     return shelters, medical
 
 
-def candidate_large_buildings(bld: gpd.GeoDataFrame, hand: np.ndarray, lsi_class: np.ndarray | None,
+def candidate_large_buildings(bld: gpd.GeoDataFrame, hand: np.ndarray, slope_deg: np.ndarray,
                               in_aoi, n: int, min_spacing_m: float = 200.0) -> list[dict]:
-    """Fallback when OSM has few shelters: biggest likely-pukka buildings on dry, stable ground (unverified)."""
+    """Fallback when OSM has few shelters: biggest likely-pukka buildings on high, gently sloping ground (unverified)."""
     if n <= 0 or not len(bld):
         return []
     b = bld[bld["structure_class"].isin(["likely_pukka_multi_storey", "likely_pukka_low_rise"]) & (bld["area_m2"] >= 150)]
     r, c = b["row"].to_numpy(int), b["col"].to_numpy(int)
-    ok = (hand[r, c] >= 5) & in_aoi(b)
-    if lsi_class is not None:
-        ok &= lsi_class[r, c] <= 3
+    ok = (hand[r, c] >= 5) & (np.nan_to_num(slope_deg[r, c], nan=90) <= 20) & in_aoi(b)
     b = b[ok].assign(score=lambda d: d["area_m2"] * d["floors"]).sort_values("score", ascending=False)
     picked: list[dict] = []
     for _, row in b.iterrows():

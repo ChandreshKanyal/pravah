@@ -10,9 +10,8 @@ router = APIRouter()
 
 @router.get("/api/history/india")
 def india():
-    return {"gfd_tiles": history.gfd_tiles(), "landslides": history.glc_india(),
-            "labels": {"gfd": "Observed floods 2000-2018 (Global Flood Database, MODIS)",
-                       "glc": "Reported landslides 1970-2019 (NASA GLC)"},
+    return {"gfd_tiles": history.gfd_tiles(),
+            "labels": {"gfd": "Observed floods 2000-2018 (Global Flood Database, MODIS)"},
             "note": "Historical incidents, not predictions"}
 
 

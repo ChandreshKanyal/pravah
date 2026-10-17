@@ -159,7 +159,7 @@ def area_extra(aoi_id: str, run_id: str) -> dict:
         out["official"] = aoi["official"]
     doc = fs.get_doc("history_cache", aoi_id)
     if doc:
-        out["history"] = {"gfd_events": len(doc.get("gfd_events", [])), "landslides": len(doc.get("landslides", [])),
+        out["history"] = {"gfd_events": len(doc.get("gfd_events", [])),
                           "agreement_pct": doc.get("agreement_pct")}
     return out
 

@@ -19,45 +19,32 @@ def risk_class(R: np.ndarray) -> np.ndarray:
     return np.select([R >= 0.7, R >= 0.5, R >= 0.3], ["critical", "high", "moderate"], "low").astype(object)
 
 
-def building_risk(d_b, F, dist_stream_m, ls_b) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def building_risk(d_b, F, dist_stream_m) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """(R_b, risk class, reason) at the evaluation hour (S6.6).
 
     NOTE(spec-drift): the depth term D is the JRC Asia residential depth-damage fraction (concave: 0.33 at 0.5 m,
     0.72 at 2 m) instead of the spec's linear min(d/3, 1), which under-rated shallow-to-medium water."""
     d = np.nan_to_num(np.asarray(d_b, dtype=float))
-    ls = np.asarray(ls_b)
     D = depth_damage(d)
     P = 1 - np.minimum(np.nan_to_num(np.asarray(dist_stream_m, dtype=float), nan=300.0) / 300.0, 1)
     R = 0.5 * D + 0.3 * np.asarray(F, dtype=float) + 0.2 * P
-    R = np.where((d < WET_M) & (ls <= 3), 0.0, R)
-    cls = risk_class(R)
+    R = np.where(d < WET_M, 0.0, R)
     reason = np.where(d >= WET_M, "flood", "").astype(object)
-    slide = ls >= 4
-    raise_ = slide & np.isin(cls, ["moderate", "low"])
-    cls[raise_] = "high"
-    R = np.where(raise_, np.maximum(R, 0.5), R)  # keep the score consistent with the raised class
-    reason[slide] = np.where(reason[slide] == "flood", "flood+landslide", "landslide")
-    return R, cls, reason
+    return R, risk_class(R), reason
 
 
-def per_hour(depth: np.ndarray, lsi_dyn: np.ndarray | None, rows, cols, pop_b, pop_unattr) -> dict:
-    """Exposed people per hour by flood depth >= 0.05 m and by landslide class >= 4."""
+def per_hour(depth: np.ndarray, rows, cols, pop_b, pop_unattr) -> dict:
+    """Exposed people per hour by flood depth >= 0.05 m."""
     H = depth.shape[0]
     d_b = np.nan_to_num(depth[:, rows, cols])  # [H, n]
     flood = [int(round(pop_b[d_b[t] >= WET_M].sum() + pop_unattr[np.nan_to_num(depth[t]) >= WET_M].sum()))
              for t in range(H)]
-    slide = [0] * H
-    ls_b = np.zeros_like(d_b, dtype=np.uint8)
-    if lsi_dyn is not None:
-        ls_b = lsi_dyn[:, rows, cols]
-        slide = [int(round(pop_b[ls_b[t] >= 4].sum() + pop_unattr[lsi_dyn[t] >= 4].sum())) for t in range(H)]
     worst = d_b[-1]
     wu = np.nan_to_num(depth[-1])
     bands = {}
     for name, lo, hi in (("0.05-0.5", 0.05, 0.5), ("0.5-1.5", 0.5, 1.5), (">1.5", 1.5, np.inf)):
         bands[name] = int(round(pop_b[(worst >= lo) & (worst < hi)].sum() + pop_unattr[(wu >= lo) & (wu < hi)].sum()))
-    return {"d_b": d_b, "ls_b": ls_b, "exposed_pop_by_hour": flood, "landslide_exposed_pop_by_hour": slide,
-            "exposed_by_depth_band": bands}
+    return {"d_b": d_b, "exposed_pop_by_hour": flood, "exposed_by_depth_band": bands}
 
 
 def triage(struct_cls, risk_cls, pop_b) -> list[dict]:
@@ -71,7 +58,7 @@ def triage(struct_cls, risk_cls, pop_b) -> list[dict]:
 
 
 def clusters(rows, cols, pop_b, R, risk_cls, struct_cls, d_b_worst, exposed, depth_worst, pop_unattr,
-             block: int, to_lonlat, top: int = 20, dist_stream_m=None, ls_worst=None) -> list[dict]:
+             block: int, to_lonlat, top: int = 20, dist_stream_m=None) -> list[dict]:
     """Aggregate exposed buildings + exposed grid population into block x block cells (300 m); top by people x risk.
     Grid people use the same exposure rule and risk score as buildings, with unknown structure F = 0.8."""
     groups: dict[tuple, dict] = defaultdict(lambda: {"people": 0.0, "rp": 0.0, "max_depth": 0.0, "classes": Counter()})
@@ -83,13 +70,10 @@ def clusters(rows, cols, pop_b, R, risk_cls, struct_cls, d_b_worst, exposed, dep
         g["classes"][struct_cls[i]] += 1
     dw = np.nan_to_num(depth_worst)
     ex_grid = dw >= WET_M
-    if ls_worst is not None:
-        ex_grid |= ls_worst >= 4
     rr, cc = np.nonzero(ex_grid & (pop_unattr > 0))
     if len(rr):
         ds = dist_stream_m[rr, cc] if dist_stream_m is not None else np.full(len(rr), np.nan)
-        lw = ls_worst[rr, cc] if ls_worst is not None else np.zeros(len(rr), np.uint8)
-        Rg, _, _ = building_risk(dw[rr, cc], np.full(len(rr), 0.8), ds, lw)
+        Rg, _, _ = building_risk(dw[rr, cc], np.full(len(rr), 0.8), ds)
         for r, c, p, rg in zip(rr, cc, pop_unattr[rr, cc], Rg):
             g = groups[(r // block, c // block)]
             g["people"] += float(p)

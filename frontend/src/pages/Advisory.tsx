@@ -226,7 +226,7 @@ export default function Advisory() {
                 <div className="grow">
                   <div className="title-m">{deadline ? `Move people ${deadline}` : "Move people as early as possible"}</div>
                   <div className="body-s">About {nf(k7.rounded ?? k7.value)} people{range(k7.range) ? ` (${range(k7.range)})` : ""}:
-                    {bd.flood ? ` ${nf(bd.flood)} in flood water` : ""}{bd.landslide ? `${bd.flood ? "," : ""} ${nf(bd.landslide)} on slopes where the rain crosses the landslide trigger` : ""}{bd.both ? `, ${nf(bd.both)} both` : ""}.
+                    {bd.flood ? ` ${nf(bd.flood)} in flood water` : ""}.
                     The range shows what happens if flood depths are 30% lower or higher and the population 20% lower or higher.</div>
                 </div>
               </div>

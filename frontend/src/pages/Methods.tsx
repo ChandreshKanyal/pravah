@@ -5,15 +5,14 @@ import Disclaimer from "../components/Disclaimer";
 import { Icon } from "../components/m3";
 
 const SECTIONS = [
-  ["overview", "How Pravah works"], ["flood", "Flood depth"], ["flow", "Water flow (3D)"], ["landslide", "Landslide susceptibility"], ["exposure", "Exposure and risk"],
+  ["overview", "How Pravah works"], ["flood", "Flood depth"], ["flow", "Water flow (3D)"], ["susceptibility", "Flood susceptibility"], ["exposure", "Exposure and risk"],
   ["routing", "Evacuation routing"], ["forecast", "Rain scenarios"], ["brief", "How the brief is built"], ["ai", "Gemini and guardrails"], ["emulator", "AI emulator and triggers"], ["drill", "Drills and public alerts"], ["fixes", "Fix before the rain"],
-  ["track", "Track record"], ["governance", "Access and data governance"], ["limits", "Limitations"], ["data", "Data and licences"],
+  ["governance", "Access and data governance"], ["limits", "Limitations"], ["data", "Data and licences"],
 ] as const;
 
 const FLOW = [
   { icon: "rainy", t: "Rain", s: "Forecast, record or custom" },
   { icon: "water", t: "Flood depth", s: "Runoff → river stage → HAND" },
-  { icon: "landslide", t: "Landslides", s: "Susceptibility × rain trigger" },
   { icon: "groups", t: "Exposure", s: "Buildings & people at risk" },
   { icon: "route", t: "Routing", s: "Shelters within capacity" },
   { icon: "assignment", t: "Advisory", s: "Gemini brief, validated" },
@@ -27,15 +26,12 @@ const DATA: [string, string, string][] = [
   ["JRC Global Surface Water 1.4", "Permanent and seasonal water", "Free of charge, without restriction (© EC JRC / Google)"],
   ["Dynamic World V1", "Land cover → runoff coefficient", "CC BY 4.0"],
   ["Sentinel-2 SR (Copernicus)", "NDVI; true-colour picture on the 3D terrain (dry-season median)", "Copernicus data: free and open (contains modified Copernicus Sentinel data)"],
-  ["OpenLandMap soil clay", "Landslide factor", "CC BY-SA 4.0"],
   ["CHIRPS daily", "Rain climatology, record day", "Public domain (CC0)"],
   ["NASA GPM IMERG V07", "Past 90 days of rain; hourly rain for historical event replays", "NASA open data"],
   ["OpenStreetMap place names", "Village, ward and town names in the brief (with Hindi names where mapped)", "© OpenStreetMap contributors, ODbL"],
   ["Sphere Handbook (2018)", "Relief supply minimums in the brief", "Sphere Association; standards cited, not copied"],
   ["WorldPop 100 m", "Population", "CC BY 4.0"],
   ["Google Open Buildings v3 + 2.5D Temporal", "Footprints, heights", "CC BY 4.0 (or ODbL)"],
-  ["NASA Global Landslide Catalog", "Landslide inventory", "NASA open data (terms being confirmed)"],
-  ["GRIP4 global roads (Meijer et al. 2018)", "Road factor in the landslide training box", "Terms being confirmed"],
   ["OpenStreetMap", "Roads, bridges, shelters, POIs", "© OpenStreetMap contributors, ODbL"],
   ["Google Maps Platform Weather API", "10-day forecast", "Google Maps Platform Terms; shown with attribution, not stored"],
   ["Google Maps JavaScript API", "Base map, Street View, traffic (display only)", "Google Maps Platform Terms"],
@@ -48,9 +44,9 @@ const LIMITS = [
   "Resolution: MERIT Hydro is about 90 m and the DEM is 30 m. Single streets and small drains are not resolved. Copernicus GLO-30 is a surface model, including buildings and trees, which matters most in cities.",
   "Building classes are proxies from footprint and height until verified by field photos. Open Buildings heights are model estimates.",
   "Population is a residential estimate (WorldPop). Day/night differences are not modelled; pilgrims and tourists must be entered as a number (they are spread over temples, markets and hotels).",
-  "Landslide output is susceptibility, not prediction. The rain trigger uses a published regional threshold (Dahal & Hasegawa 2008 in the Himalaya, Caine 1980 elsewhere) without antecedent rain. The landslide inventory is incomplete.",
+  "Floods only: landslides, which often come with heavy rain in hill areas, are not assessed.",
   "OpenStreetMap roads and shelters can be incomplete in hill towns. Capacities use footprint × floors × Sphere space standards and must be confirmed locally.",
-  "No calibration against gauges. Event replays test the rain trigger against a handful of catalogued events; they are evidence, not validation.",
+  "No calibration against gauges.",
   "Licences: MERIT Hydro and the Global Flood Database are non-commercial (CC BY-NC). Commercial use needs other licences or data.",
 ];
 
@@ -68,48 +64,12 @@ function Weights({ title, info }: { title: string; info?: { factors: string[]; w
   );
 }
 
-const DEMO_IDS = ["56f044f26351", "d277268c1783"];
-
-function TrackRecord() {
-  const [rows, setRows] = useState<{ name: string; ev: any[] }[] | null>(null);
-  useEffect(() => {
-    Promise.all(DEMO_IDS.map((id) => getAoiStatus(id).then((s) => ({ name: s.name ?? id, ev: (s.meta?.event_replays as any[]) ?? [] })).catch(() => ({ name: id, ev: [] }))))
-      .then(setRows);
-  }, []);
-  if (!rows) return <div className="shimmer" style={{ height: 120 }} />;
-  if (!rows.some((r) => r.ev.length)) return <p className="body-m muted">Event replays have not been run yet (scripts/event_replay.py).</p>;
-  return (
-    <>
-      {rows.filter((r) => r.ev.length).map((r) => (
-        <div key={r.name} className="card outlined" style={{ padding: 0, overflowX: "auto" }}>
-          <div className="title-s" style={{ padding: "12px 16px 4px" }}>{r.name}
-            <span className="body-s muted"> · landslide trigger reached in {r.ev.filter((e) => e.trigger_fired).length} of {r.ev.length} recorded events</span></div>
-          <table className="tbl">
-            <thead><tr><th>Event and record</th><th className="r">Observed rain (IMERG)</th><th>Landslide trigger</th><th className="r">Model: people to move</th><th>Same monsoon: other days over the 24 h trigger</th></tr></thead>
-            <tbody>{r.ev.map((e) => (
-              <tr key={e.id}>
-                <td><b>{e.label}</b><div className="body-s muted">{e.record}</div></td>
-                <td className="r">{e.window_mm} mm in 12 h<div className="body-s muted">peak {e.imerg_peak_mm_h} mm/h · 48 h {e.imerg_48h_mm} mm</div></td>
-                <td>{e.trigger_fired ? <span className="tag high">fired (×{e.trigger_ratio_max})</span> : <span className="tag">not reached (×{e.trigger_ratio_max ?? "–"})</span>}
-                  {e.glc_point_class != null && <div className="body-s muted">class {e.glc_point_class} at the record point; {Math.round(100 * e.share_class4plus_within_1km)}% of land within 1 km in class 4–5</div>}</td>
-                <td className="r">{(e.people_to_move ?? 0).toLocaleString("en-IN")}<div className="body-s muted">{e.flooded_km2} km² flooded</div></td>
-                <td>{e.season ? `${e.season.days_over_24h_trigger} of ${e.season.days} days (≥ ${e.season.trigger_24h_mm} mm); event day ranked ${e.season.event_day_rank ?? "–"} with ${e.season.event_day_mm ?? "–"} mm` : "–"}</td>
-              </tr>
-            ))}</tbody>
-          </table>
-        </div>
-      ))}
-    </>
-  );
-}
-
 export default function Methods() {
   const [sp] = useSearchParams();
   const [meta, setMeta] = useState<Record<string, any> | null>(null);
   const aoi = sp.get("aoi") ?? "56f044f26351";
   useEffect(() => { getAoiStatus(aoi).then((s) => setMeta({ ...(s.meta ?? {}), _name: s.name })).catch(() => setMeta(null)); }, [aoi]);
   const fsi = meta?.fsi ?? { factors: ["hand", "hist", "dist_stream", "upa", "rain", "slope", "C"], weights: [0.236, 0.165, 0.148, 0.148, 0.135, 0.092, 0.077], cr: 0.013 };
-  const lsi = meta?.lsi ?? { factors: ["slope", "rain", "ndvi", "drain", "road", "soil", "curv", "aspect"], weights: [0.206, 0.19, 0.13, 0.107, 0.107, 0.107, 0.091, 0.063], cr: 0.01 };
 
   return (
     <div className="doc-page">
@@ -166,31 +126,26 @@ export default function Methods() {
             <p className="body-s muted">The brief and the 2D map still use the HAND envelope. The 3D panel reports, for each run, how much of the HAND flood area the flow model also floods. The flow model usually adds runoff in streams and gullies that HAND does not map.</p>
           </section>
 
-          <section id="landslide">
-            <h2>Landslide susceptibility</h2>
-            <p>Eight factors (slope, rain climate, NDVI, distance to streams, distance to roads, soil clay, curvature, aspect) are classed and rated, then weighted by the Analytic Hierarchy Process (Saaty 1980). Ratings come from Frequency Ratio (Lee & Pradhan 2007) when at least 15 well-located past landslides exist within 50 km, otherwise from expert ratings. Scores are scaled and classed by the 100 km training region so areas are comparable; the AOI's terrain is computed at the same 90 m scale as the training data.</p>
-            <F>{"LSI = Σ w_f · r_f(class_f)          FR_k = (slides in k / all slides) / (cells in k / all cells)"}</F>
-            <div className="grid-2"><Weights title="Landslide factor weights" info={lsi} /><Weights title="Flood susceptibility weights (FSI)" info={fsi} /></div>
-            {meta?.lsi?.auc != null && <p className="body-m muted">For {meta._name}: {meta.lsi.method === "expert" ? "expert ratings" : "frequency-ratio ratings"} from {meta.lsi.landslide_records} landslide records; ROC AUC {meta.lsi.auc} ({meta.lsi.auc_kind}).</p>}
-            <h3>Rain trigger (decision gate)</h3>
-            <F>{"I_thr(D) = 73.90 · D^−0.79   Himalaya (Dahal & Hasegawa 2008)      I_thr(D) = 14.82 · D^−0.39   elsewhere (Caine 1980)\nR(t) = mean rain over hours 1..t / I_thr(t)\nclass(t) = static class − 1 if R < 1;  + 1 if R ≥ 2"}</F>
-            <p>Following NASA's LHASA nowcast logic, landslide closures, evacuations and shelter exclusions only apply in hours when rain exceeds the threshold. Below it, slopes are shown as susceptibility with a “monitor” note. This is susceptibility, never a timed prediction.</p>
+          <section id="susceptibility">
+            <h2>Flood susceptibility</h2>
+            <p>A static index of where flooding is most likely, independent of any one storm: height above drainage, past floods, distance to streams, upstream area, rain climate, slope and runoff coefficient, weighted by the Analytic Hierarchy Process (Saaty 1980).</p>
+            <Weights title="Flood susceptibility weights (FSI)" info={fsi} />
           </section>
 
           <section id="exposure">
             <h2>Exposure and risk</h2>
             <p>WorldPop residents are shared among Open Buildings footprints by volume within each ~90 m block. Each building gets a proxy structure class (“likely kaccha”, “likely pukka multi-storey” …) from footprint, height and density, replaced by a field-photo class when verified.</p>
             <F>{"R_b = 0.5 · D(depth) + 0.3 · F(structure) + 0.2 · P(stream proximity)\nD = JRC depth-damage fraction, Asia residential (Huizinga et al. 2017): 0.5 m → 0.33, 1 m → 0.49, 2 m → 0.72, 6 m → 1.0"}</F>
-            <p>Classes: ≥ 0.7 critical, 0.5–0.7 high, 0.3–0.5 moderate. A building in a landslide class 4–5 zone above the rain threshold is raised to at least high. The verification queue ranks buildings by risk × (1 − confidence) × people.</p>
+            <p>Classes: ≥ 0.7 critical, 0.5–0.7 high, 0.3–0.5 moderate. The verification queue ranks buildings by risk × (1 − confidence) × people.</p>
           </section>
 
           <section id="routing">
             <h2>Evacuation routing</h2>
-            <p>OpenStreetMap walking and driving networks are sampled every 30 m against the hourly depth and landslide grids. A road closes when water exceeds the walking (0.5 m) or vehicle (0.3 m) limit, when ≥ 20% of it lies in an active landslide class 5 zone, or when you block it. For road closures the landslide index is recomputed with the distance-to-road factor held neutral: road cuts do raise susceptibility (the map keeps that factor), but judging a road closed because it is a road is circular; road cells were 6.5 times more often in class 5 than other ground in Rudraprayag.</p>
+            <p>OpenStreetMap walking and driving networks are sampled every 30 m against the hourly depth grid. A road closes when water exceeds the walking (0.5 m) or vehicle (0.3 m) limit, or when you block it.</p>
             <h3>Bridges</h3>
             <p>Bridges are the real spans mapped in OpenStreetMap (not the merged road segments of the routing graph, which can run for kilometres). Each span's deck height above the normal river level is the height above drainage (HAND) at its two abutments, where the road meets the deck; the lower end counts. A bridge closes only when the river stage of the reach it crosses reaches its deck (minus an optional safety margin), or from the first hour when OpenStreetMap marks it under construction, disused or closed. The 30 m terrain cannot resolve decks lower than 3 m, so lower decks are set to 3 m and flagged. Flyovers over roads and railways never close on river stage.</p>
             <F>{"walk speed (Tobler 1993) = 6 · e^(−3.5·|tanθ + 0.05|) km/h, per 30 m segment\nassignment: min Σ people × time, subject to shelter capacity (network simplex, with an 'unplaced' overflow)"}</F>
-            <p>Route ETAs are real travel times (crowding-slowed) plus the walk to the network; landslide and steep-slope penalties only steer route choice. Shelters are “reachable in this scenario” if dry, outside active landslide zones and connected. Capacity uses 3.5 m² per person (Sphere).</p>
+            <p>Route ETAs are real travel times (crowding-slowed) plus the walk to the network; a steep-slope penalty only steers route choice. Shelters are “reachable in this scenario” if dry and connected. Capacity uses 3.5 m² per person (Sphere).</p>
           </section>
 
           <section id="forecast">
@@ -204,11 +159,10 @@ export default function Methods() {
             <p>The 10-day strip screens each day with a one-reach model; run the full scenario for detail. The past 90 days come from NASA GPM IMERG.</p>
             <p><b>Upstream river flow</b> adds water that enters the area from outside (for example a CWC flood forecast for a main river): it is shared across reaches by their upstream area outside the box, so the main stem carries all of it.</p>
             <h3>One model for every area (no mode to choose)</h3>
-            <p>Every area gets river flooding, street waterlogging and landslides. Which physics applies where is decided per cell and per channel from the data, never by a label or by AI:</p>
+            <p>Every area gets river flooding and street waterlogging. Which physics applies where is decided per cell and per channel from the data, never by a label or by AI:</p>
             <ul>
               <li><b>River flooding</b> (HAND stage) only on channels where a rain-driven rating curve means something: not <b>tidal</b> (a channel lying within 1.5 m of sea level follows the sea), not a one-cell stub, and not an <b>urban drain</b> (a channel under 100 km² whose catchment is at least half built-up: its engineered walls and bed are invisible to 90 m terrain, and its overflow is the street waterlogging below, so it is not counted twice). A channel whose stage reaches the top of its rating curve in a run is left out of that run.</li>
               <li><b>Street waterlogging</b> in hollows of the bare-earth terrain whose catchment is at least 30% built-up (Dynamic World): rain beyond the storm-drain capacity fills them. In fields and forest rain soaks in through the runoff coefficient.</li>
-              <li><b>Landslides</b> on slopes of 15° or more once rain passes the trigger threshold.</li>
               <li>The flood depth is the <b>deeper</b> of river and waterlogging depth in each cell; bridges close when the river reaches the deck or their approaches flood.</li>
               <li>People move where the flood hazard rating (DEFRA/EA FD2321, depth × (speed + 0.5) + debris) reaches “danger for some”: river water moves at the Manning speed of its channel; standing water has no speed, which gives 0.5 m (0.3 m in fragile homes).</li>
             </ul>
@@ -263,13 +217,6 @@ export default function Methods() {
             <p><b>Seen from space.</b> Only open data that may be analysed: Copernicus Sentinel-2 (10 m) and Google Dynamic World. Mapped rivers and canals whose surface reads as vegetation (NDVI ≥ 0.35 in recent clear scenes; culverted stretches excluded) suggest weeds or silt; land that turned built-up since 2016–17 on former water or wetland, or under 2 m above a stream within 150 m, and new bare ground near streams, suggest encroachment or dumped muck. Gemini looks at the image clips (true and false colour, or before and after) and says whether they show the claim; leads it says the images contradict are dropped.</p>
             <p><b>Model estimate.</b> Culverts and drain crossings (OpenStreetMap) ranked by the water arriving from upstream and the people on low ground within 400 m; road hollows in built-up parts of the bare-earth terrain that fill first; and road links that are the only drivable way out for a neighbourhood (graph bridges) on low ground or over a stream.</p>
             <p><b>What it cannot do.</b> 10 m imagery cannot show a blocked drain, a rubbish pile or parked cars, and Google satellite and Street View images may not be analysed by AI under the Maps terms. Those checks need eyes on site: each item opens Google imagery for a person to look at, and “Check in the field” sends a team photo to Gemini through Field check.</p>
-          </section>
-
-          <section id="track">
-            <h2>Track record: historical event replays</h2>
-            <p className="body-m">The model is run with the observed rain (NASA IMERG, wettest 12 hours) of catalogued disasters. Only the rain trigger can be tested: the landslide records are located to within 5–10 km, and no observed flood extent exists inside these boxes. The last column shows how often the same monsoon crossed the 24-hour trigger on other days, i.e. how many false alarms a trigger-only warning would have raised.</p>
-            <TrackRecord />
-            <div className="notice warn"><Icon name="report" /><span><b>What this shows.</b> In Rudraprayag the Himalayan rain trigger (Dahal & Hasegawa 2008) was <b>not reached</b> for any of the three recorded events when fed satellite rain (0.36–0.95 of the threshold): IMERG's ~10 km cells smooth out cloudbursts, and the 2013 destruction came mostly from upstream flow, which the model takes only through the upstream-flow input. A forecast scenario that stays below the trigger therefore does not rule landslides out; plan with the record or IMD presets as well. In Mumbai the trigger was reached for both events, with 3–5 other days of the same monsoon also crossing the 24-hour threshold. Calibrating a satellite-rain trigger (for example a local rain percentile, as in NASA LHASA) is the next step.</span></div>
           </section>
 
           <section id="governance">

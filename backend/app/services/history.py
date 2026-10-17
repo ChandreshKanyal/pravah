@@ -1,5 +1,4 @@
-"""S11 historical incidents: observed floods (Global Flood Database) and reported landslides (NASA GLC), kept separate
-from modelled risk, plus grounded web leads from the historian agent.
+"""S11 historical incidents: observed floods (Global Flood Database), kept separate from modelled risk, plus grounded web leads from the historian agent.
 
 Earth Engine data may be cached (GCS/Firestore); Maps geocodes for web leads are display-only and refreshed after 30 days.
 """
@@ -34,20 +33,6 @@ def gfd_tiles() -> str:
     return url
 
 
-def glc_india() -> list[dict]:
-    """Reported landslides 1970-2019 in India's bounding box (cached in GCS: Earth Engine data)."""
-    if storage.exists("_global", "glc_india.json"):
-        return storage.get_json("_global", "glc_india.json")
-    ees.init_ee()
-    fc = ee.FeatureCollection(ees.LANDSLIDE_ID).filterBounds(ee.Geometry.Rectangle(INDIA_BBOX))
-    keys = ["longitude", "latitude", "event_date", "fatality_c", "landslide_", "location_a"]
-    d = ee.Dictionary({k: fc.aggregate_array(k) for k in keys}).getInfo()
-    pts = [{"lon": lo, "lat": la, "date": (dt or "")[:10], "fatalities": fa or 0, "type": ty or "", "accuracy": ac or ""}
-           for lo, la, dt, fa, ty, ac in zip(*(d[k] for k in keys)) if lo is not None and la is not None]
-    storage.put_json("_global", "glc_india.json", pts)
-    return pts
-
-
 def _gfd_events(bbox) -> list[dict]:
     ees.init_ee()
     reg = ee.Geometry.Rectangle(list(bbox))
@@ -65,19 +50,6 @@ def _gfd_events(bbox) -> list[dict]:
     for r in rows:
         r["flooded_km2_in_area"] = round(float(r.pop("pixels")) * 0.0625, 2)  # 250 m pixels
     return sorted(rows, key=lambda r: r["start"], reverse=True)
-
-
-def _glc_in(bbox) -> list[dict]:
-    ees.init_ee()
-    fc = ee.FeatureCollection(ees.LANDSLIDE_ID).filterBounds(ee.Geometry.Rectangle(list(bbox)))
-    out = []
-    for f in fc.getInfo()["features"]:
-        p = f["properties"]
-        out.append({"lon": p.get("longitude"), "lat": p.get("latitude"), "date": (p.get("event_date") or "")[:10],
-                    "title": p.get("event_titl") or "", "type": p.get("landslide_") or "", "trigger": p.get("landslid_1") or "",
-                    "fatalities": p.get("fatality_c"), "location_accuracy": p.get("location_a"),
-                    "source_url": p.get("source_lin") or ""})
-    return out
 
 
 def _agreement(aoi_id: str) -> dict:
@@ -107,10 +79,9 @@ def aoi_history(aoi_id: str, fetch_web: bool = False, refresh: bool = False) -> 
         bbox = aoi.get("bbox")
         if not bbox:
             raise KeyError(f"unknown AOI {aoi_id}")
-        doc.update({"aoi_id": aoi_id, "gfd_events": _gfd_events(bbox), "landslides": _glc_in(bbox),
+        doc.update({"aoi_id": aoi_id, "gfd_events": _gfd_events(bbox),
                     **_agreement(aoi_id), "datasets_at": datetime.now(timezone.utc).isoformat(),
-                    "labels": {"gfd": "Observed floods 2000-2018 (Global Flood Database, MODIS 250 m)",
-                               "glc": "Reported landslides 1970-2019 (NASA Global Landslide Catalog)"}})
+                    "labels": {"gfd": "Observed floods 2000-2018 (Global Flood Database, MODIS 250 m)"}})
         fs.set_doc("history_cache", aoi_id, doc)
     stale = time.time() - doc.get("web_at_ts", 0) > GEOCODE_MAX_AGE_S
     if fetch_web and (refresh or "web" not in doc or stale):

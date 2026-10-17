@@ -10,12 +10,12 @@ import numpy as np
 import osmnx as ox
 from rasterio.features import rasterize
 from rasterio.transform import Affine
-from scipy.ndimage import binary_dilation, distance_transform_edt
+from scipy.ndimage import distance_transform_edt
 
 from app.config import get_settings
-from app.engines import buildings as bld, crowding, fsi as fsi_engine, hydrology as hy, landslide as ls, population, rainfall
+from app.engines import buildings as bld, crowding, fsi as fsi_engine, hydrology as hy, population, rainfall
 from app.engines import drains as drn, pluvial, roads, shelters as shel
-from app.engines.grid import lonlat_bounds, lonlat_to_rowcol, make_grid, rowcol_to_lonlat, terrain, terrain_coarse, xy_to_rowcol
+from app.engines.grid import lonlat_bounds, make_grid, rowcol_to_lonlat, terrain, xy_to_rowcol
 from app.engines.render import to_png, to_png_classes
 from scipy.spatial import cKDTree
 from app.models.aoi import AOI
@@ -185,65 +185,6 @@ def _fsi(aoi_id: str, meta: dict) -> None:
     meta["fsi"] = info
 
 
-def _lsi(aoi: AOI, grid: GridSpec, warnings: list[str], meta: dict) -> None:
-    """S5 static: FR ratings learned on a 90 m grid over the AOI + 50 km, AHP weights, training-region scaling."""
-    cfg = get_settings()
-    tg = make_grid(aoi.bbox, buffer_m=50_000, cell=90, snap=90)
-    T = ees.fetch_training_layers(tg, bare_earth=_bare(aoi))
-    t_terr = terrain(T["dem"], tg.cell)
-    t_stream = np.nan_to_num(T["upa"]) >= cfg.stream_upa_km2
-    pts = ees.fetch_landslides(tg, cfg.landslide_max_accuracy_km)
-    slides = np.zeros((tg.height, tg.width), bool)
-    n_in = 0
-    if pts:
-        r, c = lonlat_to_rowcol(tg, [p[0] for p in pts], [p[1] for p in pts])
-        ok = (r >= 0) & (r < tg.height) & (c >= 0) & (c < tg.width)
-        slides[r[ok], c[ok]] = True
-        slides = binary_dilation(slides)  # 1-cell buffer
-        n_in = int(ok.sum())
-    rain_edges = ls.rain_quintile_edges(T["rain_clim"])
-    # Training-box roads come from GRIP4 (global, major roads); the AOI uses OSM drivable roads. Before 17 Oct the
-    # training road factor was a constant mean rating, which mis-calibrated the AOI near roads.
-    t_layers = {**t_terr, "ndvi": T["ndvi"], "soil_clay": T["soil_clay"], "rain_clim": T["rain_clim"],
-                "dist_stream_m": _distance_m(t_stream, tg.cell), "dist_road_m": T["dist_road_m"]}
-    t_cls = ls.classify(t_layers, rain_edges)
-    ratings, n = ls.learn_ratings(t_cls, slides, ls.LSI_FACTORS, n_points=n_in)
-    method = "frequency_ratio" if n >= ls.MIN_SLIDES else "expert"
-    if method == "expert":
-        warnings.append(f"Only {n} landslide records located to within {cfg.landslide_max_accuracy_km:g} km near this "
-                        f"area (< {ls.MIN_SLIDES}); expert ratings used")
-    train_raw, _ = ls.lsi_raw(t_cls, ratings, cfg.lsi_ahp_matrix)
-    # Validation: ROC AUC of the training-region score against the landslide cells. With expert ratings this is an
-    # independent check; with FR it is a success rate (fitted on the same points), so it is reported as such.
-    auc = ls.auc(train_raw, slides)
-
-    t, h, lc, hz, dv = (storage.load_layers(aoi.aoi_id, g) for g in ("terrain", "hydro30", "landcover", "hazard_hist", "derived"))
-    tc = terrain_coarse(t["dem"], grid.cell, factor=round(tg.cell / grid.cell))  # match the 90 m training scale
-    a_layers = {"slope_deg": tc["slope_deg"], "aspect_deg": tc["aspect_deg"], "curv": tc["curv"], "ndvi": lc["ndvi"],
-                "soil_clay": lc["soil_clay"], "rain_clim": hz["rain_clim"], "dist_stream_m": h["dist_stream_m"],
-                "dist_road_m": dv["dist_road_m"]}
-    a_cls = ls.classify(a_layers, rain_edges)
-    raw, info = ls.lsi_raw(a_cls, ratings, cfg.lsi_ahp_matrix)
-    val, cls, edges = ls.normalise_and_classify(raw, train_raw, t["slope_deg"])
-    # Road closures use the same index with the distance-to-road factor neutral (its mean rating): road cuts do raise
-    # susceptibility, but judging a road closed because it is a road is circular (road cells were 6.5x more often in
-    # class 5 than other ground in Rudraprayag, 16 Oct).
-    neutral = lambda c: {**c, "road": np.full_like(c["road"], -1)}  # noqa: E731
-    train_nr, _ = ls.lsi_raw(neutral(t_cls), ratings, cfg.lsi_ahp_matrix)
-    raw_nr, _ = ls.lsi_raw(neutral(a_cls), ratings, cfg.lsi_ahp_matrix)
-    val_nr, _, edges_nr = ls.normalise_and_classify(raw_nr, train_nr, t["slope_deg"])
-    sus = storage.load_layers(aoi.aoi_id, "susceptibility") if storage.exists(aoi.aoi_id, "susceptibility.npz") else {}
-    storage.save_layers(aoi.aoi_id, "susceptibility", {**sus, "lsi_static": val, "lsi_class": cls,
-                                                       "lsi_edges": np.asarray(edges, np.float32),
-                                                       "lsi_static_noroad": val_nr, "lsi_edges_noroad": np.asarray(edges_nr, np.float32)}, grid)
-    storage.save_png(aoi.aoi_id, "lsi_static", to_png_classes(cls))
-    meta["lsi"] = {**info, "method": method, "landslide_records": n, "ratings": ratings,
-                   "auc": None if auc is None else round(auc, 3),
-                   "auc_kind": "success rate (fitted points)" if method == "frequency_ratio" else "validation (independent points)",
-                   "road_source_training": "GRIP4 (Meijer et al. 2018)",
-                   "class_edges": [round(e, 4) for e in edges], "training_grid": f"{tg.width}x{tg.height} @ 90 m"}
-
-
 def _building_proxy(aoi_id: str, grid: GridSpec, meta: dict) -> None:
     """S6.1-S6.4 static part: proxy structure class per building and base population per building."""
     b = storage.load_gdf(aoi_id, "buildings.parquet")
@@ -270,8 +211,6 @@ def _network(aoi: AOI, grid: GridSpec, warnings: list[str], meta: dict) -> None:
     """S7.1-S7.6 + S9: routable edge tables, crowding grid and edge crowding, shelters and medical facilities."""
     aoi_id = aoi.aoi_id
     t = storage.load_layers(aoi_id, "terrain")
-    sus = storage.load_layers(aoi_id, "susceptibility")
-    lsi_class = sus.get("lsi_class")
     hand = storage.load_layers(aoi_id, "hydro30")["hand"]
     b = storage.load_gdf(aoi_id, "buildings_proxy.parquet")
     pois = storage.load_gdf(aoi_id, "pois.parquet").to_crs(grid.crs)
@@ -285,7 +224,7 @@ def _network(aoi: AOI, grid: GridSpec, warnings: list[str], meta: dict) -> None:
         G = storage.load_graph(aoi_id, name)
         if mode == "drive":
             G = ox.add_edge_travel_times(ox.add_edge_speeds(G))
-        tables[mode] = roads.edge_table(ox.project_graph(G, to_crs=grid.crs), grid, mode, t["dem"], t["slope_deg"], lsi_class)
+        tables[mode] = roads.edge_table(ox.project_graph(G, to_crs=grid.crs), grid, mode, t["dem"], t["slope_deg"])
 
     # S9 crowding grid from POI attractors + building density
     poi_rc, attractors = [], []
@@ -330,7 +269,7 @@ def _network(aoi: AOI, grid: GridSpec, warnings: list[str], meta: dict) -> None:
     if n_proper < shel.MIN_OSM_SHELTERS:
         warnings.append(f"Only {n_proper} schools/community halls in OpenStreetMap here ({n_osm - n_proper} places of "
                         "worship); added unverified large-building candidates. Add or confirm shelters with local authorities.")
-        sh += shel.candidate_large_buildings(b, hand, lsi_class, in_aoi, shel.MAX_CANDIDATES - n_proper)
+        sh += shel.candidate_large_buildings(b, hand, t["slope_deg"], in_aoi, shel.MAX_CANDIDATES - n_proper)
     trees = {m: (cKDTree(nodes[["x", "y"]].to_numpy()), nodes["node"].to_numpy()) for m, (_, nodes) in tables.items()}
     out = []
     for prefix, lst in (("S", sh), ("M", med)):
@@ -342,7 +281,6 @@ def _network(aoi: AOI, grid: GridSpec, warnings: list[str], meta: dict) -> None:
             nodes_ = {f"node_{m}": int(ids[tr.query([rec["x"], rec["y"]])[1]]) for m, (tr, ids) in trees.items()}
             recs.append({**rec, "id": f"{prefix}{i}", "lon": round(float(lon), 6), "lat": round(float(lat), 6),
                          "row": r, "col": c, "hand_m": round(float(hand[r, c]), 1),
-                         "lsi_class": int(lsi_class[r, c]) if lsi_class is not None else 0,
                          "primary": bool(w <= lon <= e and s <= lat <= n), **nodes_})
         out.append(recs)
     storage.put_json(aoi_id, "shelters.json", out[0])
@@ -387,8 +325,8 @@ def build_bridges(aoi_id: str, grid: GridSpec, warnings: list[str]) -> dict:
 
 
 def _bare(aoi: AOI) -> bool:
-    """Bare-earth terrain (FABDEM) for every new area: the surface model's building tops make false slopes (landslides
-    at building edges) and false dams for water. Areas prepared as "river" before 17 Oct keep Copernicus GLO-30 so
+    """Bare-earth terrain (FABDEM) for every new area: the surface model's building tops make false slopes
+    (at building edges) and false dams for water. Areas prepared as "river" before 17 Oct keep Copernicus GLO-30 so
     their cached layers stay consistent."""
     return aoi.mode != "river"
 
@@ -432,7 +370,7 @@ ACTIVE: set[str] = set()  # areas being prepared in this process (a "preparing" 
 
 
 def prepare_area(aoi: AOI, force: frozenset[str] = frozenset()) -> dict:
-    """Idempotent: steps whose outputs exist are skipped unless named in `force` (e.g. {"lsi", "network"})."""
+    """Idempotent: steps whose outputs exist are skipped unless named in `force` (e.g. {"network"})."""
     ACTIVE.add(aoi.aoi_id)
     try:
         return _prepare(aoi, force)
@@ -498,10 +436,6 @@ def _prepare(aoi: AOI, force: frozenset[str]) -> dict:
             status["fsi"] = "ready"
         else:
             run("fsi", _fsi, aoi_id, meta)
-        if storage.exists(aoi_id, "png/lsi_static.png") and "lsi" not in force:
-            status["lsi"] = "ready"
-        elif status.get("derived") == "ready":
-            run("lsi", _lsi, aoi, grid, warnings, meta)
     if storage.exists(aoi_id, "buildings_proxy.parquet") and "building_proxy" not in force:
         status["building_proxy"] = "ready"
     elif status.get("buildings") == "ready" and status.get("population") == "ready":

@@ -12,7 +12,7 @@ def _run():
     return {
         "run_id": "r1", "aoi_id": "a1", "rain_label": "Manual 60 mm/h for 4 h", "rain_series_mm_h": [60, 60, 60, 60],
         "flooded_area_km2_by_hour": [0.2, 0.4, 0.5, 0.66], "capacity_gap_people": 120, "people_to_evacuate": 900,
-        "exposure": {"exposed_pop_by_hour": [10, 50, 200, 251], "landslide_exposed_pop_by_hour": [0, 0, 0, 0],
+        "exposure": {"exposed_pop_by_hour": [10, 50, 200, 251],
                      "buildings_by_risk": {"critical": 2, "high": 40},
                      "clusters": [{"id": "C1", "people": 300, "max_depth": 1.2, "risk_class": "high",
                                    "dominant_class": "informal_cluster", "centroid": [79.0, 30.3]}]},

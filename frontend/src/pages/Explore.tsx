@@ -128,8 +128,8 @@ export default function Explore() {
 
         <div className="panel">
           <div className="intro">
-            <h1>Plan for floods and landslides</h1>
-            <p>Draw an area to see flood depth, landslide risk, who is exposed and where people can go, hour by hour.</p>
+            <h1>Plan for floods</h1>
+            <p>Draw an area in India to see flood depth, who is exposed and where people can go, hour by hour.</p>
             <div className="row">
               <Button icon={drawing ? "close" : "crop_free"} onClick={toggleDraw}>{drawing ? "Cancel drawing" : "Draw an area"}</Button>
               <Button variant="text" onClick={() => nav("/methods")}>How it works</Button>
@@ -175,7 +175,7 @@ export default function Explore() {
               <span className="txt"><span className="t">All projects</span><span className="s">Every area and every saved run</span></span>
             </button>
           )}
-          <div className="credits">Built on Google Cloud: Gemini on Vertex AI, Earth Engine, Google Maps Platform, Firebase. Open data: Copernicus DEM, WorldPop, Open Buildings, OpenStreetMap, CHIRPS, NASA GLC.</div>
+          <div className="credits">Built on Google Cloud: Gemini on Vertex AI, Earth Engine, Google Maps Platform, Firebase. Open data: Copernicus DEM, WorldPop, Open Buildings, OpenStreetMap, CHIRPS.</div>
         </div>
       </aside>
 
@@ -203,7 +203,7 @@ export default function Explore() {
             </Field>
             <div className="prep-models">
               <Icon name="auto_awesome_motion" className="sm" />
-              <span className="body-s">No mode to choose: every area gets <b>river flooding</b>, <b>street waterlogging</b> and <b>landslides</b>.
+              <span className="body-s">No mode to choose: every area gets <b>river flooding</b> and <b>street waterlogging</b>.
                 Which applies where is worked out from the terrain, rivers and built-up land.</span>
             </div>
             <div className={`notice ${tooBig ? "error" : "info"}`}>

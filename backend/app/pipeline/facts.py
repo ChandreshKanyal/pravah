@@ -39,12 +39,11 @@ def _road_groups(roads: dict, keep) -> list[dict]:
         # named roads group by name; unnamed ones by type and ~1 km location, so "village road" never sums a whole district
         gkey = name if pr.get("name") else f"{name}@{round(cs[0][0], 2)},{round(cs[0][1], 2)}"
         g = groups.setdefault(gkey, {"name": name, "length_m": 0.0, "first_closed_hour": None, "reason": pr.get("reason"),
-                                     "lsi_max": 0, "lonlat": cs[len(cs) // 2]})
+                                     "lonlat": cs[len(cs) // 2]})
         g["length_m"] += pr.get("length_m") or sum(_hav_m(a, b) for a, b in zip(cs[:-1], cs[1:]))
         h = pr.get("first_closed_hour")
         if h is not None and (g["first_closed_hour"] is None or h < g["first_closed_hour"]):
             g["first_closed_hour"], g["reason"] = h, pr.get("reason")
-        g["lsi_max"] = max(g["lsi_max"], pr.get("lsi_max") or 0)
     out = sorted(groups.values(), key=lambda g: -g["length_m"])
     for g in out:
         g["length_km"] = round(g.pop("length_m") / 1000, 2)
@@ -158,7 +157,6 @@ def build_facts(run: dict, area_extra: dict | None = None) -> dict:
     closing = [b for b in bridges if b.get("first_closed_hour") and b.get("reason") not in ("construction", "closed", "disused")]
     not_open = [b for b in bridges if b.get("reason") in ("construction", "closed", "disused")]
     peak = max(e.get("exposed_pop_by_hour") or [0])
-    ls_peak = max(e.get("landslide_exposed_pop_by_hour") or [0])
     br = e.get("buildings_by_risk", {})
     start = run.get("start_local")
     win = run.get("evac_window_h")
@@ -173,7 +171,6 @@ def build_facts(run: dict, area_extra: dict | None = None) -> dict:
          "unit": f"of {len(bridges)} bridges" + (f"; {len(not_open)} more marked not open in OpenStreetMap" if not_open else "")},
         {"id": "K5", "label": "Flooded area at the worst hour", "value": (run.get("flooded_area_km2_by_hour") or [0])[-1],
          "unit": "km2"},
-        {"id": "K6", "label": "People in landslide hazard zones (peak)", "value": ls_peak, "unit": "people"},
         {"id": "K7", "label": "People who need to move", "value": run.get("people_to_evacuate", 0), "unit": "people"},
     ]
     for k in key:
@@ -206,16 +203,11 @@ def build_facts(run: dict, area_extra: dict | None = None) -> dict:
     pl = area_extra.get("places")
     closed = [{"id": f"R{k}", **g, "name": road_name(g, pl)} for k, g in enumerate(_road_groups(
         roads, lambda p: p.get("first_closed_hour") is not None), start=1)][:15]
-    lsr = [{"id": f"L{k}", **{x: g[x] for x in ("length_km", "lsi_max", "lonlat")}, "name": road_name(g, pl)}
-           for k, g in enumerate(_road_groups(roads, lambda p: (p.get("lsi_max") or 0) >= 4), start=1)][:10]
-    meta = run.get("methods", {})
     facts = {
         "scenario": {"label": run["rain_label"], "H": H, "worst_hour": H, "start_local": start,
                      "move_before_hour": win, "move_before": deadline_text(win, start) or "no evacuation route is cut",
                      "peak_rain_mm_h": round(max(run["rain_series_mm_h"] or [0]), 1),
-                     "total_rain_mm": round(sum(run["rain_series_mm_h"]), 1),
-                     "landslide_trigger_hours": meta.get("landslide_trigger_hours", []),
-                     "landslide_threshold": meta.get("landslide_threshold", "")},
+                     "total_rain_mm": round(sum(run["rain_series_mm_h"]), 1)},
         "key_numbers": key,
         "clusters": clusters,
         "shelters": shelters,
@@ -233,7 +225,6 @@ def build_facts(run: dict, area_extra: dict | None = None) -> dict:
         "medical": [{"id": m["id"], "name": m.get("name") or "", "lonlat": _ll(m)} for m in area_extra.get("medical", [])][:6],
         "hotspots": [{"id": h["id"], "type": h["type"], "upa_km2": h["upa_km2"], "stage_m": h.get("stage_m"),
                       "depth_m": h.get("depth_m"), "lonlat": [h["lon"], h["lat"]]} for h in run.get("hotspots", [])[:6]],
-        "landslide_roads": lsr,
         "crowding": [{"id": x["id"], "score": x["score"], "attractors": x.get("top_attractors", []),
                       "lonlat": [x["lon"], x["lat"]]} for x in area_extra.get("crowding", [])[:5]],
         "drains": [{"id": d["id"], "type": d["type"], "name": d.get("name", ""), "priority": d["priority"],
@@ -251,7 +242,7 @@ def build_facts(run: dict, area_extra: dict | None = None) -> dict:
 
 def _trim(facts: dict) -> None:
     """Keep the facts under ~12 KB by shortening the longest lists first."""
-    for k in ("verification_queue", "landslide_roads", "closed_roads", "routes", "shelters", "clusters", "warnings"):
+    for k in ("verification_queue", "closed_roads", "routes", "shelters", "clusters", "warnings"):
         while len(json.dumps(facts)) > MAX_FACTS_BYTES and len(facts.get(k, [])) > 3:
             facts[k] = facts[k][:-1]
 
@@ -412,11 +403,6 @@ def rules_advisory(facts: dict) -> list[Recommendation]:
                                   owner="Municipal body (drains, water-logging)",
                                   why=f"Priority score {d.get('priority')}; {d.get('exposed_people_300m', 0)} exposed people within 300 m.",
                                   confidence="medium"))
-    for L in facts["landslide_roads"][:3]:
-        out.append(Recommendation(horizon="seasonal", priority="P2", action=f"Inspect slope protection on {L['name']}",
-                                  location_label=L["name"], evidence_ids=[L["id"]], owner="PWD (roads and bridges)",
-                                  why=f"{L['length_km']} km reaches landslide class {L['lsi_max']} in this scenario.",
-                                  confidence="low"))
     for s in [s for s in facts["shelters"] if s["assigned"] > 0][:3]:
         out.append(Recommendation(horizon="seasonal", priority="P2", action=f"Stock {s['name']} with water, food and blankets",
                                   location_label=s["name"], evidence_ids=[s["id"]],
@@ -449,8 +435,7 @@ def rules_advisory(facts: dict) -> list[Recommendation]:
 
 RULE_LIMITATIONS = [
     "Flood depths come from HAND mapping and rational-method runoff: uncalibrated, no channel routing, water never recedes.",
-    "Landslide classes are susceptibility, not timed predictions; the rain trigger uses a published regional threshold and "
-    "missed three recorded Rudraprayag events when replayed with satellite rain, so a scenario without a trigger does not rule landslides out.",
+    "Pravah models floods only: landslides, which often come with heavy rain in hill areas, are not assessed.",
     "Building classes are proxies from footprints and heights until verified by field photos.",
     "Population is residential and night-time-like (WorldPop); daytime crowds may differ.",
     "Roads and shelters come from OpenStreetMap, which is incomplete in hill towns.",
@@ -530,7 +515,7 @@ def finalize(run_id: str, facts: dict, recs: list[Recommendation], headline: str
             r.owner = "District Magistrate / DDMA"
     k = {x["id"]: x for x in facts["key_numbers"]}
     rng = k["K7"].get("range") or [k["K7"]["value"]] * 2
-    shown = ["K7", "K3", "K4", "K1", "K6", "K2", "K5"]  # decision order: move, gap, bridges, then exposure detail
+    shown = ["K7", "K3", "K4", "K1", "K2", "K5"]  # decision order: move, gap, bridges, then exposure detail
     return Advisory(advisory_id=run_id, run_id=run_id, headline=headline or bottom_line(facts), summary=summary,
                     key_numbers=[{"label": k[i]["label"], "value": k[i]["value"], "unit": k[i]["unit"], "evidence_id": i,
                                   "rounded": k[i].get("rounded"), "range": k[i].get("range")} for i in shown if i in k],

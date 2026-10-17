@@ -18,7 +18,7 @@ from app.config import get_settings
 
 log = logging.getLogger(__name__)
 
-PROMPT = """List documented floods, flash floods, cloudbursts and landslides affecting {place} ({bbox}) since 2000.
+PROMPT = """List documented floods, flash floods and cloudbursts affecting {place} ({bbox}) since 2000.
 Return JSON only: [{{"type": "...", "date": "YYYY-MM-DD or approximate", "place": "...", "summary": "<= 30 words",
 "source_urls": ["..."]}}]. Only include events with a source URL. If unsure of the date, say "approximate".
 At most 12 events, most significant first."""

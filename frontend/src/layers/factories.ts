@@ -24,7 +24,6 @@ export const COLORS = {
   drain: [121, 85, 72, 255] as RGBA,         // brown #795548 down-triangle: drain to inspect
   hotspot: [23, 78, 166, 255] as RGBA,       // navy target: flow hotspot (on the streams layer)
   crowd: [251, 188, 4, 255] as RGBA,         // yellow #fbbc04: crowding hotspot (same family as the crowding shading)
-  landslide: [189, 0, 38, 255] as RGBA,      // dark red #bd0026 triangle: past landslide (landslide colour family)
   webReport: [60, 64, 67, 255] as RGBA,      // charcoal #3c4043: web report of a past event
   blocked: [217, 48, 37, 255] as RGBA,       // area you blocked: its roads close, so it shares the "closed" red
   fix: [0, 131, 143, 255] as RGBA,           // dark cyan #00838f circle with a wrench: improvement to make before the rain
@@ -46,8 +45,8 @@ export const RAMPS = {
 
 /** How strong each shaded layer looks: bitmap opacity here x PNG alpha in render.py. The legend uses the same product. */
 export const RASTER = {
-  depth: { opacity: 0.9, alpha: 210 }, ponding: { opacity: 0.75, alpha: 210 }, lsi: { opacity: 0.55, alpha: 170 },
-  fsi: { opacity: 0.65, alpha: 170 }, lsi_static: { opacity: 0.65, alpha: 170 }, hand: { opacity: 0.65, alpha: 200 },
+  depth: { opacity: 0.9, alpha: 210 }, ponding: { opacity: 0.75, alpha: 210 },
+  fsi: { opacity: 0.65, alpha: 170 }, hand: { opacity: 0.65, alpha: 200 },
   crowd: { opacity: 0.65, alpha: 200 }, streams: { opacity: 0.9, alpha: 230 },
 };
 export type RasterKey = keyof typeof RASTER;
@@ -71,7 +70,7 @@ export const roadState = (firstClosed: number | null | undefined, hour: number):
   firstClosed == null ? "open" : firstClosed <= hour ? "closed" : "later";
 export const STATE_LINE: Record<RoadState, LineStyle> = { open: LINES.roadOpen, later: LINES.roadLater, closed: LINES.roadClosed };
 /** Plain words for the backend closure reasons (tooltips and Results). */
-export const REASON: Record<string, string> = { flood: "flooded", landslide: "landslide", bridge: "bridge closed", blocked: "blocked by you",
+export const REASON: Record<string, string> = { flood: "flooded", bridge: "bridge closed", blocked: "blocked by you",
   overtopped: "river over the deck", construction: "under construction (OSM)", closed: "closed to traffic (OSM)", disused: "disused (OSM)" };
 /** One line on a bridge's height and how high the river gets, for tooltips and lists. */
 export function deckLine(b: { deck_m?: number; deck_source?: string; peak_vs_deck_m?: number | null; status?: string }): string {
@@ -138,7 +137,7 @@ function slicePath(path: LonLat[], a: number, b: number): LonLat[] {
 
 type RoadRow = PathDatum & { piece?: boolean; cut?: boolean };
 const rowCache = new WeakMap<object, RoadRow[]>();
-/** Rows to draw: every edge, plus the hazard pieces of closing edges (where the slide or flooded dip is). An edge with
+/** Rows to draw: every edge, plus the hazard pieces of closing edges (where the flooded dip is). An edge with
  *  pieces is marked `cut`: once closed, only its pieces read as closed and the rest as "no through road". */
 function roadRows(fc: GeoJSON.FeatureCollection): RoadRow[] {
   let out = rowCache.get(fc);
@@ -156,7 +155,7 @@ function roadRows(fc: GeoJSON.FeatureCollection): RoadRow[] {
 
 /** Road status at `hour`: open (thin grey), closes later (orange), closed (red, dashed, thicker); closing roads get a dark
  *  edge. On edges whose hazard location is known only those pieces take the state; the rest of a closed edge is a thin red
- *  "no through road" line (a slide 300 m long does not make an 8 km stretch a landslide). */
+ *  "no through road" line (a flooded dip 300 m long does not make an 8 km stretch flooded). */
 export function roadsLayers(id: string, fc: GeoJSON.FeatureCollection, hour: number, clip?: BBox | null): Layer[] {
   const data = roadRows(fc);
   const st = (d: RoadRow): LineStyle => {
@@ -196,9 +195,9 @@ export function routesLayer(id: string, fc: GeoJSON.FeatureCollection, hour: num
 
 // ---------- markers ----------
 export type Marker = "shelter" | "candidate" | "assembly" | "staging" | "medical" | "drain" | "bridgeLater" | "bridgeClosed"
-  | "hotspot" | "crowd" | "landslide" | "webReport" | "fix";
+  | "hotspot" | "crowd" | "webReport" | "fix";
 const MARKERS: Marker[] = ["shelter", "candidate", "assembly", "staging", "medical", "drain", "bridgeLater", "bridgeClosed",
-  "hotspot", "crowd", "landslide", "webReport", "fix"];
+  "hotspot", "crowd", "webReport", "fix"];
 const CELL = 64;  // atlas cell in px; markers display at 13-34 px, so this is about 2x for sharp edges
 
 function rounded(g: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
@@ -240,7 +239,6 @@ function drawMarker(g: CanvasRenderingContext2D, m: Marker) {
     case "hotspot":
       shape("circle", WHITE, c(COLORS.hotspot), 8); g.beginPath(); g.arc(32, 32, 9, 0, Math.PI * 2); g.fillStyle = c(COLORS.hotspot); g.fill(); break;
     case "crowd": shape("circle", c(COLORS.crowd)); break;
-    case "landslide": shape("up", c(COLORS.landslide)); break;
     case "webReport": shape("circle", c(COLORS.webReport)); break;
     case "fix": {  // wrench: a ring head with an open jaw on a handle, drawn diagonally
       shape("circle", c(COLORS.fix));

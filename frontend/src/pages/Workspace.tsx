@@ -58,7 +58,7 @@ const STAGES: { label: string; sub: string; keys: string[] }[] = [
   { label: "Analysing the road network", sub: "OpenStreetMap roads, bridges and distances", keys: ["osm", "derived"] },
   { label: "Estimating population", sub: "WorldPop and Google Open Buildings", keys: ["population", "buildings", "building_proxy"] },
   { label: "Gathering infrastructure", sub: "shelters, hospitals, bridges, routes", keys: ["network"] },
-  { label: "Analysing flood and landslide risk", sub: "stream network, flood and landslide susceptibility", keys: ["hydrology", "overlays", "fsi", "lsi", "urban"] },
+  { label: "Analysing flood risk", sub: "stream network, flood susceptibility, waterlogging hollows", keys: ["hydrology", "overlays", "fsi", "urban"] },
 ];
 
 function FlyTo({ target }: { target: { lon: number; lat: number; zoom?: number; t: number } | null }) {
@@ -183,7 +183,6 @@ export default function Workspace() {
     setSearch((q) => { const n = new URLSearchParams(q); n.set("run", run.run_id); return n; }, { replace: true });
   }, [run, live]);  // eslint-disable-line react-hooks/exhaustive-deps
   const depthImgs = usePreloaded(run && !live && on.has("depth") ? run.depth_png_urls : null);
-  const lsiImgs = usePreloaded(run && !live && on.has("lsi") && run.lsi_png_url ? run.rain_series_mm_h.map((_, i) => run.lsi_png_url!.replace(/lsi_h\d+/, `lsi_h${i + 1}`)) : null);
   // switching on a shaded layer switches off the others drawn with the same colours (blues: water; yellow-red: susceptibility)
   const toggle = (k: LayerKey) => setOn((s) => {
     const n = new Set(s);
@@ -345,7 +344,7 @@ export default function Workspace() {
     }
     const c = st.corners;
     const box = status?.bbox ?? null;  // everything the model counts is inside the box: cut shading and roads there
-    const statics = [["fsi", "fsi"], ["lsi_static", "lsiStatic"], ["hand", "hand"], ["crowd", "crowdShade"], ["streams", "stream"]] as const;
+    const statics = [["fsi", "fsi"], ["hand", "hand"], ["crowd", "crowdShade"], ["streams", "stream"]] as const;
     for (const [k, sym] of statics) {
       if (on.has(k) && st.layers[k]) { L.push(bitmap(`static-${k}`, st.layers[k], c, RASTER[k].opacity, box)); add(sym); }
     }
@@ -355,7 +354,6 @@ export default function Workspace() {
     if (run && !aiOn && !live) {  // the AI preview shows alone: the run's routes and markers belong to a different storm
       const oc = run.overlay_corners.length ? run.overlay_corners : c;
       // one layer per run (not per hour), fed preloaded frames: the water grows smoothly instead of flashing
-      if (on.has("lsi") && run.lsi_png_url) { L.push(bitmap(`lsi-${run.run_id}`, run.lsi_png_url.replace(/lsi_h\d+/, `lsi_h${hour}`), oc, RASTER.lsi.opacity, box, frameAt(lsiImgs, hour - 1))); add("lsi"); }
       if (on.has("depth") && run.depth_png_urls[hour - 1]) { L.push(bitmap(`depth-${run.run_id}`, run.depth_png_urls[hour - 1], oc, RASTER.depth.opacity, box, frameAt(depthImgs, hour - 1))); add("depth"); add("water"); }
       if (on.has("ponding") && run.ponding_png_url) { L.push(bitmap(`pond-${run.run_id}`, run.ponding_png_url, oc, RASTER.ponding.opacity, box)); add("ponding"); }
       if (on.has("roads") && roads) {
@@ -408,8 +406,6 @@ export default function Workspace() {
     if (on.has("streams")) { L.push(...markers("hotspots", st.hotspots.slice(0, 8), { icon: "hotspot", size: 15 })); add("hotspot", Math.min(8, st.hotspots.length)); }
     if (on.has("crowd")) { L.push(...markers("crowdhs", st.crowd_hotspots, { icon: "crowd", size: 15, label: labels ? (x) => x.id : undefined })); add("crowd", st.crowd_hotspots.length); }
     if (on.has("history") && hist && run) {  // reported incidents only alongside a scenario's results
-      L.push(...markers("hist-glc", hist.landslides, { icon: "landslide", size: 17 }));
-      add("landslide", hist.landslides.length);
       const web = (hist.web ?? []).filter((w) => w.marker).map((w) => ({ lon: w.marker!.lng, lat: w.marker!.lat, label: w.date.slice(0, 4), w }));
       L.push(...markers("hist-web", web, { icon: "webReport", size: 15, label: (w) => w.label }));
       add("webReport", web.length);
@@ -421,16 +417,16 @@ export default function Workspace() {
       add("userShelter", p.extra_shelters.length);
     }
     if (changed && run && !live) {  // the panel no longer matches this run: fade its results so they do not read as current
-      const RUN = /^(lsi-|depth-|pond-|roads|routes|drains|bridges|assembly|staging|shelters$|shelters-label)/;
+      const RUN = /^(depth-|pond-|roads|routes|drains|bridges|assembly|staging|shelters$|shelters-label)/;
       for (let k = 0; k < L.length; k++) if (RUN.test(L[k].id)) L[k] = L[k].clone({ opacity: 0.3 * ((L[k].props as any).opacity ?? 1) });
     }
     if (area) {
       // border above the rasters but below roads and points: insert after the last bitmap layer
-      let i = 0; L.forEach((x, k) => { if (/^(area-mask|static-|lsi-|depth-|pond-)/.test(x.id)) i = k + 1; });
+      let i = 0; L.forEach((x, k) => { if (/^(area-mask|static-|depth-|pond-)/.test(x.id)) i = k + 1; });
       L.splice(i, 0, ...area.border);
     }
     return { layers: L, drawn };
-  }, [status?.bbox, st, run, roads, routes, hour, depthImgs, lsiImgs, shown, p.blocked_polygons, p.extra_shelters, hist, tab, aiPng, labels, impOpen, imp, impCats, impSel, changed, live]);
+  }, [status?.bbox, st, run, roads, routes, hour, depthImgs, shown, p.blocked_polygons, p.extra_shelters, hist, tab, aiPng, labels, impOpen, imp, impCats, impSel, changed, live]);
 
   // hover text uses the legend's words (open / closes later / closed) so the map, the key and Results agree
   const tooltip = useCallback((info: PickingInfo): string | null => {
@@ -458,7 +454,7 @@ export default function Workspace() {
         return `${o.id} ${o.name}\n${o.first_closed_hour <= hour ? `Bridge closed since ${at(o.first_closed_hour)}` : `Bridge closes later: at ${at(o.first_closed_hour)}`}${why(o.reason)}${deckLine(o) ? `\n${deckLine(o)}` : ""}`;
       case "shelters": return `${o.id} ${niceName(o)}\nShelter in use · ${o.assigned} of ${o.capacity} places`;
       case "shelters-all": {
-        const note: Record<string, string> = { flooded: "flooded", landslide_risk: "landslide risk", disabled: "closed by you", unreachable: "unreachable" };
+        const note: Record<string, string> = { flooded: "flooded", disabled: "closed by you", unreachable: "unreachable" };
         return `${o.id} ${niceName(o)}\n${run ? "Candidate shelter, not used" : "Candidate shelter"}${o.status && note[o.status] ? ` · ${note[o.status]}` : ""}`;
       }
       case "extra": return `${o.name}\nShelter you added · ${o.capacity} places, used from the next run`;
@@ -468,7 +464,6 @@ export default function Workspace() {
       case "drains": return `${o.id} ${o.name || o.type}\nDrain to inspect · priority ${o.priority.toFixed(2)} · ${o.exposed_people_300m} people within 300 m`;
       case "hotspots": return `Flow hotspot ${o.id}\n${o.type}, ${Math.round(o.upa_km2).toLocaleString("en-IN")} km² drains here`;
       case "crowdhs": return `Crowding hotspot ${o.id}${o.top_attractors?.length ? `\n${o.top_attractors.slice(0, 2).join(" · ")}` : ""}`;
-      case "hist-glc": return `Past landslide${o.date ? ` · ${o.date.slice(0, 10)}` : ""}${o.title ? `\n${o.title}` : ""}`;
       case "hist-web": return `Web report · ${o.w.date}${o.w.place ? ` · ${o.w.place}` : ""}`;
       case "blocked": return "Area you blocked\nRoads inside are closed from hour 1 of the next run";
       default: return null;

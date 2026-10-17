@@ -5,9 +5,9 @@ import { Icon } from "./m3";
 /** Every symbol the workspace map can draw. The map key and the layer panel render these, so a swatch always matches
  *  the drawing (colour, line or marker shape, dash, width, edge and strength). */
 export type SymKey =
-  | "area" | "depth" | "water" | "ponding" | "lsi" | "fsi" | "lsiStatic" | "hand" | "crowdShade" | "stream" | "hotspot"
+  | "area" | "depth" | "water" | "ponding" | "fsi" | "hand" | "crowdShade" | "stream" | "hotspot"
   | "roadOpen" | "roadLater" | "roadClosed" | "roadCut" | "route" | "routeClosed" | "bridgeLater" | "bridgeClosed" | "blocked" | "traffic"
-  | "shelter" | "userShelter" | "candidate" | "assembly" | "staging" | "medical" | "drain" | "crowd" | "landslide" | "webReport" | "fix";
+  | "shelter" | "userShelter" | "candidate" | "assembly" | "staging" | "medical" | "drain" | "crowd" | "webReport" | "fix";
 
 type SymDef = { label: string; sub?: string } & (
   | { kind: "ramp"; colors: string[]; alpha: number }
@@ -22,16 +22,14 @@ export const SYMS: Record<SymKey, SymDef> = {
   depth: { kind: "ramp", colors: RAMPS.depth, alpha: rasterAlpha("depth"), label: "Deepest flood so far", sub: "5 cm → 3 m+ · see 3D for water draining away" },
   water: { kind: "fill", color: css(COLORS.water, rasterAlpha("depth")), edge: "transparent", label: "River or lake, normal level" },
   ponding: { kind: "ramp", colors: RAMPS.ponding, alpha: rasterAlpha("ponding"), label: "Ponding likelihood", sub: "low → high" },
-  lsi: { kind: "ramp", colors: RAMPS.sus, alpha: rasterAlpha("lsi"), label: "Landslide susceptibility", sub: "very low → very high" },
   fsi: { kind: "ramp", colors: RAMPS.sus, alpha: rasterAlpha("fsi"), label: "Flood susceptibility", sub: "very low → very high" },
-  lsiStatic: { kind: "ramp", colors: RAMPS.sus, alpha: rasterAlpha("lsi_static"), label: "Landslide susceptibility (static)", sub: "very low → very high" },
   hand: { kind: "ramp", colors: RAMPS.hand, alpha: rasterAlpha("hand"), label: "Height above stream", sub: "0 → 20 m" },
   crowdShade: { kind: "ramp", colors: RAMPS.crowd, alpha: rasterAlpha("crowd"), label: "Crowding", sub: "low → high" },
   stream: { kind: "line", style: { ...LINES.stream, color: [...COLORS.stream.slice(0, 3), Math.round(255 * rasterAlpha("streams"))] as LineStyle["color"] }, label: "Stream" },
   hotspot: { kind: "icon", marker: "hotspot", label: "Flow hotspot" },
   roadOpen: { kind: "line", style: LINES.roadOpen, label: "Road open" },
   roadLater: { kind: "line", style: LINES.roadLater, label: "Road closes later" },
-  roadClosed: { kind: "line", style: LINES.roadClosed, label: "Road closed", sub: "where the slide or flooding is" },
+  roadClosed: { kind: "line", style: LINES.roadClosed, label: "Road closed", sub: "where the flooding is" },
   roadCut: { kind: "line", style: LINES.roadCut, label: "No through road", sub: "blocked further along" },
   route: { kind: "line", style: LINES.route, label: "Evacuation route", sub: "wider = more people" },
   routeClosed: { kind: "line", style: LINES.routeClosed, label: "Route closed", sub: "a road on it has closed" },
@@ -48,7 +46,6 @@ export const SYMS: Record<SymKey, SymDef> = {
   fix: { kind: "icon", marker: "fix", label: "Fix before the rain", sub: "number = priority" },
   drain: { kind: "icon", marker: "drain", label: "Drain to inspect (D#)" },
   crowd: { kind: "icon", marker: "crowd", label: "Crowding hotspot (X#)" },
-  landslide: { kind: "icon", marker: "landslide", label: "Past landslide" },
   webReport: { kind: "icon", marker: "webReport", label: "Web report (year)" },
 };
 const ORDER = Object.keys(SYMS) as SymKey[];

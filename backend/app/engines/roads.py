@@ -88,8 +88,7 @@ def tobler_time_s(geom: LineString, grid: GridSpec, dem: np.ndarray, start_xy: t
     return t * (length_m / L)
 
 
-def edge_table(G: nx.MultiDiGraph, grid: GridSpec, mode: str, dem: np.ndarray, slope_deg: np.ndarray,
-               lsi_class: np.ndarray | None) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
+def edge_table(G: nx.MultiDiGraph, grid: GridSpec, mode: str, dem: np.ndarray, slope_deg: np.ndarray) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
     """G must be projected to the grid CRS; for drive it must carry `travel_time` (OSMnx). Returns (edges, nodes)."""
     nodes = {n: (d["x"], d["y"]) for n, d in G.nodes(data=True)}
     nid = list(nodes)
@@ -98,7 +97,6 @@ def edge_table(G: nx.MultiDiGraph, grid: GridSpec, mode: str, dem: np.ndarray, s
     inside = (nr >= 0) & (nr < grid.height) & (nc >= 0) & (nc < grid.width)
     z = {n: float(dem[nr[i], nc[i]]) if inside[i] else np.nan for i, n in enumerate(nid)}
     steep = maximum_filter(np.nan_to_num(slope_deg), size=3) >= 35
-    lsi_f = lsi_class.ravel() if lsi_class is not None else None
     rows = []
     for u, v, k, d in G.edges(keys=True, data=True):
         geom = d.get("geometry") or LineString([nodes[u], nodes[v]])
@@ -112,7 +110,6 @@ def edge_table(G: nx.MultiDiGraph, grid: GridSpec, mode: str, dem: np.ndarray, s
             "u": u, "v": v, "key": k, "geometry": geom, "length_m": length, "t0_s": t0,
             "bridge": is_bridge(d.get("bridge")), "cells": cells, "name": str(_first(d.get("name", "")) or ""),
             "highway": str(_first(d.get("highway", ""))),
-            "lsi_static_max": int(max((lsi_f[c] for c in cells), default=0)) if lsi_f is not None else 0,
             "slope_adjacent": bool(any(steep.ravel()[c] for c in cells)),
             "narrowness": narrowness(d.get("highway"), d.get("lanes"), d.get("width")),
         })

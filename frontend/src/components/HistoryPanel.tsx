@@ -3,7 +3,7 @@ import { historyAoi } from "../api/client";
 import type { HistoryAoi } from "../types/api";
 import { Button, Icon, nf } from "./m3";
 
-/** S11 AOI incidents: datasets (GFD, NASA GLC) and grounded web leads, kept apart from modelled risk. */
+/** S11 AOI incidents: datasets (GFD) and grounded web leads, kept apart from modelled risk. */
 export default function HistoryPanel({ aoiId, onFly, onData }: { aoiId: string; onFly: (lon: number, lat: number) => void; onData: (h: HistoryAoi) => void }) {
   const [h, setH] = useState<HistoryAoi | null>(null);
   const [busy, setBusy] = useState(false);
@@ -38,21 +38,9 @@ export default function HistoryPanel({ aoiId, onFly, onData }: { aoiId: string; 
       </section>
 
       <section className="group">
-        <div className="section-title"><Icon name="landslide" /> Reported landslides <span className="body-s muted">· NASA catalog</span></div>
-        {h.landslides.length ? h.landslides.map((l, i) => (
-          <div key={i} className="li dense clickable sl" style={{ padding: "6px 8px", margin: "0 -8px", borderRadius: 12 }} onClick={() => onFly(l.lon, l.lat)}>
-            <Icon name="location_on" className="lead" />
-            <span className="txt"><span className="t" style={{ fontSize: 14 }}>{l.title || l.type}</span>
-              <span className="s" style={{ display: "block" }}>{l.date} · {l.trigger || "trigger unknown"}{l.fatalities ? ` · ${l.fatalities} deaths` : ""} · located ±{l.location_accuracy}</span></span>
-            {l.source_url && <a href={l.source_url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} aria-label="Source"><Icon name="open_in_new" className="sm" /></a>}
-          </div>
-        )) : <p className="body-s muted">No catalogued landslides inside this box.</p>}
-      </section>
-
-      <section className="group">
         <div className="section-title"><Icon name="travel_explore" /> From web sources <span className="body-s muted">· unverified leads</span></div>
         {!h.web && <>
-          <p className="body-s muted">Gemini with Google Search grounding lists documented floods, cloudbursts and landslides here since 2000, each with a source link.</p>
+          <p className="body-s muted">Gemini with Google Search grounding lists documented floods and cloudbursts here since 2000, each with a source link.</p>
           <Button variant="tonal" icon="travel_explore" onClick={web} disabled={busy}>{busy ? "Searching the web (about a minute)…" : "Find web incidents"}</Button>
         </>}
         {h.web?.map((w, i) => (

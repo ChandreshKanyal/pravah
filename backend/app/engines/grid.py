@@ -86,7 +86,7 @@ def terrain(dem: np.ndarray, cell: float) -> dict[str, np.ndarray]:
 
 def terrain_coarse(dem: np.ndarray, cell: float, factor: int = 3) -> dict[str, np.ndarray]:
     """terrain() computed on a DEM block-averaged by `factor` (e.g. 30 m -> 90 m), repeated back to the input shape.
-    Slope, aspect and curvature are scale dependent; the landslide model is trained at 90 m, so the AOI must match."""
+    Slope, aspect and curvature are scale dependent; coarse terrain must be computed at its own scale."""
     h, w = dem.shape
     H, W = -(-h // factor) * factor, -(-w // factor) * factor
     d = np.pad(np.asarray(dem, np.float64), ((0, H - h), (0, W - w)), mode="edge")
