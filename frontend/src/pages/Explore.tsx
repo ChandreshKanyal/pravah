@@ -4,16 +4,16 @@ import { useMap } from "@vis.gl/react-google-maps";
 import type { Layer } from "@deck.gl/core";
 import { archiveAoi, createAoi, geocode, listAois } from "../api/client";
 import DrawControl, { bboxKm, bboxOf, type DrawMode } from "../components/DrawControl";
-import { Button, Chip, Dialog, Field, Icon, IconButton, Segmented, useSnackbar } from "../components/m3";
+import { Button, Chip, Dialog, Field, Icon, IconButton, useSnackbar } from "../components/m3";
 import { areaLayers } from "../layers/factories";
 import { AreaOutline, MapCanvas, type MapType } from "../components/MapCanvas";
 import type { AoiListItem, GeocodeResult } from "../types/api";
 
-const LIMIT_KM = { river: 15, urban: 4 } as const;
+const LIMIT_KM = 10;  // one limit for every area (backend models/aoi.py)
 type BBox = [number, number, number, number];
-const DEMOS: { name: string; bbox: BBox; mode: "river" | "urban"; note: string }[] = [
-  { name: "Rudraprayag", bbox: [78.93, 30.24, 79.03, 30.33], mode: "river", note: "Uttarakhand · river confluence, steep hills" },
-  { name: "Mumbai Kurla–Mithi", bbox: [72.865, 19.06, 72.895, 19.09], mode: "urban", note: "Maharashtra · urban waterlogging" },
+const DEMOS: { name: string; bbox: BBox; icon: string; note: string }[] = [
+  { name: "Rudraprayag", bbox: [78.93, 30.24, 79.03, 30.33], icon: "landscape", note: "Uttarakhand · river confluence, steep hills" },
+  { name: "Mumbai Kurla–Mithi", bbox: [72.865, 19.06, 72.895, 19.09], icon: "location_city", note: "Maharashtra · urban waterlogging" },
 ];
 
 function Fly({ to }: { to: { bbox?: BBox | null; lat?: number; lng?: number; zoom?: number } | null }) {
@@ -30,7 +30,7 @@ export default function Explore() {
   const nav = useNavigate();
   const snack = useSnackbar();
   const [mode, setMode] = useState<DrawMode>(null);
-  const [draft, setDraft] = useState<{ bbox: BBox; name: string; mode: "river" | "urban" } | null>(null);
+  const [draft, setDraft] = useState<{ bbox: BBox; name: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [q, setQ] = useState("");
   const [results, setResults] = useState<GeocodeResult[]>([]);
@@ -70,13 +70,13 @@ export default function Explore() {
   }, [draft?.bbox]);
 
   const size = draft ? bboxKm(draft.bbox) : null;
-  const tooBig = !!(draft && size && (size[0] > LIMIT_KM[draft.mode] || size[1] > LIMIT_KM[draft.mode]));
+  const tooBig = !!(draft && size && (size[0] > LIMIT_KM || size[1] > LIMIT_KM));
 
   async function submit() {
     if (!draft || tooBig) return;
     setBusy(true);
     try {
-      const r = await createAoi(draft.bbox, draft.name.trim() || "Unnamed area", draft.mode);
+      const r = await createAoi(draft.bbox, draft.name.trim() || "Unnamed area");
       nav(`/area/${r.aoi.aoi_id}`);
     } catch (e) {
       snack(String((e as Error).message));
@@ -104,7 +104,7 @@ export default function Explore() {
       <MapCanvas center={{ lat: 22.5, lng: 82 }} zoom={5} layers={layers} mapTypeId={mapType} streetView={false}>
         <Fly to={fly} />
         <AreaOutline bbox={draft?.bbox} padding={{ top: 80, right: 80, bottom: 80, left: 440 }} />
-        <DrawControl mode={mode} onFinish={(p) => { setMode(null); setDraft({ bbox: bboxOf(p), name: "", mode: "river" }); }} />
+        <DrawControl mode={mode} onFinish={(p) => { setMode(null); setDraft({ bbox: bboxOf(p), name: "" }); }} />
       </MapCanvas>
 
       <aside className="left">
@@ -143,9 +143,9 @@ export default function Explore() {
               return (
                 <button key={d.name} className="row-item sl" onClick={() => {
                   if (a) open(a);
-                  else { setDraft({ bbox: d.bbox, name: d.name, mode: d.mode }); }
+                  else { setDraft({ bbox: d.bbox, name: d.name }); }
                 }}>
-                  <span className={`avatar ${d.mode}`}><Icon name={d.mode === "urban" ? "location_city" : "landscape"} /></span>
+                  <span className={`avatar ${d.icon === "location_city" ? "urban" : "river"}`}><Icon name={d.icon} /></span>
                   <span className="txt"><span className="t">{d.name}</span><span className="s">{d.note}</span></span>
                   <Icon name="chevron_right" className="trail" />
                 </button>
@@ -162,7 +162,7 @@ export default function Explore() {
                   <button className="row-item sl" onClick={() => open(a)}>
                     <span className="avatar plain"><Icon name="history" /></span>
                     <span className="txt"><span className="t">{a.name}</span>
-                      <span className="s">{a.mode === "urban" ? "Urban" : "River & hills"} · {bboxKm(a.bbox).map((x) => x.toFixed(0)).join(" × ")} km</span></span>
+                      <span className="s">{bboxKm(a.bbox).map((x) => x.toFixed(0)).join(" × ")} km</span></span>
                   </button>
                   <IconButton icon="close" label={`Remove ${a.name} from the list`} small onClick={() => hide(a)} />
                 </div>
@@ -201,14 +201,14 @@ export default function Explore() {
             <Field label="Area name" support="Shown in reports, e.g. the town or ward">
               <input value={draft.name} autoFocus onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder=" " />
             </Field>
-            <div className="stack-s">
-              <span className="label-l">Mode</span>
-              <Segmented label="Mode" block value={draft.mode} onChange={(m) => setDraft({ ...draft, mode: m })}
-                options={[{ value: "river", label: "River & hills", icon: "landscape" }, { value: "urban", label: "Urban", icon: "location_city" }]} />
+            <div className="prep-models">
+              <Icon name="auto_awesome_motion" className="sm" />
+              <span className="body-s">No mode to choose: every area gets <b>river flooding</b>, <b>street waterlogging</b> and <b>landslides</b>.
+                Which applies where is worked out from the terrain, rivers and built-up land.</span>
             </div>
             <div className={`notice ${tooBig ? "error" : "info"}`}>
               <Icon name={tooBig ? "error" : "straighten"} />
-              <span>{size[0].toFixed(1)} km × {size[1].toFixed(1)} km{tooBig ? ` — too large for ${draft.mode} mode (max ${LIMIT_KM[draft.mode]} × ${LIMIT_KM[draft.mode]} km). Draw a smaller area.` : ` · within the ${LIMIT_KM[draft.mode]} km limit`}</span>
+              <span>{size[0].toFixed(1)} km × {size[1].toFixed(1)} km{tooBig ? ` — too large (max ${LIMIT_KM} × ${LIMIT_KM} km). Draw a smaller area.` : ` · within the ${LIMIT_KM} km limit`}</span>
             </div>
           </div>
         )}

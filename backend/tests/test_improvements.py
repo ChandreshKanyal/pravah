@@ -56,3 +56,19 @@ def test_firestore_nested_arrays_round_trip():
     enc = encode(doc)
     assert all(not isinstance(v, list) for v in enc["overlay_corners"])  # no array directly inside an array
     assert decode(enc) == doc
+
+
+def test_profile_gates():
+    """One model for every area: tidal channels and one-cell stubs get no river stage; hollows waterlog only when
+    their catchment is mostly built-up."""
+    import numpy as np
+    from app.engines import profile as prof
+    reaches = [{"e_up": 12, "e_down": 9, "cells": [1, 2, 3]}, {"e_up": 0.3, "e_down": 0.0, "cells": [1, 2, 3, 4]},
+               {"e_up": 40, "e_down": 39, "cells": [7]}]
+    assert prof.reliable_reaches(reaches).tolist() == [True, False, False]
+    ws = np.array([[1, 1, 2, 2], [1, 1, 2, 2]])
+    lc = np.array([[6, 6, 1, 1], [6, 4, 1, 6]])
+    ok = prof.built_hollows({"ws_label": ws, "v_dep": np.zeros(3)}, lc)
+    assert ok.tolist() == [False, True, False]  # hollow 1 is 75% built, hollow 2 is 25%
+    p = prof.area_profile(np.full((2, 4), 20.0), lc, None, reaches, ok)
+    assert p["hazards"] == ["river", "waterlogging", "landslide"] and p["tidal"]

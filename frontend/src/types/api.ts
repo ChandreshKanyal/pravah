@@ -6,9 +6,17 @@ export interface AOI {
   aoi_id: string;
   name: string;
   bbox: [number, number, number, number];
-  mode: "river" | "urban";
+  mode: "river" | "urban" | "auto";  // legacy label; every area gets every hazard model since 17 Oct
   created_at: string;
 }
+
+/** What the data says about an area (backend engines/profile.py): sets defaults and words, never switches a hazard off. */
+export interface AreaProfile {
+  built_share: number; slope_p50: number; slope_p90: number; steep_share: number; largest_river_km2: number;
+  tidal: boolean; urban: boolean; hilly: boolean; flat: boolean; hazards: ("river" | "waterlogging" | "landslide")[];
+  summary: string; channels_river_physics?: number; channels_other?: number;
+}
+export const profileOf = (s: { meta?: Record<string, any> | null } | null | undefined): AreaProfile | null => s?.meta?.profile ?? null;
 
 export interface AoiStatus {
   aoi_id: string;
@@ -17,8 +25,8 @@ export interface AoiStatus {
   warnings: string[] | null;
   meta: Record<string, any> | null;
   prepare_seconds?: number | null;
-  name?: string; bbox?: [number, number, number, number]; mode?: "river" | "urban"; latest_run_id?: string | null;
-  official?: Official | null; archived?: boolean;
+  name?: string; bbox?: [number, number, number, number]; mode?: "river" | "urban" | "auto"; latest_run_id?: string | null;
+  official?: Official | null; archived?: boolean; drain?: AreaDrain | null;
 }
 
 export interface Official {
@@ -90,6 +98,7 @@ export interface ScenarioParams {
   rain_preset?: "imd_heavy" | "imd_very_heavy" | "imd_extreme" | "cloudburst" | null;
   preset_label?: string | null;
   rain_series_override?: number[] | null; override_start_local?: string | null; observed_date?: string | null;
+  drain_capacity_mm_h?: number | null;  // null = the area's confirmed value, else 25
   visitors?: number;
 }
 
@@ -98,8 +107,15 @@ export const defaultParams = (aoi_id: string): ScenarioParams => ({
   hyetograph: "constant", worst_multiplier: 1.5, best_multiplier: 0.5, river_offset_m: 0, upstream_inflow_m3s: 0, manning_n: 0.04,
   pop_multiplier: 1, pop_total_override: null, disabled_shelter_ids: [], extra_shelters: [], blocked_polygons: [],
   travel_mode: "walk", evac_start_hour: 1, vehicle_depth_limit_m: 0.3, walk_depth_limit_m: 0.5,
-  bridge_cut_stage_m: 3, bridge_margin_m: 0, max_travel_min: 60, sqm_per_person: 3.5, rain_preset: null, preset_label: null, visitors: 0,
+  bridge_cut_stage_m: 3, bridge_margin_m: 0, max_travel_min: 60, sqm_per_person: 3.5, rain_preset: null, preset_label: null, visitors: 0, drain_capacity_mm_h: null,
 });
+
+/** Storm-drain capacity confirmed for an area by a person (from the Gemini lookup or their own figure). */
+export interface AreaDrain { mm_h: number; city: string; basis: string; sources: { uri: string; title?: string }[]; confirmed_by?: string; at?: string }
+export interface DrainLookup {
+  found: boolean; city: string; mm_h: number | null; planned_mm_h: number | null; basis: string; confidence: string;
+  sources: { uri: string; title?: string }[]; note: string; candidates?: DrainLookup[];
+}
 
 export interface ExposureSummary {
   total_pop: number;

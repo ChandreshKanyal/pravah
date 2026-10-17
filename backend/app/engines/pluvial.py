@@ -106,8 +106,10 @@ def level_for_volume(z_sorted: np.ndarray, V: float, a: float, spill: float) -> 
     return float(min((V / a + cs[j]) / (j + 1), spill))
 
 
-def ponding(static: dict, dem: np.ndarray, rain_mm_h, cell: float, drain_capacity_mm_h: float = 25.0) -> tuple[np.ndarray, np.ndarray]:
-    """(ponding depth [H, rows, cols], fill fraction [H, n_dep + 1]) for an hourly rain series."""
+def ponding(static: dict, dem: np.ndarray, rain_mm_h, cell: float, drain_capacity_mm_h: float = 25.0,
+            use: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
+    """(ponding depth [H, rows, cols], fill fraction [H, n_dep + 1]) for an hourly rain series. `use` (per depression)
+    limits it to the hollows that waterlog (engines/profile.built_hollows)."""
     i = np.asarray(rain_mm_h, dtype=float)
     excess = np.cumsum(np.clip(i - drain_capacity_mm_h, 0, None))  # mm beyond what the drains carry
     lab = static["dep_label"]
@@ -125,6 +127,8 @@ def ponding(static: dict, dem: np.ndarray, rain_mm_h, cell: float, drain_capacit
             continue
         o = out[t].ravel()
         for k in range(1, n + 1):
+            if use is not None and not use[k]:
+                continue
             V = min(v_in_all[k] * P / 1000.0, static["v_dep"][k])
             if V <= 0 or static["v_dep"][k] <= 0:
                 continue

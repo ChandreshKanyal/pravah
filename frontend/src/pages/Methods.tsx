@@ -21,7 +21,7 @@ const FLOW = [
 
 const DATA: [string, string, string][] = [
   ["Copernicus DEM GLO-30 (2024)", "Terrain, slope (river mode)", "Copernicus DEM licence: free with attribution (© DLR / Airbus, ESA)"],
-  ["FABDEM (Hawker et al. 2022)", "Bare-earth terrain (buildings and forest removed): urban ponding, the water-flow model and the 3D view", "CC BY-NC-SA 4.0 (non-commercial)"],
+  ["FABDEM (Hawker et al. 2022)", "Bare-earth terrain (buildings and forest removed): waterlogging, the water-flow model, the 3D view, and the terrain of areas prepared since 17 Oct", "CC BY-NC-SA 4.0 (non-commercial)"],
   ["MERIT Hydro v1.0.1 (Yamazaki et al. 2019)", "Flow direction, upstream area, HAND", "CC BY-NC 4.0 (non-commercial)"],
   ["Global Flood Database (Tellman et al. 2021)", "Observed floods 2000–2018", "CC BY-NC 4.0 (non-commercial)"],
   ["JRC Global Surface Water 1.4", "Permanent and seasonal water", "Free of charge, without restriction (© EC JRC / Google)"],
@@ -203,9 +203,17 @@ export default function Methods() {
             </ul>
             <p>The 10-day strip screens each day with a one-reach model; run the full scenario for detail. The past 90 days come from NASA GPM IMERG.</p>
             <p><b>Upstream river flow</b> adds water that enters the area from outside (for example a CWC flood forecast for a main river): it is shared across reaches by their upstream area outside the box, so the main stem carries all of it.</p>
-            <h3>Urban mode (water-logging screening)</h3>
-            <F>{"filled = PriorityFlood+ε(FABDEM)   (Barnes et al. 2014)\nV_in = C_ws · Σ max(0, i − drain capacity) · A_ws   → fill each depression to the level that holds V_in"}</F>
-            <p>Rain up to the storm-drain design capacity (25 mm/h, Mumbai's historical standard; configurable) is carried away; the rest ponds in depressions of the bare-earth terrain. People move when still water reaches 0.5 m (DEFRA/EA FD2321 hazard rating “danger for some”), or 0.3 m in fragile single-storey homes. Drains and culverts are ranked for pre-monsoon clearing by flow accumulation, ponding or flood susceptibility, and exposed people within 300 m; field photos marked blocked raise the priority. River overflow and tides are not modelled in urban mode.</p>
+            <h3>One model for every area (no mode to choose)</h3>
+            <p>Every area gets river flooding, street waterlogging and landslides. Which physics applies where is decided per cell and per channel from the data, never by a label or by AI:</p>
+            <ul>
+              <li><b>River flooding</b> (HAND stage) only on channels where a rain-driven rating curve means something: not <b>tidal</b> (a channel lying within 1.5 m of sea level follows the sea), not a one-cell stub, and not an <b>urban drain</b> (a channel under 100 km² whose catchment is at least half built-up: its engineered walls and bed are invisible to 90 m terrain, and its overflow is the street waterlogging below, so it is not counted twice). A channel whose stage reaches the top of its rating curve in a run is left out of that run.</li>
+              <li><b>Street waterlogging</b> in hollows of the bare-earth terrain whose catchment is at least 30% built-up (Dynamic World): rain beyond the storm-drain capacity fills them. In fields and forest rain soaks in through the runoff coefficient.</li>
+              <li><b>Landslides</b> on slopes of 15° or more once rain passes the trigger threshold.</li>
+              <li>The flood depth is the <b>deeper</b> of river and waterlogging depth in each cell; bridges close when the river reaches the deck or their approaches flood.</li>
+              <li>People move where the flood hazard rating (DEFRA/EA FD2321, depth × (speed + 0.5) + debris) reaches “danger for some”: river water moves at the Manning speed of its channel; standing water has no speed, which gives 0.5 m (0.3 m in fragile homes).</li>
+            </ul>
+            <F>{"filled = PriorityFlood+ε(FABDEM)   (Barnes et al. 2014)\nV_in = C_ws · Σ max(0, i − drain capacity) · A_ws   → fill each built-up hollow to the level that holds V_in\ndepth = max(river HAND depth on reliable channels, waterlogging depth)"}</F>
+            <p>The storm-drain capacity is 25 mm/h (Mumbai's historical standard; configurable) and applies under built-up land, in the waterlogging screen and the water-flow model alike. A one-line profile of each area (built-up share, slopes, largest river) is shown above the scenario; it sets display defaults and never switches a hazard off. Tides and storm surge are not modelled. Drains and culverts are ranked for pre-monsoon clearing by flow accumulation, ponding or flood susceptibility, and exposed people within 300 m; field photos marked blocked raise the priority.</p>
           </section>
 
           <section id="brief">
@@ -253,7 +261,7 @@ export default function Methods() {
             <p>At the end of area preparation Pravah lists places where maintenance would most reduce flooding, each with the evidence it rests on. Three kinds of evidence are kept apart, because they are not equally strong:</p>
             <p><b>Reported on the web.</b> Gemini with Google Search lists spots in the box that municipal lists or news name as repeatedly waterlogged. A link is kept only if its site is among the pages Search returned; places are positioned with Google geocoding (vague results such as a whole suburb are dropped) and compared with our terrain model (low ground or a road hollow nearby).</p>
             <p><b>Seen from space.</b> Only open data that may be analysed: Copernicus Sentinel-2 (10 m) and Google Dynamic World. Mapped rivers and canals whose surface reads as vegetation (NDVI ≥ 0.35 in recent clear scenes; culverted stretches excluded) suggest weeds or silt; land that turned built-up since 2016–17 on former water or wetland, or under 2 m above a stream within 150 m, and new bare ground near streams, suggest encroachment or dumped muck. Gemini looks at the image clips (true and false colour, or before and after) and says whether they show the claim; leads it says the images contradict are dropped.</p>
-            <p><b>Model estimate.</b> Culverts and drain crossings (OpenStreetMap) ranked by the water arriving from upstream and the people on low ground within 400 m; road hollows in the bare-earth terrain (urban areas) that fill first; and road links that are the only drivable way out for a neighbourhood (graph bridges) on low ground or over a stream.</p>
+            <p><b>Model estimate.</b> Culverts and drain crossings (OpenStreetMap) ranked by the water arriving from upstream and the people on low ground within 400 m; road hollows in built-up parts of the bare-earth terrain that fill first; and road links that are the only drivable way out for a neighbourhood (graph bridges) on low ground or over a stream.</p>
             <p><b>What it cannot do.</b> 10 m imagery cannot show a blocked drain, a rubbish pile or parked cars, and Google satellite and Street View images may not be analysed by AI under the Maps terms. Those checks need eyes on site: each item opens Google imagery for a person to look at, and “Check in the field” sends a team photo to Gemini through Field check.</p>
           </section>
 

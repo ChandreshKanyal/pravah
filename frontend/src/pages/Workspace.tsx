@@ -19,7 +19,7 @@ import ScenarioPanel from "../components/ScenarioPanel";
 import TimeSlider from "../components/TimeSlider";
 import { RASTER, REASON, areaLayers, bitmap, overlayUrl, deckLine, markers, polygonsLayer, roadState, roadsLayers, routeClosed, routesLayer } from "../layers/factories";
 import { clockAt } from "../time";
-import { defaultParams, type AoiStatus, type Forecast, type HistoryAoi, type Improvement, type ImprovementCategory, type Improvements, type RunResult, type ScenarioParams, type StaticLayers } from "../types/api";
+import { defaultParams, type AoiStatus, type Forecast, type HistoryAoi, type Improvement, type ImprovementCategory, type Improvements, profileOf, type RunResult, type ScenarioParams, type StaticLayers } from "../types/api";
 
 // what a decision needs at a glance: where the water is, which roads close, where people go. Hospitals, assembly and
 // staging points, drains and stream hotspots are one switch away in Layers (and listed in Results).
@@ -45,7 +45,7 @@ function scenLabel(r: RunResult): string {
 const DEFAULT_LAYERS: LayerKey[] = ["depth", "roads", "routes", "shelters", "bridges"];
 
 // what the preparation screen says, in the order the backend does it (prepare_area.py): each stage is done when all of
-// its steps are; keys a mode does not run (urban) are ignored when absent
+// its steps are; keys an older area never ran are ignored when absent
 const STAGES: { label: string; sub: string; keys: string[] }[] = [
   { label: "Downloading terrain data", sub: "Copernicus elevation, MERIT Hydro rivers", keys: ["terrain", "hydro30"] },
   { label: "Gathering weather and flood history", sub: "rainfall climate, past floods, surface water since 1984", keys: ["hazard_hist", "landcover"] },
@@ -501,8 +501,14 @@ export default function Workspace() {
         {running ? <Linear indeterminate /> : <div style={{ height: 4 }} />}
         <div className="panel-body">
           {!ready && <div className="stack-s"><div className="shimmer" style={{ height: 120 }} /><div className="shimmer" style={{ height: 200 }} /></div>}
+          {ready && st && tab === "scenario" && profileOf(status) && (
+            <p className="area-profile body-s" title={`Built-up ${Math.round(100 * profileOf(status)!.built_share)}% · median slope ${profileOf(status)!.slope_p50}° · largest river catchment ${profileOf(status)!.largest_river_km2.toLocaleString("en-IN")} km² (worked out from the data; no mode)`}>
+              <Icon name="travel_explore" className="sm" />{profileOf(status)!.summary}</p>
+          )}
           {ready && st && tab === "scenario" && (
-            <ScenarioPanel p={p} set={set} replace={setP} shelters={st.shelters} drawMode={drawMode} setDrawMode={setDrawMode} days={days} used={usedShelters} past={fc?.past_90d} />
+            <ScenarioPanel p={p} set={set} replace={setP} shelters={st.shelters} drawMode={drawMode} setDrawMode={setDrawMode} days={days} used={usedShelters} past={fc?.past_90d}
+              drain={status?.drain} onDrain={(d) => setStatus((s) => (s ? { ...s, drain: d } : s))}
+              waterlogging={profileOf(status)?.hazards.includes("waterlogging") ?? status?.mode === "urban"} />
           )}
           {ready && tab === "results" && (run ? <Results run={run} hour={hour} onFly={onFly} previous={prev} /> : (
             <div className="stack" style={{ alignItems: "center", textAlign: "center", padding: "48px 16px" }}>
@@ -515,7 +521,7 @@ export default function Workspace() {
           {ready && tab === "compare" && <CompareRuns aoiId={aoiId} currentId={run?.run_id ?? null}
             onOpen={(id) => getRun(id).then((r) => { loadRun(r); setShownRun(r.run_id); setTab("results"); }).catch((e) => snack(String(e.message)))} />}
           {ready && tab === "history" && <HistoryPanel aoiId={aoiId} onFly={onFly} onData={onHist} />}
-          {ready && tab === "ai" && <AiPanel aoiId={aoiId} urban={status?.mode === "urban"} onPreview={setAiPng} onFly={onFly}
+          {ready && tab === "ai" && <AiPanel aoiId={aoiId} urban={profileOf(status) ? !profileOf(status)!.hazards.includes("river") : status?.mode === "urban"} onPreview={setAiPng} onFly={onFly}
             onRunThis={(patch) => { set(patch); setTab("scenario"); snack("Storm set up. Press Run scenario for routes, shelters and the brief."); }} />}
           {ready && status?.warnings?.length && tab === "scenario" ? (
             <details className="card tonal">
@@ -624,7 +630,7 @@ export default function Workspace() {
         {!impOpen && <MapLegend drawn={drawn} hasRun={!!run && !live} when={run && !live ? (clockAt(run.start_local, hour) ? `${clockAt(run.start_local, hour)} · hour ${hour}` : `hour ${hour}`) : undefined} />}
 
         <div className="bottom">
-          <LayerPanel on={on} toggle={toggle} hasRun={!!run} mapType={mapType} setMapType={setMapType} urban={status?.mode === "urban"} />
+          <LayerPanel on={on} toggle={toggle} hasRun={!!run} mapType={mapType} setMapType={setMapType} urban={profileOf(status)?.hazards.includes("waterlogging") ?? status?.mode === "urban"} />
           {run && !live && tab !== "ai" && !impOpen ? <TimeSlider hours={run.rain_series_mm_h.length} hour={hour} setHour={setHour} rain={run.rain_series_mm_h} start={run.start_local} windowHour={run.evac_window_h} cutLabel={cutLabel} /> : <span className="spacer" />}
           <span style={{ width: 72 }} />
         </div>

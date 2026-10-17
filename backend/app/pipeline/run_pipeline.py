@@ -12,6 +12,7 @@ from functools import lru_cache
 import numpy as np
 
 from app.config import get_settings
+from app.engines import profile as prof
 from app.engines import drains as drn, exposure as ex_engine, flood, hydrology as hy, landslide as ls, pluvial, population, rainfall
 from app.engines.grid import corner_lonlats, lonlat_bounds, lonlat_to_rowcol, rowcol_to_lonlat
 from app.engines.render import DEPTH_COLORS, DEPTH_EDGES, WATER_COLOR, to_png_binned, to_png_classes
@@ -52,8 +53,8 @@ class Area:
     dist_road_m: np.ndarray
     shelters: list[dict]
     networks: dict
-    mode: str = "river"
-    pluvial: dict | None = None  # S13 static depression analysis (urban mode)
+    mode: str = "auto"  # legacy label only; physics is chosen per cell (engines/profile.py)
+    pluvial: dict | None = None  # S13 static depression analysis (every area that has it)
     dem: np.ndarray | None = None
     drain_cands: list[dict] = field(default_factory=list)
     fsi: np.ndarray | None = None
@@ -62,6 +63,9 @@ class Area:
     lsi_noroad: np.ndarray | None = None  # landslide index with the distance-to-road factor neutral (road closures)
     lsi_edges_noroad: list[float] | None = None
     bridges: dict | None = None  # {"spans": [...], "links": {mode: {edge row: [span index]}}} (engines/bridges.py)
+    hollows_ok: np.ndarray | None = None  # per depression: waterlogs (catchment mostly built-up)
+    reach_ok: np.ndarray | None = None  # per reach: river stage meaningful (not tidal, not a stub)
+    profile: dict = field(default_factory=dict)
 
     def with_urban_dem(self, surface_dem: np.ndarray) -> "Area":
         """Urban ponding levels use the same DEM the depressions were built from (FABDEM when available)."""
@@ -77,11 +81,10 @@ def load_area(aoi_id: str) -> Area:
     h30 = storage.load_layers(aoi_id, "hydro30")
     sus = storage.load_layers(aoi_id, "susceptibility") if storage.exists(aoi_id, "susceptibility.npz") else {}
     doc = fs.get_aoi(aoi_id) or {}
-    mode = doc.get("mode", "river")
     grid = storage.load_grid(aoi_id)
-    urban = mode == "urban" and storage.exists(aoi_id, "pluvial.npz")
+    urban = storage.exists(aoi_id, "pluvial.npz")  # waterlogging layers (all areas prepared since 17 Oct; backfilled)
     terr = storage.load_layers(aoi_id, "terrain")
-    return Area(
+    area = Area(
         aoi_id=aoi_id,
         grid=grid,
         hgrid=hy.HydroGrid(**storage.get_json(aoi_id, "hydro_grid.json")),
@@ -104,7 +107,7 @@ def load_area(aoi_id: str) -> Area:
         networks={m: evac.load_network(storage.load_gdf(aoi_id, f"edges_{m}.parquet"),
                                        storage.load_gdf(aoi_id, f"nodes_{m}.parquet"))
                   for m in ("walk", "drive") if storage.exists(aoi_id, f"edges_{m}.parquet")},
-        mode=mode,
+        mode=doc.get("mode", "auto"),
         pluvial=storage.load_layers(aoi_id, "pluvial") if urban else None,
         dem=None,
         drain_cands=storage.get_json(aoi_id, "drain_candidates.json") if urban and storage.exists(aoi_id, "drain_candidates.json") else [],
@@ -114,6 +117,41 @@ def load_area(aoi_id: str) -> Area:
         lsi_noroad=sus.get("lsi_static_noroad"),
         lsi_edges_noroad=sus["lsi_edges_noroad"].tolist() if "lsi_edges_noroad" in sus else None,
     ).with_urban_dem(terr["dem"])
+    area.reach_ok = prof.reliable_reaches(area.reaches, _reach_built_share(area))
+    if area.pluvial is not None:
+        area.hollows_ok = prof.built_hollows(area.pluvial, area.lc_class)
+    area.profile = prof.area_profile(area.slope_deg, area.lc_class, area.aoi_mask, area.reaches, area.hollows_ok, area.reach_ok)
+    if (doc.get("meta") or {}).get("profile") != area.profile:
+        try:
+            fs.update_aoi(aoi_id, {"meta.profile": area.profile})
+        except Exception:  # best effort: the profile is recomputed on every load
+            pass
+    return area
+
+
+def drain_mm_h(aoi_id: str, value: float | None = None) -> float:
+    """Storm-drain capacity under built-up land: the scenario's value, else the area's confirmed one (Gemini lookup with
+    sources, confirmed by a person), else the default (25 mm/h, Mumbai's historical design standard)."""
+    if value:
+        return float(value)
+    d = (fs.get_aoi(aoi_id) or {}).get("drain") or {}
+    return float(d.get("mm_h") or get_settings().urban_drain_capacity_mm_h)
+
+
+def _reach_built_share(area: Area) -> np.ndarray:
+    """Share of each reach's upstream catchment (inside the hydrology grid) that is built-up (Dynamic World)."""
+    hg = area.hgrid
+    rows, cols = np.indices((hg.height, hg.width))
+    lon = hg.lon0 + (cols.ravel() + 0.5) * hg.cell_deg
+    lat = hg.lat0 - (rows.ravel() + 0.5) * hg.cell_deg
+    r30, c30 = lonlat_to_rowcol(area.grid, lon, lat)
+    inside = (r30 >= 0) & (r30 < area.grid.height) & (c30 >= 0) & (c30 < area.grid.width)
+    built = np.zeros(lon.size)
+    built[inside] = (np.asarray(area.lc_class)[r30[inside], c30[inside]] == prof.BUILT)
+    down = area.native["downstream"].astype(np.int64)
+    acc_b, acc_n = hy.accumulate(down, built), hy.accumulate(down, inside.astype(float))
+    last = np.array([r["cells"][-1] for r in area.reaches], np.int64)
+    return acc_b[last] / np.maximum(acc_n[last], 1)
 
 
 def _bbox_mask(grid: GridSpec, bbox) -> np.ndarray:
@@ -277,24 +315,30 @@ def rain_series(p: ScenarioParams, area: Area) -> tuple[list[float], str, list[s
 def screening(area: Area, daily: list[dict], hourly: list[dict], duration_h: int) -> list[dict]:
     """S10.6: per forecast day, one-reach (largest A_loc) envelope on the wettest window -> badge."""
     cfg = get_settings()
-    if area.mode == "urban":  # water-logging screening: wettest window vs storm-drain capacity
-        out = []
-        for d in daily:
-            win, _ = rainfall.wettest_window(rainfall.day_hours(hourly, d["date"]), duration_h)
-            peak = max(win) if win else 0.0
-            badge = "high" if peak >= 2 * cfg.urban_drain_capacity_mm_h else "elevated" if peak >= cfg.urban_drain_capacity_mm_h else "low"
-            out.append({"date": d["date"], "precip_mm": d["precip_mm"], "max_stage_m": 0.0, "peak_mm_h": round(peak, 1), "badge": badge})
-        return out
-    C, tc_h, A_loc = reach_params(area, cfg.runoff_c)
-    r = int(np.argmax(A_loc))
-    src = [get_src(area, get_settings().manning_n)[r]]
+    # both hazards on every area: the river (largest reliable reach) and street waterlogging (peak hour vs drain
+    # capacity, where the area has built-up hollows); the badge is the higher of the two
+    ok = area.reach_ok if area.reach_ok is not None else np.ones(len(area.reaches), bool)
+    river = bool(ok.any())
+    pond = area.hollows_ok is not None and bool(area.hollows_ok.any())
+    if river:
+        C, tc_h, A_loc = reach_params(area, cfg.runoff_c)
+        r = int(np.argmax(np.where(ok, A_loc, -1)))
+        src = [get_src(area, get_settings().manning_n)[r]]
+    rank = {"low": 0, "elevated": 1, "high": 2}
     out = []
     for d in daily:
         win, _ = rainfall.wettest_window(rainfall.day_hours(hourly, d["date"]), duration_h)
-        h, _ = flood.hourly_envelope(win, tc_h[r:r + 1], C[r:r + 1], A_loc[r:r + 1], src, arf=get_settings().apply_arf)
-        stage = float(h.max())
-        badge = "high" if stage >= 3 else "elevated" if stage >= 1 else "low"
-        out.append({"date": d["date"], "precip_mm": d["precip_mm"], "max_stage_m": round(stage, 2), "badge": badge})
+        peak = max(win) if win else 0.0
+        stage, badge = 0.0, "low"
+        if river:
+            h, _ = flood.hourly_envelope(win, tc_h[r:r + 1], C[r:r + 1], A_loc[r:r + 1], src, arf=get_settings().apply_arf)
+            stage = float(h.max())
+            badge = "high" if stage >= 3 else "elevated" if stage >= 1 else "low"
+        if pond:
+            dc = drain_mm_h(area.aoi_id)
+            b2 = "high" if peak >= 2 * dc else "elevated" if peak >= dc else "low"
+            badge = max(badge, b2, key=rank.get)
+        out.append({"date": d["date"], "precip_mm": d["precip_mm"], "max_stage_m": round(stage, 2), "peak_mm_h": round(peak, 1), "badge": badge})
     return out
 
 
@@ -309,18 +353,32 @@ def run_pipeline(p: ScenarioParams) -> RunResult:
     C, tc_h, A_loc = reach_params(area, cfg.runoff_c)
     h, _Q = flood.hourly_envelope(rain, tc_h, C, A_loc, get_src(area, p.manning_n), p.river_offset_m,
                                   inflow_m3s=external_inflow(area, p.upstream_inflow_m3s), arf=cfg.apply_arf)
-    if np.any(h >= hy.SRC_STAGES[-1] + p.river_offset_m - 1e-6):
-        warnings.append("Some reaches reach the top of their rating curve (30 m); depths there are capped")
-    depth = flood.depth_stack(h, area.reach_id_30, area.hand, area.perm)
-    pond_fill = None
+    # river stage only on reliable channels (engines/profile.py): tidal channels and one-cell stubs have no meaningful
+    # rating curve (Mumbai's Mahim outlet hit the 30 m cap and flooded 14% of the area); nor has a reach that hits the cap
+    ok = (area.reach_ok if area.reach_ok is not None else np.ones(len(area.reaches), bool)).copy()
+    capped = np.any(h >= hy.SRC_STAGES[-1] + p.river_offset_m - 1e-6, axis=1)
+    if (capped & ok).any():
+        warnings.append(f"{int((capped & ok).sum())} channel(s) reached the top of their rating curve (30 m); river flooding "
+                        "along them is left out of this run")
+    ok &= ~capped
+    if (~ok).any() and area.profile.get("tidal"):
+        warnings.append("Tidal channels near sea level are not modelled for river flooding (their level follows the sea); "
+                        "tides and storm surge are not included")
+    h = np.where(ok[:, None], h, 0.0)
+    rid = np.where(area.reach_id_30 >= 0, area.reach_id_30, 0)
+    reach_30 = np.where((area.reach_id_30 >= 0) & ok[rid], area.reach_id_30, -1)
+    depth = flood.depth_stack(h, reach_30, area.hand, area.perm)
+    pond_fill, still = None, None
+    drain = drain_mm_h(area.aoi_id, p.drain_capacity_mm_h)
     if area.pluvial is not None:
-        # S13 urban mode is a pluvial screening: HAND is ~0 across flat coastal plains, so river-stage mapping would
-        # flood whole districts. Depth = ponding only; river overflow and tides are listed as limitations.
-        pond, pond_fill = pluvial.ponding(area.pluvial, area.dem, rain, area.grid.cell, cfg.urban_drain_capacity_mm_h)
-        depth = np.where(area.perm[None], np.nan, pond).astype(np.float32)
-        warnings.append("Urban mode: water-logging (ponding) screening only; Mithi-type river overflow and tides are not modelled")
-        if not pond.any():
-            warnings.append(f"Rain stays within the storm-drain capacity ({cfg.urban_drain_capacity_mm_h:g} mm/h); no ponding estimated")
+        # waterlogging in built-up hollows above the storm-drain capacity; the flood depth is the deeper of the two
+        pond, pond_fill = pluvial.ponding(area.pluvial, area.dem, rain, area.grid.cell, drain,
+                                          use=area.hollows_ok)
+        river_d = np.nan_to_num(depth)
+        still = pond.max(axis=0) > river_d.max(axis=0)  # standing water (still-water hazard thresholds in evac)
+        depth = np.where(area.perm[None], np.nan, np.maximum(river_d, pond)).astype(np.float32)
+        if area.hollows_ok is not None and area.hollows_ok.any() and not pond.any():
+            warnings.append(f"Rain stays within the storm-drain capacity ({drain:g} mm/h); no street waterlogging estimated")
     timings["flood"] = round(time.time() - t0, 2)
 
     lon_c, lat_c = area_centroid(area)
@@ -346,12 +404,12 @@ def run_pipeline(p: ScenarioParams) -> RunResult:
         trig = R >= 1.0
         methods["landslide_exceedance_max"] = round(float(R.max()), 2)
         methods["landslide_trigger_hours"] = [int(t + 1) for t in np.flatnonzero(trig)]
-        lsi_act = ls.actionable(lsi_dyn, trig)
+        lsi_act = ls.actionable(lsi_dyn, trig, slope_deg=area.slope_deg)
         lsi_road = lsi_act  # road closures: the index without the road factor when the area has it
         if area.lsi_noroad is not None:
             lsi_road = ls.actionable(ls.lsi_dynamic_classes(area.lsi_noroad, area.lsi_edges_noroad, rain, area.slope_deg,
                                                             g_slope=cfg.lsi_g_slope, g_min=cfg.lsi_g_min, g_max=cfg.lsi_g_max,
-                                                            threshold=thr, mode=cfg.lsi_modulation), trig)
+                                                            threshold=thr, mode=cfg.lsi_modulation), trig, slope_deg=area.slope_deg)
         if not trig.any():
             warnings.append(f"Rain stays below the landslide trigger threshold ({rainfall.LANDSLIDE_THRESHOLDS[thr][2]}; "
                             f"peak {R.max():.0%} of it): slopes are shown as susceptibility only, no landslide closures "
@@ -374,12 +432,16 @@ def run_pipeline(p: ScenarioParams) -> RunResult:
         lab = area.pluvial["dep_label"]
         pond_png = to_png_binned(np.where(lab > 0, pond_fill[-1][lab], np.nan), [0.01, 0.3, 0.7], ["#9ecae1", "#3182bd", "#08306b"])
         methods["urban"] = (f"Priority-Flood depressions (Barnes et al. 2014) filled to level by rain above the "
-                            f"{cfg.urban_drain_capacity_mm_h:g} mm/h drain capacity; screening, not hydrodynamics")
+                            f"{drain:g} mm/h drain capacity, in hollows whose catchment is at least "
+                            f"{int(prof.BUILT_HOLLOW * 100)}% built-up; screening, not hydrodynamics")
+    methods["compound"] = ("Depth = the deeper of river flooding (HAND, reliable non-tidal channels) and street "
+                           "waterlogging in each cell; physics chosen per cell from the data, no area mode")
 
     t3 = time.time()
-    # urban mode does not model river stage, so bridges close only on flooded approaches
-    stage_for_bridges = np.zeros_like(h) if area.pluvial is not None else h
-    ev = evac.plan(area, p, depth, lsi_road, stage_for_bridges, ctx, warnings) if ctx else {}
+    # bridges close on river stage at the deck (reliable channels only) or on flooded approaches
+    if ctx:  # depth at which people are in danger, per cell: FD2321 hazard rating, moving river vs standing water
+        ctx["evac_depth"] = prof.evac_depths(area.reaches, reach_30, still, p.manning_n)
+    ev = evac.plan(area, p, depth, lsi_road, h, ctx, warnings) if ctx else {}
     timings["routing"] = round(time.time() - t3, 2)
 
     t1 = time.time()

@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field
 from rasterio.features import rasterize
 
 from app.engines import drains as drn
-from app.engines import improvements as imp
+from app.engines import improvements as imp, profile as prof
 from app.engines.grid import lonlat_to_rowcol, rowcol_to_lonlat, xy_to_rowcol
 from app.services import firestore as fs
 from app.services import storage
@@ -48,7 +48,7 @@ def _ctx(aoi_id: str) -> dict:
     h = storage.load_layers(aoi_id, "hydro30")
     pop = storage.load_layers(aoi_id, "population")
     pop_total = np.nan_to_num(pop["pop30"]) + np.nan_to_num(pop.get("pop_unattributed", 0))
-    return {"doc": doc, "bbox": tuple(doc["bbox"]), "urban": doc.get("mode") == "urban", "name": doc.get("name") or "the area",
+    return {"doc": doc, "bbox": tuple(doc["bbox"]), "urban": ((doc.get("meta") or {}).get("profile") or {}).get("urban", doc.get("mode") == "urban"), "name": doc.get("name") or "the area",
             "grid": grid, "hand": h["hand"], "upa": h["upa"], "stream": h["stream"].astype(bool), "ds": h["dist_stream_m"],
             "pop": pop_total.astype(np.float32),
             "rc2ll": lambda r, c: rowcol_to_lonlat(grid, r, c),
@@ -56,7 +56,7 @@ def _ctx(aoi_id: str) -> dict:
 
 
 def _candidates(aoi_id: str, grid, urban: bool) -> list[dict]:
-    if urban and storage.exists(aoi_id, "drain_candidates.json"):
+    if storage.exists(aoi_id, "drain_candidates.json"):  # same candidates, computed at preparation (every area)
         return storage.get_json(aoi_id, "drain_candidates.json")
     if not (storage.exists(aoi_id, "waterways.parquet") and storage.exists(aoi_id, "edges_drive.parquet")):
         return []
@@ -115,9 +115,11 @@ def step_clogged(aoi_id: str) -> None:
         ww = storage.load_gdf(aoi_id, "waterways.parquet")
         wtype = {str(o): str(t) for o, t in zip(ww["osmid"], ww["waterway"])}
     items = imp.culverts(_candidates(aoi_id, grid, urban), x["hand"], x["upa"], x["pop"], grid.cell, bbox, urban, wtype)
-    if urban and storage.exists(aoi_id, "pluvial.npz"):
+    if storage.exists(aoi_id, "pluvial.npz"):  # every area; only built-up hollows (engines/profile.py)
         dist_road = storage.load_layers(aoi_id, "derived")["dist_road_m"]
-        items += imp.low_spots(storage.load_layers(aoi_id, "pluvial"), dist_road, x["pop"], x["rc2ll"], grid.cell, bbox, urban)
+        pl_ = storage.load_layers(aoi_id, "pluvial")
+        use = prof.built_hollows(pl_, storage.load_layers(aoi_id, "landcover")["lc_class"])
+        items += imp.low_spots(pl_, dist_road, x["pop"], x["rc2ll"], grid.cell, bbox, urban, use=use)
     notes: list[str] = []
     imagery: dict = {}
     try:
@@ -186,7 +188,7 @@ def reported(x: dict, aoi_id: str) -> tuple[list[dict], list[dict], str]:
     except json.JSONDecodeError:
         raw = []
     out = []
-    pl = storage.load_layers(aoi_id, "pluvial") if x["urban"] and storage.exists(aoi_id, "pluvial.npz") else None
+    pl = storage.load_layers(aoi_id, "pluvial") if storage.exists(aoi_id, "pluvial.npz") else None
     # a link counts only if its site is among the pages Google Search returned to the model (grounding chunks name the
     # site); a URL the model wrote from memory could be invented
     sites = {re.sub(r"^www\.", "", (s.get("title") or "").lower().strip()) for s in sources if s.get("title")}

@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { plan } from "../api/client";
-import type { PlanResponse, RainSource, ScenarioParams, Shelter } from "../types/api";
+import type { AreaDrain, PlanResponse, RainSource, ScenarioParams, Shelter } from "../types/api";
+import DrainCapacity from "./DrainCapacity";
 import { PRESETS } from "../rain";
 import RainHours from "./RainHours";
 import type { DrawMode } from "./DrawControl";
@@ -70,7 +71,8 @@ function PlanBox({ p, onApply }: { p: ScenarioParams; onApply: (np: ScenarioPara
   );
 }
 
-export default function ScenarioPanel({ p, set, replace, shelters, drawMode, setDrawMode, days, used, past }: {
+export default function ScenarioPanel({ p, set, replace, shelters, drawMode, setDrawMode, days, used, past, drain, onDrain, waterlogging }: {
+  drain?: AreaDrain | null; onDrain?: (d: AreaDrain | null) => void; waterlogging?: boolean;
   p: ScenarioParams; set: (patch: Partial<ScenarioParams>) => void; replace: (np: ScenarioParams) => void; shelters: Shelter[];
   drawMode: DrawMode; setDrawMode: (m: DrawMode) => void; days: string[]; used?: Set<string>;
   past?: { date: string; precip_mm: number | null }[];  // observed daily rain (NASA IMERG), oldest first
@@ -168,6 +170,13 @@ export default function ScenarioPanel({ p, set, replace, shelters, drawMode, set
           format={(v) => (v ? `${v.toLocaleString("en-IN")} m³/s` : "local rain only")} onChange={(v) => set({ upstream_inflow_m3s: v })}
           hint="Flow arriving from outside the area, e.g. a CWC inflow forecast" />
       </section>
+
+      {waterlogging && onDrain && (
+        <section className="group" aria-label="Storm drains">
+          <div className="section-title"><Icon name="plumbing" /> Storm drains</div>
+          <DrainCapacity aoiId={p.aoi_id} p={p} set={set} drain={drain} onSaved={onDrain} />
+        </section>
+      )}
 
       <section className="group" aria-label="People and movement">
         <div className="section-title"><Icon name="directions_walk" /> People & movement</div>

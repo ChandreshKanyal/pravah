@@ -288,6 +288,7 @@ def fetch_buildings(bbox: tuple[float, float, float, float], grid: GridSpec) -> 
 def fetch_fabdem(grid: GridSpec) -> np.ndarray:
     """Bare-earth DEM (FABDEM, Hawker et al. 2022) on the analysis grid, for urban ponding: GLO-30 is a surface model
     whose buildings turn streets into deep artificial pits."""
+    init_ee()
     col = ee.ImageCollection(FABDEM_ID)
     img = col.filterBounds(grid_region(grid)).mosaic().setDefaultProjection(col.first().projection()).rename("dem_bare")
     return fetch_grid(resample(img, "bilinear"), grid, ["dem_bare"])["dem_bare"]

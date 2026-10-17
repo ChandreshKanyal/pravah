@@ -1,5 +1,5 @@
 import type {
-  AOI, AoiListItem, AoiStatus, Advisory, AdvisoryVersion, ChatResponse, Forecast, GeocodeResult, HistoryAoi, HistoryIndia, Official,
+  AOI, AoiListItem, AoiStatus, AreaDrain, DrainLookup, Advisory, AdvisoryVersion, ChatResponse, Forecast, GeocodeResult, HistoryAoi, HistoryIndia, Official,
   AlertDraft, Drill, Improvements, DrillEval, DrillReport, DrillSummary, EmulatorStats, EmulatorStatus, PhotoDoc, PlanResponse, ProjectArea, Review, Triggers, RunResult, RunSummary, ScenarioParams, StaticLayers, Translation, VerificationItem,
 } from "../types/api";
 import { idToken } from "../auth";
@@ -30,9 +30,12 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
 export type Health = { ok: boolean; ee: boolean; vertex: boolean; firestore: boolean };
 
 export const getHealth = () => call<Health>("/api/health");
-export const createAoi = (bbox: AOI["bbox"], name: string, mode: AOI["mode"]) =>
-  call<{ aoi: AOI; state: string }>("/api/aoi", { method: "POST", body: JSON.stringify({ bbox, name, mode }) });
+export const createAoi = (bbox: AOI["bbox"], name: string) =>
+  call<{ aoi: AOI; state: string }>("/api/aoi", { method: "POST", body: JSON.stringify({ bbox, name }) });
 export const getAoiStatus = (id: string) => call<AoiStatus>(`/api/aoi/${id}/status`);
+export const lookupDrain = (id: string) => call<DrainLookup>(`/api/aoi/${id}/drain/lookup`, { method: "POST" });
+export const setDrain = (id: string, body: { mm_h: number | null; city?: string; basis?: string; sources?: { uri: string; title?: string }[] }) =>
+  call<{ drain: AreaDrain | null }>(`/api/aoi/${id}/drain`, { method: "POST", body: JSON.stringify(body) });
 export const getStaticLayers = (id: string) => call<StaticLayers>(`/api/aoi/${id}/static-layers`);
 export const getImprovements = (id: string) => call<Improvements>(`/api/aoi/${id}/improvements`);
 export const refreshImprovements = (id: string) => call<{ state: string }>(`/api/aoi/${id}/improvements`, { method: "POST" });

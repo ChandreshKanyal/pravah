@@ -1,7 +1,7 @@
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class RainSource(str, Enum):
@@ -44,6 +44,8 @@ class ScenarioParams(BaseModel):
     # hourly mm/h used as-is (event replays, hour-by-hour edits); label from preset_label. Clamped to 0-300 mm/h (about
     # the world one-hour record, 305 mm): a runaway editor once sent 850 mm/h. Clamped, not rejected, so old runs still load
     rain_series_override: list[float] | None = None
+    # storm-drain capacity under built-up land (mm/h); None = the area's confirmed value (drain lookup), else 25
+    drain_capacity_mm_h: float | None = Field(default=None, ge=5, le=150)
 
     @field_validator("rain_series_override")
     @classmethod

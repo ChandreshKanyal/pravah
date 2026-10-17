@@ -121,7 +121,8 @@ def culverts(cands: list[dict], hand: np.ndarray, upa: np.ndarray, pop: np.ndarr
     return kept[:top]
 
 
-def low_spots(pluvial: dict, dist_road: np.ndarray, pop: np.ndarray, rc2ll, cell: float, bbox, urban: bool, top: int = 6) -> list[dict]:
+def low_spots(pluvial: dict, dist_road: np.ndarray, pop: np.ndarray, rc2ll, cell: float, bbox, urban: bool, top: int = 6,
+              use: np.ndarray | None = None) -> list[dict]:
     """Hollows in the bare-earth terrain that a road runs through: they fill first and stay wet when inlets are blocked.
     `fill_mm` = rain beyond what drains carry that fills the hollow (volume / (runoff C x catchment area))."""
     lab, dep = pluvial["dep_label"], pluvial["dep_depth"]
@@ -132,6 +133,8 @@ def low_spots(pluvial: dict, dist_road: np.ndarray, pop: np.ndarray, rc2ll, cell
     size = np.bincount(lab.ravel())
     out = []
     for k in np.unique(lab[road]):
+        if use is not None and not use[k]:  # only hollows that waterlog (catchment mostly built-up)
+            continue
         if not 2 <= size[k] <= 300:  # one 30 m cell is terrain noise; hundreds of cells is a basin, not a road dip
             continue
         cells = np.argwhere(road & (lab == k))

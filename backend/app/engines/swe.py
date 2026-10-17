@@ -234,7 +234,7 @@ def decode_depth(code: np.ndarray) -> np.ndarray:
     return H_CODE * (code.astype(np.float32) / 255) ** 2
 
 
-def simulate(dem: np.ndarray, cell: float, runoff_c: np.ndarray, manning: np.ndarray, rain_mm_h, drain_mm_h: float = 0.0,
+def simulate(dem: np.ndarray, cell: float, runoff_c: np.ndarray, manning: np.ndarray, rain_mm_h, drain_mm_h: float | np.ndarray = 0.0,
              sources: list[dict] | None = None, frame_s: int = 300, progress=None, tail_h: float = 0.0) -> FlowResult:
     """Run the storm on the grid. `sources`: [{rows, cols, q: [m3/s per hour]}] inflows spread over their cells.
     Rain beyond the series is zero; the run lasts len(rain_mm_h) + tail_h hours (the tail lets water from uphill arrive
@@ -260,7 +260,7 @@ def simulate(dem: np.ndarray, cell: float, runoff_c: np.ndarray, manning: np.nda
 
     def rate_at(hour: int, t: float) -> np.ndarray:
         i = rain[hour] if hour < len(rain) else 0.0
-        out = C * max(0.0, i - drain_mm_h) / 3.6e6
+        out = C * np.maximum(0.0, i - drain_mm_h) / 3.6e6  # drain capacity: a number, or a grid (built-up cells only)
         for rr, cc, q in src_cells:
             qh = q[min(hour, len(q) - 1)] * min(1.0, t / 3600.0)  # ramp the inflow in over the first hour
             out[rr, cc] += qh / (len(rr) * dx * dy)

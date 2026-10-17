@@ -5,7 +5,9 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-MAX_KM = {"river": 15.0, "urban": 4.0}
+# one model for every area (engines/profile.py): one size limit. 10 km keeps a dense city's buildings and road
+# network preparing in minutes (the old limits were 15 km river / 4 km urban)
+MAX_KM_ALL = 10.0
 
 
 class AOIValidationError(ValueError):
@@ -15,7 +17,7 @@ class AOIValidationError(ValueError):
 class AOIRequest(BaseModel):
     bbox: tuple[float, float, float, float]  # (west, south, east, north) WGS84
     name: str | None = None
-    mode: Literal["river", "urban"] = "river"
+    mode: Literal["river", "urban", "auto"] = "auto"  # ignored since 17 Oct: physics is chosen per cell from the data
     polygon_geojson: dict | None = None
 
 
@@ -24,7 +26,7 @@ class AOI(BaseModel):
     name: str  # user label or reverse-geocoded place
     bbox: tuple[float, float, float, float]  # (west, south, east, north) WGS84
     polygon_geojson: dict | None = None  # optional; bbox is the analysis extent
-    mode: Literal["river", "urban"] = "river"  # river = HAND flood; urban = pluvial screening (S13)
+    mode: Literal["river", "urban", "auto"] = "auto"  # legacy areas keep "river" / "urban" as a label only
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -45,16 +47,14 @@ def build_aoi(req: AOIRequest) -> AOI:
     if not (-180 <= w < e <= 180 and -90 <= s < n <= 90):
         raise AOIValidationError("bbox must be (west, south, east, north) with west < east and south < north")
     wkm, hkm = bbox_size_km(req.bbox)
-    limit = MAX_KM[req.mode]
+    limit = MAX_KM_ALL
     if wkm > limit or hkm > limit:
-        raise AOIValidationError(
-            f"Area is {wkm:.1f} km x {hkm:.1f} km; {req.mode} mode allows at most {limit:.0f} km x {limit:.0f} km."
-        )
+        raise AOIValidationError(f"Area is {wkm:.1f} km x {hkm:.1f} km; the limit is {limit:.0f} km x {limit:.0f} km.")
     aoi_id = aoi_id_for(req.bbox)
     return AOI(
         aoi_id=aoi_id,
         name=req.name or f"Area {aoi_id}",
         bbox=req.bbox,
         polygon_geojson=req.polygon_geojson,
-        mode=req.mode,
+        mode="auto",
     )

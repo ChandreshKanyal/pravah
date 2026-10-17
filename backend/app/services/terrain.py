@@ -51,7 +51,12 @@ def flow_ground(aoi_id: str) -> tuple[np.ndarray, dict]:
     streams pass the false dams a 30 m grid makes of narrow gorges and bridges. Urban areas keep their depressions:
     street ponding is the hazard there."""
     dem, src = bare_dem(aoi_id)
-    if storage.exists(aoi_id, "pluvial.npz"):
+    from app.services import firestore as fs
+    doc = fs.get_aoi(aoi_id) or {}
+    pr = (doc.get("meta") or {}).get("profile")
+    # flat towns and cities keep their hollows (street ponding is the hazard there); elsewhere false dams are breached
+    keep = (pr["urban"] and pr["flat"]) if pr else doc.get("mode") == "urban"
+    if keep:
         return dem, {"source": src, "conditioned": False}
     try:
         return storage.load_layers(aoi_id, "flowdem")["dem"], {"source": src, "conditioned": True, **storage.get_json(aoi_id, "flowdem.json")}

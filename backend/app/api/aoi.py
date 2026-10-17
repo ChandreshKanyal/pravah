@@ -24,6 +24,8 @@ def create_aoi(req: AOIRequest, background: BackgroundTasks, user: dict = Depend
     except AOIValidationError as e:
         raise HTTPException(422, str(e))
     existing = fs.get_aoi(aoi.aoi_id)
+    if existing and existing.get("mode"):  # an area prepared before keeps its terrain family (cached layers)
+        aoi = aoi.model_copy(update={"mode": existing["mode"]})
     from app.pipeline.prepare_area import ACTIVE
     interrupted = existing and existing.get("state") in ("preparing", "queued") and aoi.aoi_id not in ACTIVE
     if existing and existing.get("state") in ("preparing", "ready") and not interrupted:
@@ -43,7 +45,7 @@ def aoi_status(aoi_id: str):
     if not doc:
         raise HTTPException(404, "Unknown AOI")
     keys = ("state", "status", "warnings", "meta", "prepare_seconds", "prepared_at", "name", "bbox", "mode", "latest_run_id",
-            "official", "archived")
+            "official", "archived", "drain")
     return {"aoi_id": aoi_id, **{k: doc.get(k) for k in keys}}
 
 
@@ -239,3 +241,33 @@ def set_official(aoi_id: str, body: Official, user: dict = Depends(require("anal
     from app.api.runs import audit
     audit("official_status", user, aoi_id=aoi_id, imd=body.imd_warning, cwc_level=body.cwc_level_m)
     return doc
+
+
+class DrainChoice(BaseModel):
+    mm_h: float | None  # None goes back to the default
+    city: str = ""
+    basis: str = ""
+    sources: list[dict] = []
+
+
+@router.post("/api/aoi/{aoi_id}/drain/lookup")
+def drain_lookup(aoi_id: str, user: dict = Depends(require("analyst"))):
+    """Gemini with Google Search: the city's storm-drain design capacity with sources. Nothing is saved."""
+    if not fs.get_aoi(aoi_id):
+        raise HTTPException(404, "Unknown AOI")
+    from app.agents.drain_lookup import lookup
+    return lookup(aoi_id)
+
+
+@router.post("/api/aoi/{aoi_id}/drain")
+def drain_set(aoi_id: str, body: DrainChoice, user: dict = Depends(require("analyst"))):
+    """A person confirms the storm-drain capacity for this area (from the lookup, or their own figure); new runs use it."""
+    if not fs.get_aoi(aoi_id):
+        raise HTTPException(404, "Unknown AOI")
+    if body.mm_h is not None and not 5 <= body.mm_h <= 150:
+        raise HTTPException(422, "Drain capacity must be between 5 and 150 mm/h")
+    val = None if body.mm_h is None else {"mm_h": body.mm_h, "city": body.city, "basis": body.basis,
+                                          "sources": body.sources[:6], "confirmed_by": user.get("email", "local"),
+                                          "at": datetime.now(timezone.utc).isoformat()}
+    fs.update_aoi(aoi_id, {"drain": val})
+    return {"drain": val}

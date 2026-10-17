@@ -116,6 +116,11 @@ def _status(run_id: str, **fields) -> None:
                 time.sleep(2 * (attempt + 1))
 
 
+def _drain_mm_h(aoi_id: str, value) -> float:
+    from app.pipeline.run_pipeline import drain_mm_h
+    return drain_mm_h(aoi_id, value)
+
+
 def model_setup(area, rain: list[float], params: dict, force_k: int | None = None) -> dict:
     """Everything the flow model needs for a scenario on an area: ground (conditioned bare earth, coarsened to 60 m
     when cells x hours exceed the budget), runoff C and Manning n by land cover, rain after areal reduction (river
@@ -125,9 +130,9 @@ def model_setup(area, rain: list[float], params: dict, force_k: int | None = Non
     grid = area.grid
     dem, ground = flow_ground(area.aoi_id)
     k = force_k or (2 if grid.width * grid.height * len(rain) > cfg.flow_max_cell_hours else 1)
-    urban = area.pluvial is not None
-    arf = 1.0
-    if cfg.apply_arf and not urban and area.aoi_mask is not None:
+    urban = bool(area.profile.get("urban")) if area.profile else area.pluvial is not None
+    arf = 1.0  # TP-29 areal reduction by area size (close to 1 for a few km2), for every area
+    if cfg.apply_arf and area.aoi_mask is not None:
         arf = float(rainfall.areal_reduction_factor(area.aoi_mask.sum() * grid.cell**2 / 1e6, len(rain)))
     C = rainfall.runoff_c(area.lc_class, cfg.runoff_c)
     lc = np.asarray(area.lc_class)
@@ -141,7 +146,9 @@ def model_setup(area, rain: list[float], params: dict, force_k: int | None = Non
     if k > 1 and ground.get("conditioned"):  # carve again at the model resolution (averaging re-blocks narrow cuts)
         zc = swe.condition(swe.coarsen(bare_dem(area.aoi_id)[0], k))[0].astype(np.float64)
     return {"k": k, "dem": dem, "ground": ground, "z": zc, "C": swe.coarsen(np.nan_to_num(C, nan=0.5), k), "n": swe.coarsen(n, k),
-            "rain": [x * arf for x in rain], "drain": cfg.urban_drain_capacity_mm_h if urban else 0.0, "sources": sources,
+            # storm drains only under built-up cells; elsewhere rain soaks in through the runoff coefficient
+            "rain": [x * arf for x in rain], "drain": swe.coarsen((lc == 6) * _drain_mm_h(area.aoi_id, params.get("drain_capacity_mm_h")), k), "sources": sources,
+            "drain_mm_h": _drain_mm_h(area.aoi_id, params.get("drain_capacity_mm_h")),
             "arf": arf, "urban": urban}
 
 
@@ -217,7 +224,7 @@ def simulate_run(run_id: str) -> dict:
         "state": "ready", "progress": 1.0, "model": MODEL, "frame_s": frame_s, "frames": int(frames.shape[0]), "tail_h": TAIL_H,
         "width": grid.width, "height": grid.height, "cell": grid.cell, "model_cell_m": grid.cell * k, "ground": ground,
         "h_code_m": swe.H_CODE, "u_code_ms": swe.U_CODE,
-        "h_show_m": swe.H_SHOW, "arf": round(arf, 3), "drain_mm_h": cfg.urban_drain_capacity_mm_h if urban else 0.0,
+        "h_show_m": swe.H_SHOW, "arf": round(arf, 3), "drain_mm_h": m["drain_mm_h"], "drain_where": "built-up cells (Dynamic World)",
         "sources": [{k: s[k] for k in ("reach_id", "q", "outside_km2")} for s in sources],
         "max_depth_m": round(float(res.hmax[aoi & ~perm].max()), 2) if (aoi & ~perm).any() else 0.0,
         "max_speed_ms": round(float(res.vmax[wet].max()), 1) if wet.any() else 0.0,

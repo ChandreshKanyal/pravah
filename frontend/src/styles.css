@@ -828,3 +828,12 @@ p { margin: 0; }
 .asst-think-body .st { display: flex; gap: 6px; align-items: flex-start; } .asst-think-body .st .ms { font-size: 16px; margin-top: 1px; }
 .asst-think-body .th p { margin: 2px 0; }
 @media (prefers-reduced-motion: reduce) { .asst-spark.on svg, .asst-shimmer { animation: none; } }
+
+/* the area's automatic description (engines/profile.py) and the "no mode" note in the prepare dialog */
+.area-profile { display: flex; gap: 8px; align-items: flex-start; margin: 0 0 4px; padding: 8px 12px; border-radius: 12px;
+  background: var(--surface-container-low); color: var(--on-surface-variant); }
+.area-profile .ms { color: var(--primary); margin-top: 1px; }
+.prep-models { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: 12px; background: var(--surface-container-low); }
+.prep-models .ms { color: var(--primary); margin-top: 2px; }
+.drain-found { display: flex; flex-direction: column; gap: 6px; padding: 12px; border-radius: 12px; background: var(--surface-container-low); }
+.drain-found .src { display: flex; flex-wrap: wrap; gap: 4px 12px; font: 500 12px/16px var(--font); }

@@ -13,8 +13,8 @@ export const SHADE_FAMILY: Partial<Record<LayerKey, "blue" | "warm">> = {
 
 export const LAYERS: { key: LayerKey; label: string; icon: string; group: "scenario" | "area"; syms?: SymKey[]; note?: string; needsRun?: boolean }[] = [
   { key: "depth", label: "Flood depth", icon: "water", group: "scenario", syms: ["depth", "water"], note: "5 cm → 3 m+ · normal river level", needsRun: true },
-  { key: "ponding", label: "Ponding likelihood (urban)", icon: "water_drop", group: "scenario", syms: ["ponding"], note: "low → high (fill ≥ 30 / 70 %)", needsRun: true },
-  { key: "drains", label: "Drains to inspect (urban)", icon: "plumbing", group: "scenario", syms: ["drain"], note: "D1 = highest priority", needsRun: true },
+  { key: "ponding", label: "Ponding likelihood", icon: "water_drop", group: "scenario", syms: ["ponding"], note: "low → high (fill ≥ 30 / 70 %)", needsRun: true },
+  { key: "drains", label: "Drains to inspect", icon: "plumbing", group: "scenario", syms: ["drain"], note: "D1 = highest priority", needsRun: true },
   { key: "lsi", label: "Landslide susceptibility", icon: "landslide", group: "scenario", syms: ["lsi"], note: "very low → very high, this hour", needsRun: true },
   { key: "roads", label: "Road status", icon: "road", group: "scenario", syms: ["roadOpen", "roadLater", "roadClosed"], note: "open · closes later · closed", needsRun: true },
   { key: "routes", label: "Evacuation routes", icon: "directions_walk", group: "scenario", syms: ["route", "routeClosed"], note: "width = people · dashed = closed", needsRun: true },

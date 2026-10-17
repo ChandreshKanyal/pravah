@@ -125,10 +125,10 @@ export default function Projects() {
               const km = bboxKm(a.bbox);
               return (
                 <button key={a.aoi_id} className={`pj-area sl ${a.aoi_id === sel ? "on" : ""} ${a.archived ? "dim" : ""}`} onClick={() => setParams({ area: a.aoi_id })}>
-                  <span className={`avatar ${a.mode}`}><Icon name={a.mode === "urban" ? "location_city" : "landscape"} /></span>
+                  <span className={`avatar ${a.mode === "urban" ? "urban" : "river"}`}><Icon name={a.mode === "urban" ? "location_city" : "landscape"} /></span>
                   <span className="txt">
                     <span className="t">{a.name || "Unnamed area"}</span>
-                    <span className="s">{a.mode === "urban" ? "Urban" : "River & hills"} · {km[0].toFixed(0)} × {km[1].toFixed(0)} km · {a.runs} run{a.runs === 1 ? "" : "s"}{a.starred ? ` · ${a.starred} ★` : ""}{a.archived ? " · archived" : ""}</span>
+                    <span className="s">{km[0].toFixed(0)} × {km[1].toFixed(0)} km · {a.runs} run{a.runs === 1 ? "" : "s"}{a.starred ? ` · ${a.starred} ★` : ""}{a.archived ? " · archived" : ""}</span>
                   </span>
                 </button>
               );

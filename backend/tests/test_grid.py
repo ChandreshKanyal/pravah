@@ -57,5 +57,7 @@ def test_aoi_id_and_limits():
     assert len(aoi_id_for(RUDRA)) == 12
     with pytest.raises(AOIValidationError):
         build_aoi(AOIRequest(bbox=(78.0, 30.0, 78.3, 30.3)))  # ~29 km
+    # one limit for every area (no modes): 5 km of Mumbai is fine, 11 km is not
+    assert build_aoi(AOIRequest(bbox=(72.85, 19.05, 72.90, 19.10))).mode == "auto"
     with pytest.raises(AOIValidationError):
-        build_aoi(AOIRequest(bbox=(72.85, 19.05, 72.90, 19.10), mode="urban"))  # ~5 km > 4 km
+        build_aoi(AOIRequest(bbox=(72.80, 19.00, 72.91, 19.10)))  # ~11.5 km > 10 km

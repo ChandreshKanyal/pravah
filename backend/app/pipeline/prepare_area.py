@@ -173,7 +173,7 @@ def _lsi(aoi: AOI, grid: GridSpec, warnings: list[str], meta: dict) -> None:
     """S5 static: FR ratings learned on a 90 m grid over the AOI + 50 km, AHP weights, training-region scaling."""
     cfg = get_settings()
     tg = make_grid(aoi.bbox, buffer_m=50_000, cell=90, snap=90)
-    T = ees.fetch_training_layers(tg, bare_earth=aoi.mode == "urban")
+    T = ees.fetch_training_layers(tg, bare_earth=_bare(aoi))
     t_terr = terrain(T["dem"], tg.cell)
     t_stream = np.nan_to_num(T["upa"]) >= cfg.stream_upa_km2
     pts = ees.fetch_landslides(tg, cfg.landslide_max_accuracy_km)
@@ -370,6 +370,13 @@ def build_bridges(aoi_id: str, grid: GridSpec, warnings: list[str]) -> dict:
             "deck_at_minimum": sum(1 for s in out if s["deck_source"] == "minimum")}
 
 
+def _bare(aoi: AOI) -> bool:
+    """Bare-earth terrain (FABDEM) for every new area: the surface model's building tops make false slopes (landslides
+    at building edges) and false dams for water. Areas prepared as "river" before 17 Oct keep Copernicus GLO-30 so
+    their cached layers stay consistent."""
+    return aoi.mode != "river"
+
+
 def _urban(aoi: AOI, grid: GridSpec, warnings: list[str], meta: dict) -> None:
     """S13 static part (urban mode): depression analysis on the filled DEM and drain/culvert candidates."""
     aoi_id = aoi.aoi_id
@@ -446,7 +453,7 @@ def _prepare(aoi: AOI, force: frozenset[str]) -> dict:
 
     storage.save_grid(aoi_id, grid)
     fs.update_aoi(aoi_id, {"grid": grid.to_dict(), "state": "preparing"})
-    images = ees.layer_images(grid, bare_earth=aoi.mode == "urban")
+    images = ees.layer_images(grid, bare_earth=_bare(aoi))
     tasks = []
     with ThreadPoolExecutor(max_workers=8) as ex:
         for g in EE_GROUPS:
@@ -487,11 +494,11 @@ def _prepare(aoi: AOI, force: frozenset[str]) -> dict:
         status["network"] = "ready"
     elif status.get("building_proxy") == "ready" and status.get("osm") == "ready":
         run("network", _network, aoi, grid, warnings, meta)
-    if aoi.mode == "urban":
-        if storage.exists(aoi_id, "pluvial.npz") and "urban" not in force:
-            status["urban"] = "ready"
-        elif status.get("network") == "ready":
-            run("urban", _urban, aoi, grid, warnings, meta)
+    # every area: street-waterlogging hollows and drain candidates (applied only where built-up, engines/profile.py)
+    if storage.exists(aoi_id, "pluvial.npz") and "urban" not in force:
+        status["urban"] = "ready"
+    elif status.get("network") == "ready":
+        run("urban", _urban, aoi, grid, warnings, meta)
 
     secs = round(time.time() - t0, 1)
     warnings = list(dict.fromkeys(w for ws in step_warn.values() for w in ws))
