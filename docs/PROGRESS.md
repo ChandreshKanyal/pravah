@@ -1,36 +1,52 @@
 # Pravah progress
 
-## State at stop (17 Oct 2026, ~13:00 IST) - read this first
+## State at stop (17 Oct 2026, ~16:30 IST) - read this first
 
-Everything since commit bf3cab5 is **uncommitted** (about 110 files) and **not deployed**. Tests 93/93 (`backend/.venv/bin/python
--m pytest -q`), `npx tsc --noEmit` clean. Local: backend `uvicorn app.main:app --port 8080` (restart after backend edits),
-frontend `vite --port 5173`. Data lives in Firestore `(default)` and bucket `pravah-dss-data-project-0fd9c4ae-bf90-452f-a80`
-(both asia-south1, ~485 MB). Model: `gemini-3.8-flash` everywhere (LOW thinking; HIGH for the brief and drill plan).
+All work is **committed** (latest 0d80c73 on `main`) but **not pushed or deployed**. Tests 94/94 (`backend/.venv/bin/python
+-m pytest -q`), `npx tsc --noEmit` clean. Local: backend `uvicorn app.main:app --port 8080` (restart after backend edits;
+a restart orphans a running flow model, which goes "stale" after 5 min and the 3D page restarts it), frontend
+`vite --port 5173`. Data lives in Firestore `(default)` and bucket `pravah-dss-data-project-0fd9c4ae-bf90-452f-a80`
+(asia-south1). Model: `gemini-3.8-flash` everywhere. Deadline Sun 18 Oct 12:00 IST.
 
-Behaviour the human asked for today (keep it):
-- Map opens on **live roads** (Google traffic layer); scenario closures, flood and routes appear only after Run scenario in
-  this visit (or "Show last run", History, a `?run=` link). No automatic runs. Top bar: forecast, fixes, live/what-if chip,
-  zoom-to-area icon. When settings change after a run, the run fades with "Last run · Run to update".
-- Road closures drawn only on the hazard stretches (`hazard` = flat [a0,b0,...] length fractions per closed edge, from
-  `routing.hazard_pieces`); the rest of a closed edge is thin red "no through road".
-- One **Ask Pravah** assistant (bottom-right Gemini button, every page): streamed answers (`POST /api/assistant/stream`, SSE)
-  with Gemini-style animated sparkle, live step line and "Show thinking"; every action is a card the user confirms.
-- Projects: delete runs and whole areas (permanent, confirmed; `pipeline/cleanup.py`); archive remains the reversible option.
+Deploy (human): `git push`; `./scripts/deploy_backend.sh`;
+`cd frontend && npm run build && cd .. && ~/.npm-global/bin/firebase deploy --only hosting --project project-0fd9c4ae-bf90-452f-a80`;
+`./scripts/smoke_test.sh`. Cloud data already holds the waterlogging backfill and the new default runs.
+
+Behaviour the human asked for (keep it):
+- **No area mode.** Every area gets river flooding, street waterlogging and landslides; physics is chosen per cell and per
+  channel from the data (`engines/profile.py`; see "one model for every area" below). AI is used only for sourced local
+  facts (storm-drain capacity lookup), never to choose physics, and a person confirms before it is used.
+- Map opens on **live roads**; scenario layers only after Run scenario in this visit (or "Show last run", History,
+  `?run=`). No automatic runs. Map state (settings, layers, tab, hour, camera, shown run) survives trips to 3D, the brief and
+  the drill (sessionStorage `pravah:ws:{aoiId}`); the shown run goes in `?run=`.
+- Rain panel: four sources (Forecast / Past day / Record / Design), each as "label over chips"; the hourly editor's scale is
+  frozen while dragging and capped at 300 mm/h (backend clamps too). Separate River and Storm drains sections.
+- 3D: water clipped to the simulated area; buildings grey -> yellow -> orange -> red by the water against them over time;
+  roads (closing pieces orange/red by hour), exit routes (teal, dashed once cut), shelter zones (blue ring + label) and
+  closing bridges, with chips to toggle; the model switch shows the model actually drawn.
+- Landslide closures, evacuations and shelter exclusions only on slopes >= 15 deg.
+- People move where the FD2321 hazard rating reaches "danger for some" (still water 0.5 m / 0.3 m fragile; river water
+  ~0.26-0.3 m).
+- Ask Pravah answers only about the platform, floods, landslides, weather and disaster response; actions need a confirm.
+- Projects: delete runs and areas (confirmed); archive is the reversible option.
+
+Current default runs (each new run becomes the area default): Mumbai 46b7490e56ce (IMD very heavy, unified model),
+Amingaon/Guwahati 4812175de1bf (cloudburst; flow model ready), Rudraprayag d143334b8b1b (record rain, no flow model yet:
+3D computes it on open). The earlier Rudraprayag brief run with the Gemini brief is f253c9ee67ec (Projects -> Make default).
 
 Open items:
-- Commit in pieces (no AI co-author; never `backend/cache/*.json`), then the human deploys: `./scripts/deploy_backend.sh`;
-  `cd frontend && npm run build && cd .. && ~/.npm-global/bin/firebase deploy --only hosting --project project-0fd9c4ae-bf90-452f-a80`;
-  `./scripts/smoke_test.sh`.
-- Every run still becomes the area's default (`run_pipeline` sets `latest_run_id`): the Rudraprayag default is now a dry
-  forecast run, not the record-rain run with the Gemini brief (f253c9ee67ec). Restore via Projects -> Make default, or
-  stop auto-replacing the default.
-- Emulators, rain triggers and the demo 3D flows predate the `tail_h` fix: recompute (heavy on the 8 GB Mac).
-- Gemini returns no thinking summaries at LOW thinking; "Show thinking" lists the real tool steps instead.
-- Takaoka (786e4120442d, Japan): OSM buildings only (16k, partial); fixes job was interrupted by a restart and reruns
-  when its map opens.
-- The Mac swaps heavily (~6 GB swap); slow first loads are mostly that.
+- Every run still replaces the area default (`run_pipeline` sets `latest_run_id`); consider not doing that for test runs.
+- Rerun "Fix before the rain" for river areas so road hollows appear (`POST /api/aoi/{id}/improvements`).
+- Flow emulator still uses the old drain rule (trained per area); emulators, triggers and demo flows predate `tail_h` and
+  the unified model: recompute if time (heavy on the 8 GB Mac); `scripts/preprocess_demo_aoi.py all` for demo caches.
+- Drain lookup is inconsistent across calls (Guwahati 7 vs 30 mm/h; Mumbai's "25 now, 50 planned" often returns no
+  figure) - by design nothing is used without a person's confirmation.
+- 2D map depth is the worst-case envelope (never recedes; labelled "Deepest flood so far"); driving it from the flow
+  model's frames would show rise and recession (not done).
+- 3D overlays have no click tooltips yet (click shows the water at the spot).
+- Takaoka (786e4120442d, Japan): OSM buildings only; fixes rerun when its map opens. The Mac swaps heavily.
 
-## 17 Oct, late afternoon: one model for every area (river / urban mode removed)
+## 17 Oct, ~15:30-16:30: one model for every area (river / urban mode removed)
 Human request: "no mode selection ... uses all the best possible logic ... perhaps use some AI". Physics is chosen per
 cell and per channel from the data (`backend/app/engines/profile.py`); AI is used only for local facts with sources.
 - **Every area prepares every layer.** Waterlogging hollows and drain candidates (`_urban`) now run for all areas. New
@@ -77,7 +93,7 @@ cell and per channel from the data (`backend/app/engines/profile.py`); AI is use
 - To do after this: rerun "Fix before the rain" for river areas to add road hollows; re-run
   `scripts/preprocess_demo_aoi.py all` if demo caches must match.
 
-## 17 Oct, evening: water timeline, building colours, rain panel, state kept across views
+## 17 Oct, ~13:30-15:30: water timeline, building colours, rain panel, state kept, 3D overlays, landslide floor, assistant scope
 - **Runaway hour editor (root cause of "water fills the city and never changes")**: the hour-by-hour rain bars rescaled
   to 1.6x the dragged value on every render, so one drag climbed to 450-2,240 mm/h (Mumbai runs 9dcdc0009045,
   8f7faab1186f, 451b75a37db4, labelled "edited by hand"). The city flooded fully in hour 1. Now the scale is frozen while
