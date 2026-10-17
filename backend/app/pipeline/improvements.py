@@ -134,6 +134,9 @@ def step_clogged(aoi_id: str) -> None:
         imagery = {"recent": list(L["recent"]), "early": list(L["early"]), "now": list(L["built_now_window"])}
         if not channel.any():
             notes.append("No mapped river or canal wide enough to check from space (narrow drains are not visible at 10 m).")
+        elif not (imp.water_seen(channel, arr["water_occ"]) * channel >= imp.WATER_SEEN_PCT).any():
+            notes.append("The mapped canals and streams here were never seen holding water from space (JRC, since 1984), so they are"
+                         " too narrow to check at 10 m; check them on site before the rains.")
     except Exception as e:
         log.exception("improvement imagery failed")
         notes.append(f"Satellite checks unavailable this time ({e.__class__.__name__}); model-ranked items only.")
@@ -238,18 +241,24 @@ def reported(x: dict, aoi_id: str) -> tuple[list[dict], list[dict], str]:
 
 # ---------- image clips and Gemini vision review ----------
 class Review(BaseModel):
+    centre: Literal["channel with open water", "channel with vegetation or silt", "road or railway", "fields or crops",
+                    "buildings", "trees", "bare ground", "other"] = Field(description="What is inside the ring now (in the most recent image), judged from the wider view first")
+    channel_visible: bool = Field(description="True only if a distinct channel (a continuous strip with banks, wider than about 20 m) passes through the ring")
     verdict: Literal["visible", "not_visible", "unclear"]
     seen: str = Field(description="What is at the centre of the images, at most 30 words, only what the pixels show")
 
 
 REVIEW_PROMPT = """You are checking satellite evidence for a pre-monsoon maintenance list used by district officials.
-The images are Sentinel-2, 10 m per pixel, about 600 m across; the point in question is inside the white ring at the centre.
+The images are Sentinel-2, 10 m per pixel; each caption says how wide it is. The point in question is inside the ring at
+the centre of every image. Look at the wider view first to see what the place is (a river, a canal, a road, fields, a
+town), then at the close-ups.
 {captions}
 Claim to check: {claim}
-At 10 m per pixel nothing smaller than about 20 m can be seen (no drains, rubbish piles, vehicles or people), so judge
-only what the pixels can show. Answer "visible" only if the images clearly show the claim at the centre, "not_visible"
-if they contradict it (for example open dark water where vegetation is claimed, or no change between before and after),
-and "unclear" otherwise. Do not guess causes you cannot see."""
+At 10 m per pixel nothing narrower than about 20 m can be seen (no drains, rubbish piles, vehicles or people), so judge
+only what the pixels can show. A straight green line through farmland is usually a tree-lined road, canal bank or field
+edge, not weeds in a channel. Answer "visible" only if the images clearly show the claim at the centre, "not_visible"
+if they contradict it (open dark water where vegetation is claimed, a road or fields where a channel is claimed, or no
+change between before and after), and "unclear" otherwise. Do not guess causes you cannot see."""
 
 
 def _ring(png: bytes) -> bytes:
@@ -271,16 +280,20 @@ def _clips(aoi_id: str, it: dict, imagery: dict) -> list[tuple[str, str, bytes]]
     lon, lat = it["lon"], it["lat"]
     base = hashlib.sha1(f"{it['category']}{lon}{lat}".encode()).hexdigest()[:10]
     out = []
+    # a 2 km view first (what the place is: river, canal, road, fields), then 600 m close-ups; 600 m alone made a
+    # tree-lined road or field edge look like a green channel, to Gemini and to people
     if it["category"] == "choked_channel":
         win = tuple(imagery["recent"][:2])
-        out.append((f"{base}_rgb", f"True colour, {win[0]} to {win[1]}", ees.s2_chip(lon, lat, win)))
-        out.append((f"{base}_fcc", f"False colour (vegetation shows red), {win[0]} to {win[1]}", ees.s2_chip(lon, lat, win, false_colour=True)))
+        out.append((f"{base}_wide", f"Wider view, about 2 km across, {win[0]} to {win[1]}", ees.s2_chip(lon, lat, win, half_m=1000, px=500)))
+        out.append((f"{base}_rgb", "Close-up, about 600 m across, true colour", ees.s2_chip(lon, lat, win)))
+        out.append((f"{base}_fcc", "Close-up, false colour (vegetation shows red)", ees.s2_chip(lon, lat, win, false_colour=True)))
     else:
         before = ("2016-11-01", "2017-05-31")
         y = date.today().year if date.today().month >= 6 else date.today().year - 1
         after = (f"{y - 1}-11-01", f"{y}-05-31")
-        out.append((f"{base}_before", f"Before: dry season {before[0][:4]}–{before[1][:4]}", ees.s2_chip(lon, lat, before, l1c=True)))
-        out.append((f"{base}_after", f"After: dry season {after[0][:4]}–{after[1][:4]}", ees.s2_chip(lon, lat, after, l1c=True)))
+        out.append((f"{base}_wide", f"Wider view, about 2 km across, dry season {after[0][:4]}–{after[1][:4]}", ees.s2_chip(lon, lat, after, half_m=1000, px=500, l1c=True)))
+        out.append((f"{base}_before", f"Before: dry season {before[0][:4]}–{before[1][:4]}, about 600 m across", ees.s2_chip(lon, lat, before, l1c=True)))
+        out.append((f"{base}_after", f"After: dry season {after[0][:4]}–{after[1][:4]}, about 600 m across", ees.s2_chip(lon, lat, after, l1c=True)))
     res = []
     for key, cap, png in out:
         png = _ring(png)
@@ -338,10 +351,20 @@ def step_finish(aoi_id: str) -> dict:
         rv = _review(it, clips)
         if rv is None:
             return it
-        it["ai"] = {"verdict": rv.verdict, "seen": rv.seen[:240], "model": gemini.model_name("fast")}
-        if rv.verdict == "not_visible":
-            return None  # the imagery does not support it: drop rather than send a crew on a false lead
-        it["confidence"] = "medium" if rv.verdict == "visible" else "check"
+        it["ai"] = {"verdict": rv.verdict, "seen": rv.seen[:240], "centre": rv.centre, "model": gemini.model_name("fast")}
+        # keep only what Gemini confirms; "unsure" leads were mostly false (tree rows, roads, fields), and a crew sent
+        # on a false lead costs more than a missed one, which the site walk still finds. A channel lead also needs a
+        # channel Gemini can see at the centre.
+        if rv.verdict != "visible":
+            return None
+        # and what is at the centre now must be what the claim says is there
+        need = {"choked_channel": {"channel with vegetation or silt"}, "encroachment": {"buildings", "bare ground", "road or railway"},
+                "bare_ground": {"bare ground"}}.get(it["category"])
+        if need and rv.centre not in need:
+            return None
+        if it["category"] == "choked_channel" and not rv.channel_visible:
+            return None
+        it["confidence"] = "medium"
         return it
 
     with ThreadPoolExecutor(max_workers=4) as ex:
@@ -349,7 +372,7 @@ def step_finish(aoi_id: str) -> dict:
     dropped = sum(1 for c in checked if c is None)
     items = imp.rank([c for c in checked if c is not None])
     if dropped:
-        notes.append(f"Gemini dropped {dropped} satellite lead{'s' if dropped > 1 else ''} the images did not support.")
+        notes.append(f"Gemini dropped {dropped} satellite lead{'s' if dropped > 1 else ''} it could not confirm from the images.")
     counts: dict[str, int] = {}
     for it in items:
         counts[it["category"]] = counts.get(it["category"], 0) + 1

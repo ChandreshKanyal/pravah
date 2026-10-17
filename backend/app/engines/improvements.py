@@ -256,11 +256,25 @@ def _clusters(mask: np.ndarray, min_px: int, value: np.ndarray | None = None):
         yield int(sizes[k]), int(rr[i]), int(cc[i]), (rr, cc)
 
 
+WATER_SEEN_PCT = 5.0  # JRC occurrence: a channel never seen holding water is too narrow (or dry) to judge at 10 m
+WATER_SEEN_PX = 15    # within 150 m along the channel (10 m pixels)
+
+
+def water_seen(channel: np.ndarray, occ: np.ndarray) -> np.ndarray:
+    """Highest JRC water occurrence (% of clear looks since 1984) on the mapped channel within 150 m of each pixel."""
+    return ndi.maximum_filter(np.where(channel, np.nan_to_num(occ), 0.0), size=2 * WATER_SEEN_PX + 1)
+
+
 def choked_channels(arr: dict, channel: np.ndarray, names: np.ndarray, rc2ll, window, urban: bool, top: int = 6) -> list[dict]:
     """Stretches of a mapped river or canal whose surface reads as vegetation (NDVI >= 0.35) in recent clear Sentinel-2
-    scenes: floating weeds (water hyacinth), reeds or silt islands that slow the flow. Open water reads below about 0.1."""
+    scenes: floating weeds (water hyacinth), reeds or silt islands that slow the flow. Open water reads below about 0.1.
+
+    Only where the channel has been seen holding water from space (JRC occurrence >= 5 % within 150 m). On 17 Oct every
+    lead on a narrow irrigation canal in Dera Ghazi Khan had 0 % (the green line was the tree rows and fields beside a
+    canal too narrow for 10 m pixels), while the real hyacinth patches on Mumbai's Mithi River had about 34 %."""
     ndvi = np.nan_to_num(arr["ndvi"], nan=-1)
-    green = channel & (ndvi >= 0.35)
+    seen = water_seen(channel, arr["water_occ"])
+    green = channel & (ndvi >= 0.35) & (seen >= WATER_SEEN_PCT)
     out = []
     for n, r, c, (rr, cc) in _clusters(green, 3, ndvi):
         lon, lat = rc2ll(r, c)
@@ -269,9 +283,10 @@ def choked_channels(arr: dict, channel: np.ndarray, names: np.ndarray, rc2ll, wi
         length = n * 10
         out.append(_item("choked_channel", lon, lat, min(length, 300) / 300, [
             f"About {length} m of the {name or 'channel'} looks green from space (vegetation index {mean:.2f}; open water is below 0.1)",
+            f"Open water was seen on this channel in up to {seen[r, c]:.0f}% of satellite looks since 1984 (JRC), so it is wide enough to read at 10 m",
             f"Sentinel-2 images from {window[0]} to {window[1]} ({window[2]} scenes, clouds removed)",
         ], "Inspect and remove floating weeds, reeds and silt here before the next heavy rain; they slow the flow and back water up.",
-            urban, place=name, basis="imagery", numbers={"length_m": length, "ndvi": round(mean, 2)}))
+            urban, place=name, basis="imagery", numbers={"length_m": length, "ndvi": round(mean, 2), "water_seen_pct": round(float(seen[r, c]))}))
     return dedupe(out, 300)[:top]
 
 

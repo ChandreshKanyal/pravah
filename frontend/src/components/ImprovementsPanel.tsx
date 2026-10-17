@@ -1,7 +1,8 @@
 // "Fix before the rain": places where maintenance would most reduce flooding, each with the evidence it rests on.
 // Evidence kinds are kept apart on purpose: web reports (cited), open satellite imagery checked by Gemini, and model
 // estimates that need a site visit. Google satellite and Street View are only opened for a person to look at.
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { apiUrl } from "../api/client";
 import type { Improvement, ImprovementCategory, Improvements } from "../types/api";
 import { markerUrl } from "../layers/factories";
@@ -90,7 +91,7 @@ function Detail({ it, data, onBack, onClose, onLook, onStreetView, onField }: {
   it: Improvement; data: Improvements; onBack: () => void; onClose: () => void;
   onLook: (it: Improvement) => void; onStreetView: (it: Improvement) => void; onField: (it: Improvement) => void;
 }) {
-  const [big, setBig] = useState<string | null>(null);
+  const [big, setBig] = useState<number | null>(null);
   const b = BASIS[it.basis];
   return (
     <div className="imp-detail">
@@ -111,14 +112,18 @@ function Detail({ it, data, onBack, onClose, onLook, onStreetView, onField }: {
         <>
           <h4 className="label-l">Satellite evidence</h4>
           <div className="imp-imgs">
-            {it.images.map((im) => (
-              <figure key={im.key} onClick={() => setBig(big === im.key ? null : im.key)} className={big === im.key ? "big" : ""}>
-                <img src={apiUrl(im.url)} alt={im.caption} loading="lazy" />
+            {it.images.map((im, i) => (
+              <figure key={im.key} className={im.key.endsWith("_wide") ? "wide" : ""}>
+                <button className="imp-img sl" onClick={() => setBig(i)} aria-label={`Enlarge: ${im.caption}`}>
+                  <img src={apiUrl(im.url)} alt={im.caption} decoding="async" />
+                  <Icon name="open_in_full" className="sm" />
+                </button>
                 <figcaption>{im.caption}</figcaption>
               </figure>
             ))}
           </div>
-          <p className="body-s muted" style={{ margin: "4px 0 0" }}>Sentinel-2, 10 m pixels, about 600 m across; the ring marks the spot.</p>
+          <p className="body-s muted" style={{ margin: "4px 0 0" }}>Copernicus Sentinel-2, 10 m pixels; the ring marks the spot. Tap an image to enlarge.</p>
+          {big != null && <Lightbox images={it.images} at={big} setAt={setBig} />}
         </>
       )}
       {it.ai && (
@@ -131,7 +136,9 @@ function Detail({ it, data, onBack, onClose, onLook, onStreetView, onField }: {
       {it.sources.length > 0 && (
         <>
           <h4 className="label-l">Sources</h4>
-          <ul className="imp-src">{it.sources.map((s) => <li key={s.uri}><a href={s.uri} target="_blank" rel="noreferrer">{host(s.uri)}</a></li>)}</ul>
+          <ol className="imp-src">{it.sources.map((s, i) => (
+            <li key={s.uri}><a href={s.uri} target="_blank" rel="noreferrer" title={s.uri}><span className="n">{i + 1}</span>{s.title && !s.title.includes("/") ? s.title : host(s.uri)}</a></li>
+          ))}</ol>
           {data.search_entry_point && <div className="web-entry" dangerouslySetInnerHTML={{ __html: data.search_entry_point }} />}
         </>
       )}
@@ -148,6 +155,33 @@ function Detail({ it, data, onBack, onClose, onLook, onStreetView, onField }: {
       <p className="body-s muted" style={{ marginTop: 8 }}>Look closer and Street View open Google imagery for you to inspect; it is not analysed by Pravah.</p>
     </div>
   );
+}
+
+/** One image large, with the others a swipe or arrow key away. */
+function Lightbox({ images, at, setAt }: { images: Improvement["images"]; at: number; setAt: (i: number | null) => void }) {
+  const n = images.length, im = images[at];
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setAt(null);
+      else if (e.key === "ArrowRight") setAt((at + 1) % n);
+      else if (e.key === "ArrowLeft") setAt((at + n - 1) % n);
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [at, n, setAt]);
+  return createPortal(
+    <div className="lightbox" role="dialog" aria-modal="true" aria-label={im.caption} onClick={() => setAt(null)}>
+      <figure onClick={(e) => e.stopPropagation()}>
+        <img src={apiUrl(im.url)} alt={im.caption} />
+        <figcaption><span className="grow">{im.caption} <span className="muted">· {at + 1} of {n}</span></span>
+          <a href={apiUrl(im.url)} target="_blank" rel="noreferrer">Open full size</a></figcaption>
+      </figure>
+      {n > 1 && <>
+        <div className="lb-prev"><IconButton icon="chevron_left" label="Previous image" variant="tonal" onClick={(e) => { e.stopPropagation(); setAt((at + n - 1) % n); }} /></div>
+        <div className="lb-next"><IconButton icon="chevron_right" label="Next image" variant="tonal" onClick={(e) => { e.stopPropagation(); setAt((at + 1) % n); }} /></div>
+      </>}
+      <div className="lb-close"><IconButton icon="close" label="Close" variant="tonal" onClick={() => setAt(null)} /></div>
+    </div>, document.body);
 }
 
 const host = (u: string) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return u; } };
