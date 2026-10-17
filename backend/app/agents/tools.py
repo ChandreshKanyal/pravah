@@ -9,7 +9,7 @@ import logging
 
 from google.adk.tools import ToolContext
 
-from app.models.scenario import ScenarioParams
+from app.models.scenario import ScenarioParams, apply_rain_change
 from app.pipeline import facts as F
 from app.services import firestore as fs
 from app.services import storage
@@ -120,6 +120,10 @@ def run_scenario(tool_context: ToolContext, rain_source: str | None = None, manu
         p["rain_preset"] = None  # an explicit intensity replaces an IMD category
         if rain_source is None:
             p["rain_source"] = "manual"
+    given = {k for k, v in dict(rain_source=rain_source, manual_intensity_mm_h=manual_intensity_mm_h, duration_h=duration_h,
+                                 hyetograph=hyetograph, forecast_day_index=forecast_day_index, worst_multiplier=worst_multiplier).items()
+             if v is not None} | ({"rain_preset", "rain_source"} if manual_intensity_mm_h is not None else set())
+    apply_rain_change(p, given)
     dis = set(p.get("disabled_shelter_ids", [])) | set(disable_shelter_ids or [])
     p["disabled_shelter_ids"] = sorted(dis - set(enable_shelter_ids or []))
     params = ScenarioParams(**p)

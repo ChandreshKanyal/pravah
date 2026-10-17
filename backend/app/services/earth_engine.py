@@ -1,6 +1,6 @@
 """Earth Engine I/O (S1.3-S1.6, S1.8). Dataset IDs verified against the EE catalog on 2026-10-15."""
 import logging
-from datetime import date
+from datetime import date, datetime, timezone
 
 import ee
 import geopandas as gpd
@@ -203,6 +203,31 @@ def chirps_max_daily_mm(lon: float, lat: float) -> float:
     img = ee.ImageCollection(CHIRPS_ID).filterDate("2001-01-01", "2025-01-01").select("precipitation").max()
     v = img.reduceRegion(ee.Reducer.max(), g, scale=5566, maxPixels=1e8).get("precipitation")
     return float(ee.Number(v).getInfo() or 0.0)
+
+
+def chirps_annual_max(lon: float, lat: float, years: range = range(2001, 2025)) -> list[dict]:
+    """Wettest day of each year (mm) within 5 km of the point and its date: CHIRPS daily, same area and scale as
+    `chirps_max_daily_mm`, so the largest of these is the record. One server-side map, one getInfo."""
+    init_ee()
+    g = ee.Geometry.Point([lon, lat]).buffer(5000)
+    col = ee.ImageCollection(CHIRPS_ID).select("precipitation")
+
+    def year(y):
+        y = ee.Number(y)
+        yc = col.filterDate(ee.Date.fromYMD(y, 1, 1), ee.Date.fromYMD(y.add(1), 1, 1)).map(
+            lambda im: im.addBands(ee.Image.constant(im.date().millis()).rename("t").toDouble()))
+        top = yc.qualityMosaic("precipitation").select(["precipitation", "t"])
+        v = top.reduceRegion(ee.Reducer.max(2).setOutputs(["mm", "t"]), g, 5566, maxPixels=1e8)
+        return ee.Feature(None, {"year": y, "mm": v.get("mm"), "t": v.get("t")})
+    fc = ee.FeatureCollection(ee.List(list(years)).map(year)).getInfo()
+    out = []
+    for f in fc["features"]:
+        pr = f["properties"]
+        if pr.get("mm") is None:
+            continue
+        d = datetime.fromtimestamp(pr["t"] / 1000, tz=timezone.utc).date().isoformat() if pr.get("t") else None
+        out.append({"year": int(pr["year"]), "mm": round(float(pr["mm"]), 1), "date": d})
+    return out
 
 
 def imerg_daily(lon: float, lat: float, end: date, days: int = 90) -> list[dict]:

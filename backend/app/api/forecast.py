@@ -49,14 +49,32 @@ def forecast(aoi_id: str, duration_h: int = Query(4, ge=1, le=24)):
 def rain_hours(aoi_id: str, params: ScenarioParams):
     """The exact hourly rain (mm in each hour) a scenario would use, from the run's own rain builder (forecast, worst,
     record, observed past day, IMD presets, custom), so the Scenario panel shows it and staff can edit it hour by hour."""
-    from app.pipeline.run_pipeline import rain_series
+    from app.pipeline.run_pipeline import base_rain, with_strength
     try:
         area = load_area(aoi_id)
     except AreaNotReady as e:
         raise HTTPException(409, str(e))
     p = params.model_copy(update={"aoi_id": aoi_id, "rain_series_override": None})
     try:
-        series, label, warnings, start = rain_series(p, area)
+        base = base_rain(p, area)
+        series, label, warnings, start = with_strength(base, p)
     except Exception as e:  # observed rain needs Earth Engine
         raise HTTPException(502, f"Rain unavailable: {e.__class__.__name__}")
-    return {"series": [round(float(x), 1) for x in series], "label": label, "start_local": start, "warnings": warnings}
+    b = [float(x) for x in base[0]]
+    # base_* = the source's own rain (strength x1): the panel's strength slider is drawn against it
+    return {"series": [round(float(x), 1) for x in series], "label": label, "start_local": start, "warnings": warnings,
+            "base_mean_mm_h": round(sum(b) / max(1, len(b)), 2), "base_peak_mm_h": round(max(b, default=0.0), 2), "scaled": base[4]}
+
+
+@router.get("/api/aoi/{aoi_id}/rain-records")
+def rain_records_api(aoi_id: str):
+    """Wettest days on record near the area and the 2/10/25/100-year daily rain, for the Record choices."""
+    from app.pipeline.run_pipeline import rain_records
+    try:
+        area = load_area(aoi_id)
+    except AreaNotReady as e:
+        raise HTTPException(409, str(e))
+    try:
+        return rain_records(area)
+    except Exception as e:
+        raise HTTPException(502, f"Rain records unavailable: {e.__class__.__name__}")

@@ -129,19 +129,36 @@ RAIN_PRESETS = {
 }
 
 
-def preset_series(preset: str, duration_h: int, hyetograph: str = "constant") -> tuple[list[float], str]:
+def preset_series(preset: str, duration_h: int, hyetograph: str = "constant", shape: str | None = None) -> tuple[list[float], str]:
     """Hourly rain for an IMD category or a cloudburst over H hours. The depth of the wettest H hours comes from the
-    daily total by the IMD reduction rule. A cloudburst is always early-peaked: its peak hour is exactly 100 mm and the
-    hours around it follow the same curve (100 x H^(1/3) mm in H hours)."""
+    daily total by the IMD reduction rule. A cloudburst is early-peaked unless a shape is chosen: its peak hour is then
+    exactly 100 mm and the hours around it follow the same curve (100 x H^(1/3) mm in H hours). Spread evenly it keeps
+    the same depth but no hour reaches 100 mm, and the label says so."""
     p24, name = RAIN_PRESETS[preset]
     H = max(1, min(24, int(duration_h)))
     depth = daily_to_duration_mm(p24, H)
-    shape = "triangular_front" if preset == "cloudburst" else hyetograph
+    shape = shape or ("triangular_front" if preset == "cloudburst" else hyetograph)
     series = distribute_total(depth, H, shape)
     how = "early peak" if shape == "triangular_front" and H > 1 else "steady"
     if preset == "cloudburst":
-        return series, f"{name}: {depth:.0f} mm in {H} h, peak {max(series):.0f} mm in one hour"
+        below = max(series) < 99.5
+        return series, (f"{name}: {depth:.0f} mm in {H} h, {how}, peak {max(series):.0f} mm in one hour"
+                        + (" (below 100 mm, so not a cloudburst by the IMD definition)" if below else ""))
     return series, f"{name}: {depth:.0f} mm in the wettest {H} h ({how}, peak {max(series):.0f} mm/h), IMD reduction rule"
+
+
+# Gumbel (EV1) frequency factor, method of moments (Chow 1951): x_T = mean + K_T * sd
+def gumbel_k(T: float) -> float:
+    return -(math.sqrt(6) / math.pi) * (0.5772 + math.log(math.log(T / (T - 1))))
+
+
+def return_level_mm(annual_max: list[float], T: float) -> float:
+    """Daily rain (mm) expected once in T years, from a Gumbel fit to yearly maxima (the standard IMD/CWC method for
+    design storms). With 24 years of data the 100-year value is an extrapolation and is labelled an estimate."""
+    x = np.asarray([v for v in annual_max if v is not None and v >= 0], float)
+    if len(x) < 5:
+        return float(x.max()) if len(x) else 0.0
+    return float(max(0.0, x.mean() + gumbel_k(T) * x.std(ddof=1)))
 
 
 def manual_series(intensity_mm_h: float, duration_h: int, hyetograph: str = "constant") -> list[float]:

@@ -46,6 +46,13 @@ class ScenarioParams(BaseModel):
     rain_series_override: list[float] | None = None
     # storm-drain capacity under built-up land (mm/h); None = the area's confirmed value (drain lookup), else 25
     drain_capacity_mm_h: float | None = Field(default=None, ge=5, le=150)
+    # the same three choices for every rain source (17 Oct): how the rain is spread over the hours ("source" keeps the
+    # forecast's or the measured day's own pattern; None = the source's default, as before), how much stronger or weaker
+    # than the source it is (x1 = the actual forecast / record / IMD category; the run label says when it is not), and for
+    # record rain how rare a day (None = the wettest day on record; 2/10/25/100 = Gumbel estimate of that return period)
+    rain_shape: Literal["source", "constant", "triangular_front"] | None = None
+    rain_scale: float = Field(default=1.0, ge=0.1, le=5.0)
+    return_period_y: Literal[2, 10, 25, 100] | None = None
 
     @field_validator("rain_series_override")
     @classmethod
@@ -54,3 +61,25 @@ class ScenarioParams(BaseModel):
     override_start_local: str | None = None  # clock time of hour 1 for an override (an edited forecast keeps its clock)
     observed_date: str | None = None  # YYYY-MM-DD (local) for rain_source "observed"
     visitors: int = 0  # pilgrims/tourists present on top of residents, spread by the crowding index (S9)
+
+
+RAIN_KEYS = {"rain_source", "rain_preset", "manual_intensity_mm_h", "forecast_day_index", "worst_multiplier", "duration_h",
+             "hyetograph", "observed_date", "return_period_y"}
+
+
+def apply_rain_change(p: dict, changed: set[str]) -> dict:
+    """What the Scenario panel does when the rain changes, for every other writer (Gemini's plan, the assistant's tools):
+    a new source starts as its actual data (strength x1, its own shape, the record day), an explicit hyetograph is the
+    shape (rain_shape wins over hyetograph in the rain builder), and hand edits made for the old rain are dropped."""
+    if not changed & RAIN_KEYS:
+        return p
+    if changed & {"rain_source", "rain_preset", "manual_intensity_mm_h", "observed_date"} and "rain_scale" not in changed:
+        p["rain_scale"] = 1.0
+    if "rain_source" in changed and "return_period_y" not in changed:
+        p["return_period_y"] = None
+    if "hyetograph" in changed:
+        p["rain_shape"] = p["hyetograph"]
+    elif changed & {"rain_source", "rain_preset"} and "rain_shape" not in changed:
+        p["rain_shape"] = None
+    p.update(rain_series_override=None, override_start_local=None, preset_label=None)
+    return p

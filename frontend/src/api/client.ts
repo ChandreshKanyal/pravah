@@ -138,7 +138,12 @@ export const getAlert = (runId: string) => call<AlertDraft>(`/api/runs/${runId}/
 export const draftAlert = (runId: string) => call<AlertDraft>(`/api/runs/${runId}/alert`, { method: "POST" });
 export const capUrl = (runId: string) => apiUrl(`/api/runs/${runId}/alert/cap.xml`);
 
-export type RainHours = { series: number[]; label: string; start_local: string | null; warnings: string[] };
+export type RainHours = { series: number[]; label: string; start_local: string | null; warnings: string[];
+  base_mean_mm_h?: number; base_peak_mm_h?: number; scaled?: string | null };  // base = the source's own rain (strength x1)
+export type RainRecords = { years: number[]; annual: { year: number; mm: number; date: string | null }[]; record: { mm: number; date: string | null };
+  levels: { T: 2 | 10 | 25 | 100; mm: number }[]; source: string; method: string };
+/** Wettest days on record near the area and the 2/10/25/100-year daily rain (CHIRPS 2001-2024, Gumbel fit). */
+export const rainRecords = (aoi: string) => call<RainRecords>(`/api/aoi/${aoi}/rain-records`);
 /** The exact hourly rain a scenario would use (the run's own rain builder), for the hour-by-hour editor. */
 export const rainHours = (aoi: string, p: ScenarioParams) =>
   call<RainHours>(`/api/aoi/${aoi}/rain-hours`, { method: "POST", body: JSON.stringify({ ...p, rain_series_override: null }) });

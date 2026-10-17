@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 
 import app.agents  # noqa: F401  (Vertex env)
 from app.config import get_settings
-from app.models.scenario import ScenarioParams
+from app.models.scenario import ScenarioParams, apply_rain_change
 
 
 class PlanOverrides(BaseModel):
@@ -88,6 +88,7 @@ def merge(current: ScenarioParams, ov: PlanOverrides, shelter_ids: set[str]) -> 
     if "disabled_shelter_ids" in changes:
         changes["disabled_shelter_ids"] = sorted(i for i in changes["disabled_shelter_ids"] if i in shelter_ids)
     p.update(changes)
+    apply_rain_change(p, set(changes))
     new = ScenarioParams(**p)
     diff = {k: [getattr(current, k), getattr(new, k)] for k in changes if getattr(current, k) != getattr(new, k)}
     for k, v in diff.items():

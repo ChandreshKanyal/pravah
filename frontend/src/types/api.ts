@@ -100,6 +100,11 @@ export interface ScenarioParams {
   rain_series_override?: number[] | null; override_start_local?: string | null; observed_date?: string | null;
   drain_capacity_mm_h?: number | null;  // null = the area's confirmed value, else 25
   visitors?: number;
+  // same three choices for every rain source: spread over the hours (null = the source's default; "source" = the
+  // forecast's or measured day's own pattern), strength against the source (1 = the actual data), record rarity
+  rain_shape?: "source" | "constant" | "triangular_front" | null;
+  rain_scale?: number;
+  return_period_y?: 2 | 10 | 25 | 100 | null;
 }
 
 export const defaultParams = (aoi_id: string): ScenarioParams => ({
@@ -108,6 +113,7 @@ export const defaultParams = (aoi_id: string): ScenarioParams => ({
   pop_multiplier: 1, pop_total_override: null, disabled_shelter_ids: [], extra_shelters: [], blocked_polygons: [],
   travel_mode: "walk", evac_start_hour: 1, vehicle_depth_limit_m: 0.3, walk_depth_limit_m: 0.5,
   bridge_cut_stage_m: 3, bridge_margin_m: 0, max_travel_min: 60, sqm_per_person: 3.5, rain_preset: null, preset_label: null, visitors: 0, drain_capacity_mm_h: null,
+  rain_shape: null, rain_scale: 1, return_period_y: null,
 });
 
 /** Storm-drain capacity confirmed for an area by a person (from the Gemini lookup or their own figure). */
