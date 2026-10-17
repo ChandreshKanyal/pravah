@@ -12,12 +12,12 @@ All work is **committed** on `main` (no git remote is configured, so nothing is 
 - Backend revision **00004 (8 CPU / 8 GiB)** is live (23:05). Rudraprayag record rain, 4 h: 176 s on a fresh instance,
   155 s warm (flow model 159 / 142 s); 2 CPU was 263 s, the Mac 57 s. 4x the CPUs gave <2x, so more CPU will not help.
   Option B (lower `flow_max_cell_hours` so large areas use 60 m cells, ~8x less work, then re-validate) is still open.
-- **Runs are now jobs (23:20, committed, NOT yet deployed):** a 155 s warm run finished on the server ("200 OK" in the
+- **Runs are now jobs (23:20; deployed 23:40, backend revision 00005 + hosting):** a 155 s warm run finished on the server ("200 OK" in the
   log) but the reply never reached the client: a connection silent for minutes was dropped on the way (phone hotspot).
   The website now calls `POST /api/run-jobs` (answers at once with a job id, the run continues in a thread) and polls
   `GET /api/run-jobs/{id}` every 3 s; job state is in Firestore `run_jobs` so any instance can answer. A job still
   "running" after 16 min is reported as lost. `POST /api/runs` is unchanged (scripts, smoke test). Tested locally
-  (done after 104 s; unprepared area -> error 409; unknown job -> 404). Deploy backend first, then hosting.
+  (done after 104 s; unprepared area -> error 409; unknown job -> 404). Live check: Rudraprayag job done in 150 s, run 5b140c8bcd58, 1,605 people (unchanged).
 - Website deployed; the production build calls Cloud Run **directly** (`frontend/.env.production`), because Firebase
   Hosting's `/api` rewrite to Cloud Run cuts requests at 60 s and runs now take longer. CORS checked from web.app.
 - Deploy fixes: `backend/.gcloudignore` (the upload was 884 MB of local venv), Dockerfile installs `libexpat1` (rasterio
