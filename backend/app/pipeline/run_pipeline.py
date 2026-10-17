@@ -261,18 +261,68 @@ def observed_series(area: Area, day_iso: str, H: int) -> tuple[list[float], str,
             f"wettest {H} h from {k:02d}:00", warn, f"{day.isoformat()}T{k:02d}:00")
 
 
+def rain_records(area: Area) -> dict:
+    """Yearly wettest days near the area (CHIRPS 2001-2024) and the daily rain expected once in 2, 10, 25 and 100 years
+    (Gumbel fit), cached per area: the choices behind "Record" rain."""
+    if storage.exists(area.aoi_id, "chirps_annual.json"):
+        annual = storage.get_json(area.aoi_id, "chirps_annual.json")["annual"]
+    else:
+        from app.services import earth_engine as ees
+        lon, lat = area_centroid(area)
+        annual = ees.chirps_annual_max(lon, lat)
+        storage.put_json(area.aoi_id, "chirps_annual.json", {"annual": annual})
+    mx = [a["mm"] for a in annual]
+    top = max(annual, key=lambda a: a["mm"]) if annual else {"mm": 0.0, "date": None}
+    return {"years": [annual[0]["year"], annual[-1]["year"]] if annual else [], "annual": annual,
+            "record": {"mm": top["mm"], "date": top.get("date")},
+            "levels": [{"T": T, "mm": round(rainfall.return_level_mm(mx, T), 1)} for T in (2, 10, 25, 100)],
+            "source": "CHIRPS daily rainfall 2001-2024 (UCSB/CHG, Earth Engine), wettest 5 km cell near the area",
+            "method": "Gumbel (EV1) fit to the yearly maxima, method of moments"}
+
+
+def _reshape(series: list[float], p: ScenarioParams, H: int) -> tuple[list[float], str]:
+    """Respread a forecast's or measured day's rain when a shape is chosen (same total)."""
+    if p.rain_shape in ("constant", "triangular_front") and H > 1:
+        return rainfall.distribute_total(sum(series), H, p.rain_shape), (", spread evenly" if p.rain_shape == "constant" else ", reshaped as an early peak")
+    return series, ""
+
+
 def rain_series(p: ScenarioParams, area: Area) -> tuple[list[float], str, list[str], str | None]:
-    """S10.5: forecast / worst / best / historical_extreme / manual hourly series (mm/h), a human label, warnings and
-    the local clock time of hour 1 for forecast scenarios (None for hypothetical rain)."""
+    """The hourly rain a run uses: the source's series (`base_rain`) times the strength the person chose. Anything other
+    than x1 is labelled as not the actual forecast / record, so a brief never passes it off as real data."""
+    return with_strength(base_rain(p, area), p)
+
+
+def with_strength(base: tuple, p: ScenarioParams) -> tuple[list[float], str, list[str], str | None]:
+    series, label, warnings, start, what = base
+    k = float(p.rain_scale or 1.0)
+    if what and abs(k - 1) > 1e-6:
+        series = [min(300.0, v * k) for v in series]
+        label += f"; x{k:.2f} the {what} (not the actual {what})"
+    elif abs(k - 1) > 1e-6 and p.rain_source != RainSource.manual and not p.rain_series_override:
+        # the forecast or record failed and fell back to manual rain: say the strength was not applied
+        warnings = [*warnings, f"Strength x{k:.2f} not applied: the chosen rain was unavailable, so default rain was used"]
+    return series, label, warnings, start
+
+
+def base_rain(p: ScenarioParams, area: Area) -> tuple[list[float], str, list[str], str | None, str | None]:
+    """S10.5: forecast / worst / best / observed / historical_extreme / preset / manual hourly series (mm/h), a human
+    label, warnings, the local clock time of hour 1 for real rain (None for hypothetical rain), and what the strength
+    slider scales ("forecast", "measured rain", "record", "IMD category"; None for hand edits and your own intensity)."""
     from datetime import date as _date
     from app.services.weather import get_provider
     H, warnings = p.duration_h, []
     src = p.rain_source
-    if p.rain_series_override:  # replay of an observed storm (scripts/event_replay.py)
-        series = [max(0.0, float(v)) for v in p.rain_series_override][:24]
-        return series, p.preset_label or f"Observed rain, {len(series)} h", warnings, p.override_start_local
+    if p.rain_series_override:  # hand-edited hours, or a replay of an observed storm (scripts/event_replay.py)
+        # exactly the hours the panel shows (duration_h): extra edited hours beyond it used to run too, so a "4 h" run
+        # could simulate 9
+        series = [max(0.0, float(v)) for v in p.rain_series_override][:max(1, min(24, H))]
+        series += [0.0] * (H - len(series))
+        return series, p.preset_label or f"Observed rain, {len(series)} h", warnings, p.override_start_local, None
     if src == RainSource.observed and p.observed_date:
-        return observed_series(area, p.observed_date, H)
+        series, label, warn, start = observed_series(area, p.observed_date, H)
+        series, how = _reshape(series, p, H)
+        return series, label + how, warn, start, "measured rain"
     if src in (RainSource.forecast, RainSource.worst, RainSource.best):
         try:
             lon, lat = area_centroid(area)
@@ -289,27 +339,37 @@ def rain_series(p: ScenarioParams, area: Area) -> tuple[list[float], str, list[s
             if src != RainSource.forecast:
                 label += f", {src.value} case x{mult:g}"
             if sum(series) == 0:
-                warnings.append("The forecast shows no rain for this window; try historical extreme or manual rain")
-            return series, label, warnings, f"{day}T{start:02d}:00"
+                warnings.append("The forecast shows no rain for this window; try record or custom rain")
+            series, how = _reshape(series, p, H)
+            return series, label + how, warnings, f"{day}T{start:02d}:00", "forecast"
         except Exception as e:  # provider down or no key: fall back, never fail the run
             warnings.append(f"Forecast unavailable ({e.__class__.__name__}); used manual rain instead")
-    elif src == RainSource.historical_extreme:
+    shape = p.rain_shape if p.rain_shape in ("constant", "triangular_front") else None
+    if src == RainSource.historical_extreme:
         try:
-            mm = historical_max_mm(area)
+            T = p.return_period_y
+            if T:
+                rec = rain_records(area)
+                mm = next(lv["mm"] for lv in rec["levels"] if lv["T"] == T)
+                head = f"1-in-{T}-year rain"
+                what = f"a 1-in-{T}-year day here ({mm:.0f} mm, Gumbel fit to CHIRPS yearly maxima 2001-2024{', an estimate' if T > 50 else ''})"
+            else:
+                mm = historical_max_mm(area)
+                head, what = "Record rain", f"the wettest day on record nearby ({mm:.0f} mm, CHIRPS 2001-2024)"
             # NOTE(spec-drift): the spec spread the whole daily maximum over H hours (201 mm in 4 h = 50 mm/h);
             # the wettest H hours of that day follow the IMD reduction formula P_H = P_24 (H/24)^(1/3).
             depth = rainfall.daily_to_duration_mm(mm, H)
-            series = rainfall.distribute_total(depth, H, p.hyetograph)
-            return series, (f"Record rain: {depth:.0f} mm in {H} h, the wettest hours of the wettest day on record nearby "
-                            f"({mm:.0f} mm, CHIRPS 2001-2024, IMD reduction rule)"), warnings, None
+            series = rainfall.distribute_total(depth, H, shape or p.hyetograph)
+            return series, (f"{head}: {depth:.0f} mm in {H} h, the wettest hours of {what}, IMD reduction rule"), warnings, None, "record"
         except Exception as e:
             warnings.append(f"Historical extreme unavailable ({e.__class__.__name__}); used manual rain instead")
     if p.rain_preset:
-        series, label = rainfall.preset_series(p.rain_preset, H, p.hyetograph)
-        return series, label, warnings, None
-    series = rainfall.manual_series(p.manual_intensity_mm_h, H, p.hyetograph)
-    label = p.preset_label or f"Manual {p.manual_intensity_mm_h:g} mm/h for {H} h ({p.hyetograph.replace('_', ' ')})"
-    return series, label, warnings, None
+        series, label = rainfall.preset_series(p.rain_preset, H, p.hyetograph, shape)
+        return series, label, warnings, None, "IMD category"
+    series = rainfall.manual_series(p.manual_intensity_mm_h, H, shape or p.hyetograph)
+    how = (shape or p.hyetograph).replace("triangular_front", "early peak").replace("constant", "steady")
+    label = p.preset_label or f"Your own rain: {p.manual_intensity_mm_h:g} mm/h on average for {H} h ({how})"
+    return series, label, warnings, None, None
 
 
 def screening(area: Area, daily: list[dict], hourly: list[dict], duration_h: int) -> list[dict]:
@@ -342,7 +402,15 @@ def screening(area: Area, daily: list[dict], hourly: list[dict], duration_h: int
     return out
 
 
-def run_pipeline(p: ScenarioParams) -> RunResult:
+CORRIDOR_HAND_M = 3.0  # within this height of a reliable river channel, flow-model water is the river (moving water)
+
+
+class _SkipFlow(Exception):
+    pass
+
+
+def run_pipeline(p: ScenarioParams, flow_model: bool = True) -> RunResult:
+    """`flow_model=False` (quick previews): river and hollow water only, no 2D flow model, labelled as such."""
     t0 = time.time()
     timings: dict[str, float] = {}
     area = load_area(p.aoi_id)
@@ -368,6 +436,7 @@ def run_pipeline(p: ScenarioParams) -> RunResult:
     rid = np.where(area.reach_id_30 >= 0, area.reach_id_30, 0)
     reach_30 = np.where((area.reach_id_30 >= 0) & ok[rid], area.reach_id_30, -1)
     depth = flood.depth_stack(h, reach_30, area.hand, area.perm)
+    river_only = np.nan_to_num(depth)
     pond_fill, still = None, None
     drain = drain_mm_h(area.aoi_id, p.drain_capacity_mm_h)
     if area.pluvial is not None:
@@ -380,6 +449,40 @@ def run_pipeline(p: ScenarioParams) -> RunResult:
         if area.hollows_ok is not None and area.hollows_ok.any() and not pond.any():
             warnings.append(f"Rain stays within the storm-drain capacity ({drain:g} mm/h); no street waterlogging estimated")
     timings["flood"] = round(time.time() - t0, 2)
+    # the 2D flow model, hour by hour, in every run (17 Oct): the HAND and hollow models above only hold water in river
+    # corridors and closed hollows, so rain the drains cannot carry, spreading over flat streets, was counted nowhere
+    # (Kalyan, 2150 mm in 9 h: 0.026 km2 and 8 people vs 1.64 km2 and ~15,000 people in water in the flow model). The
+    # depth is now the deepest of the three in each cell; the same simulation is stored as the run's 3D water.
+    static_depth = depth.copy()  # river + hollows alone: kept for the 3D comparison view and the agreement check
+    sim, static_last = None, np.nan_to_num(depth[-1]).copy()
+    tf = time.time()
+    try:
+        from app.pipeline import flow as flowmod
+        if not flow_model:
+            raise _SkipFlow()
+        sim = flowmod.simulate(area, rain, p.model_dump(mode="json"))
+        fd = flowmod.hourly_depth(sim, len(rain))
+        # flooding = water at least 15 cm deep, or at least 5 cm on near-flat ground (< 5 deg). Thinner water on slopes
+        # is rain running off down the hillside (Rudraprayag: 1.1 km2 of 6-25 cm films on 14 deg slopes counted as
+        # flood at the plain 5 cm cut); flat cities are unchanged by this rule (Kalyan, Kurla, Amingaon within 1 %)
+        flat_ = np.nan_to_num(area.slope_deg, nan=90.0) < 5.0
+        fd = np.where((fd >= 0.15) | ((fd >= 0.05) & flat_[None]), fd, 0.0)
+        base = np.nan_to_num(depth)
+        # standing water for the evacuation thresholds: hollows deeper than the river, and flow-model water deeper than
+        # the river OFF the river corridors. In a reliable river's corridor (the river model wets it, or it is within 3 m
+        # of the channel) flow-model water is the river itself, moving, so it keeps the moving-water thresholds
+        rmax = river_only.max(axis=0)
+        corridor = (reach_30 >= 0) & ((rmax > 0) | (np.nan_to_num(area.hand, nan=99.0) < CORRIDOR_HAND_M))
+        held = still if still is not None else np.zeros(rmax.shape, bool)
+        still = held | ((fd.max(axis=0) > rmax) & ~corridor)
+        depth = np.where(area.perm[None], np.nan, np.maximum(base, fd)).astype(np.float32)
+    except _SkipFlow:
+        warnings.append("Quick preview: river and hollow water only; water spreading over streets (flow model) is not "
+                        "included. Run the scenario for the full model")
+    except Exception as e:  # never fail a run on it: the river and hollow maps stand alone
+        log.exception("flow model in run failed")
+        warnings.append(f"Flow model unavailable this run ({e.__class__.__name__}); water spreading over streets is not included")
+    timings["flow_model"] = round(time.time() - tf, 2)
 
     lon_c, lat_c = area_centroid(area)
     thr = rainfall.threshold_name(cfg.lsi_threshold, lon_c, lat_c)
@@ -434,8 +537,12 @@ def run_pipeline(p: ScenarioParams) -> RunResult:
         methods["urban"] = (f"Priority-Flood depressions (Barnes et al. 2014) filled to level by rain above the "
                             f"{drain:g} mm/h drain capacity, in hollows whose catchment is at least "
                             f"{int(prof.BUILT_HOLLOW * 100)}% built-up; screening, not hydrodynamics")
-    methods["compound"] = ("Depth = the deeper of river flooding (HAND, reliable non-tidal channels) and street "
-                           "waterlogging in each cell; physics chosen per cell from the data, no area mode")
+    methods["compound"] = ("Depth = the deepest of river flooding (HAND, reliable non-tidal channels), street "
+                           "waterlogging in hollows, and the 2D shallow-water flow model (rain, drains and river inflow "
+                           "moving over the ground) in each cell, worst so far at each hour; physics chosen per cell from "
+                           "the data, no area mode" if sim is not None else
+                           "Depth = the deeper of river flooding (HAND, reliable non-tidal channels) and street "
+                           "waterlogging in each cell (flow model unavailable this run)")
 
     t3 = time.time()
     # bridges close on river stage at the deck (reliable channels only) or on flooded approaches
@@ -459,6 +566,10 @@ def run_pipeline(p: ScenarioParams) -> RunResult:
     with ThreadPoolExecutor(8) as ex:
         jobs = [ex.submit(storage.put_run, run_id, f"png/{k}.png", v, "image/png") for k, v in pngs.items()]
         jobs.append(ex.submit(storage.put_run, run_id, "depth.npz", buf.getvalue()))
+        if sim is not None:  # river + hollows alone, for the 3D comparison and the flow agreement check
+            sbuf = io.BytesIO()
+            np.savez_compressed(sbuf, depth=static_depth.astype(np.float16))
+            jobs.append(ex.submit(storage.put_run, run_id, "static_depth.npz", sbuf.getvalue()))
         if lsi_dyn is not None:
             jobs.append(ex.submit(storage.put_run, run_id, "lsi.npz", lbuf.getvalue()))
         jobs.append(ex.submit(storage.put_run, run_id, "verification.json", json.dumps(queue).encode(), "application/json"))
@@ -472,6 +583,8 @@ def run_pipeline(p: ScenarioParams) -> RunResult:
                                       "application/geo+json"))
         for j in jobs:
             j.result()
+    if sim is not None:  # the run's 3D water, uploaded in the background (frames are MBs) so 3D does not simulate again
+        flowmod.store_later(run_id, area, sim, static_last)
     timings["render_upload"] = round(time.time() - t1, 2)
 
     worst = depth[-1]

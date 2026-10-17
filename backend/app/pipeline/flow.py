@@ -9,6 +9,7 @@ entering reach by the scenario's river level, read off its rating curve).
 import io
 import json
 import logging
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -26,6 +27,10 @@ COLL = "flows"
 log = logging.getLogger(__name__)
 _pool = ThreadPoolExecutor(1)  # one model at a time: it uses every core
 _jobs: dict[str, object] = {}
+# every simulation takes this lock, the 3D jobs on _pool and the ones inside runs (run_pipeline) alike: one model at a
+# time per instance, as before runs started using it
+_model_lock = threading.Lock()
+_pending_store: dict[str, tuple[str, object]] = {}  # area -> (run_id, future) of an upload not started yet
 _progress: dict[str, float] = {}
 
 MODEL = ("2D shallow-water equations, finite volume (HLL Riemann solver, hydrostatic reconstruction of Chen & Noelle "
@@ -163,35 +168,45 @@ def run_maxima(area, rain: list[float], params: dict, force_k: int | None = None
     return swe.decode_depth(swe.downscale_frame(peak, np.asarray(m["dem"], np.float64), m["k"])[0]).astype(np.float32)
 
 
-def simulate_run(run_id: str) -> dict:
-    """Run the flow model for a stored run and store frames (flow/frames.bin) and maxima (flow/summary.npz)."""
-    from app.pipeline.run_pipeline import load_area
+def simulate(area, rain: list[float], params: dict, progress=None) -> dict:
+    """Run the flow model for a scenario on an area (nothing stored): frames on the analysis grid and maxima."""
+    with _model_lock:
+        return _simulate(area, rain, params, progress)
+
+
+def _simulate(area, rain: list[float], params: dict, progress=None) -> dict:
     t0 = time.time()
-    run = fs.get_doc("runs", run_id)
-    if not run:
-        raise KeyError(run_id)
-    area = load_area(run["aoi_id"])
     grid = area.grid
-    rain = [float(x) for x in run["rain_series_mm_h"]]
-    last = [0.0]
-
-    def progress(f: float) -> None:
-        _progress[run_id] = f
-        if f - last[0] >= 0.1:
-            last[0] = f
-            _status(run_id, progress=round(f, 2))
-
-    m = model_setup(area, rain, run.get("params") or {})
-    k, dem, ground, sources, arf, urban = m["k"], m["dem"], m["ground"], m["sources"], m["arf"], m["urban"]
-    cfg = get_settings()
+    m = model_setup(area, rain, params)
+    k, dem = m["k"], m["dem"]
     frame_s = FRAME_S if len(rain) <= 6 else 2 * FRAME_S
-    res = swe.simulate(m["z"], grid.cell * k, m["C"], m["n"], m["rain"], m["drain"], sources, frame_s, progress, tail_h=TAIL_H)
+    res = swe.simulate(m["z"], grid.cell * k, m["C"], m["n"], m["rain"], m["drain"], m["sources"], frame_s, progress, tail_h=TAIL_H)
     z30 = np.asarray(dem, np.float64)
     frames = np.stack([swe.downscale_frame(f, z30, k) for f in res.frames])  # [F, 3, rows, cols] uint8
     if k > 1:  # maxima on the analysis grid: depth from the downscaled frames, the rest repeated from the model cells
         rep = lambda a: np.repeat(np.repeat(a, k, 0), k, 1)[:grid.height, :grid.width]  # noqa: E731
         res.hmax = swe.decode_depth(frames[:, 0].max(axis=0))
         res.vmax, res.hazard, res.t_arrival_s = rep(res.vmax), rep(res.hazard), rep(res.t_arrival_s)
+    return {"res": res, "frames": frames, "frame_s": frame_s, "m": m, "t0": t0}
+
+
+def hourly_depth(sim: dict, hours: int) -> np.ndarray:
+    """Deepest water so far at the end of each rain hour (m) [H, rows, cols], from the frames: the same "worst so far"
+    meaning as the hourly map, so the map, people and roads read the flow model hour by hour."""
+    f = sim["frames"][:, 0]
+    per_h = 3600 // sim["frame_s"]
+    out = np.zeros((hours,) + f.shape[1:], np.float32)
+    run = np.zeros(f.shape[1:], np.uint8)
+    for h in range(hours):
+        run = np.maximum(run, f[min(len(f) - 1, h * per_h + 1):min(len(f), (h + 1) * per_h + 1)].max(axis=0, initial=0))
+        out[h] = swe.decode_depth(run)
+    return out
+
+
+def store(run_id: str, area, sim: dict, static_depth: np.ndarray | None = None) -> dict:
+    """Save a simulation as the run's flow result (frames for 3D, maxima, summary in Firestore)."""
+    res, frames, frame_s, m, t0 = sim["res"], sim["frames"], sim["frame_s"], sim["m"], sim["t0"]
+    grid = area.grid
     storage.put_run_gz(run_id, "flow/frames.bin", frames.tobytes())
     buf = io.BytesIO()
     np.savez_compressed(buf, hmax=res.hmax.astype(np.float16), vmax=res.vmax.astype(np.float16),
@@ -206,8 +221,8 @@ def simulate_run(run_id: str) -> dict:
     hazard_km2 = {name: round(float(((hz >= lo) & (hz < hi) & wet).sum() * a_km2), 3)
                   for name, lo, hi in (("low", 0, 0.75), ("some", 0.75, 1.25), ("most", 1.25, 2.0), ("all", 2.0, np.inf))}
     cmp = {}
-    try:  # agreement with the HAND map at its worst hour (both are maxima over the storm)
-        d = np.load(io.BytesIO(storage.get_run(run_id, "depth.npz")))["depth"][-1].astype(np.float32)
+    try:  # agreement with the river + waterlogging (HAND) map at its worst hour (both are maxima over the storm)
+        d = static_depth if static_depth is not None else _static_depth(run_id)[-1]
         hand = (np.nan_to_num(d) >= swe.H_WET) & aoi & ~perm
         inter, union = int((wet & hand).sum()), int((wet | hand).sum())
         cmp = {"hand_km2": round(float(hand.sum() * a_km2), 3), "flow_km2": round(float(wet.sum() * a_km2), 3),
@@ -222,10 +237,10 @@ def simulate_run(run_id: str) -> dict:
     first = res.t_arrival_s[wet]
     meta = {
         "state": "ready", "progress": 1.0, "model": MODEL, "frame_s": frame_s, "frames": int(frames.shape[0]), "tail_h": TAIL_H,
-        "width": grid.width, "height": grid.height, "cell": grid.cell, "model_cell_m": grid.cell * k, "ground": ground,
+        "width": grid.width, "height": grid.height, "cell": grid.cell, "model_cell_m": grid.cell * m["k"], "ground": m["ground"],
         "h_code_m": swe.H_CODE, "u_code_ms": swe.U_CODE,
-        "h_show_m": swe.H_SHOW, "arf": round(arf, 3), "drain_mm_h": m["drain_mm_h"], "drain_where": "built-up cells (Dynamic World)",
-        "sources": [{k: s[k] for k in ("reach_id", "q", "outside_km2")} for s in sources],
+        "h_show_m": swe.H_SHOW, "arf": round(m["arf"], 3), "drain_mm_h": m["drain_mm_h"], "drain_where": "built-up cells (Dynamic World)",
+        "sources": [{k: s[k] for k in ("reach_id", "q", "outside_km2")} for s in m["sources"]],
         "max_depth_m": round(float(res.hmax[aoi & ~perm].max()), 2) if (aoi & ~perm).any() else 0.0,
         "max_speed_ms": round(float(res.vmax[wet].max()), 1) if wet.any() else 0.0,
         "flooded_km2": round(float(wet.sum() * a_km2), 3), "hazard_km2": hazard_km2,
@@ -236,6 +251,51 @@ def simulate_run(run_id: str) -> dict:
     _status(run_id, **meta)
     log.info("flow %s: %s", run_id, json.dumps(res.stats))
     return meta
+
+
+def store_later(run_id: str, area, sim: dict, static_depth: np.ndarray | None = None) -> None:
+    """`store` on the flow pool; until it finishes the run's flow status reads "running" (start() will not re-run it)."""
+    _status(run_id, state="running", progress=0.99, started_at=datetime.now(timezone.utc).isoformat())
+    # a newer run of the same area replaces an upload still waiting: its frames (tens of MB on a large area) are not
+    # held in memory behind a busy worker; that older run's 3D simulates again if it is ever opened
+    old = _pending_store.get(area.aoi_id)
+    if old and old[1].cancel():
+        _jobs.pop(old[0], None)
+        _status(old[0], state="none", progress=0.0)
+
+    def job() -> None:
+        if _pending_store.get(area.aoi_id, ("",))[0] == run_id:  # started: no longer replaceable
+            _pending_store.pop(area.aoi_id, None)
+        try:
+            store(run_id, area, sim, static_depth)
+        except Exception as e:  # noqa: BLE001
+            log.exception("flow %s: store failed", run_id)
+            _status(run_id, state="failed", error=f"{e.__class__.__name__}: {e}"[:300])
+        finally:
+            _jobs.pop(run_id, None)
+    fut = _pool.submit(job)
+    _jobs[run_id] = fut
+    _pending_store[area.aoi_id] = (run_id, fut)
+
+
+def simulate_run(run_id: str) -> dict:
+    """Run the flow model for a stored run and store frames (flow/frames.bin) and maxima (flow/summary.npz); runs made
+    since 17 Oct already did this inside the run."""
+    from app.pipeline.run_pipeline import load_area
+    run = fs.get_doc("runs", run_id)
+    if not run:
+        raise KeyError(run_id)
+    area = load_area(run["aoi_id"])
+    rain = [float(x) for x in run["rain_series_mm_h"]]
+    last = [0.0]
+
+    def progress(f: float) -> None:
+        _progress[run_id] = f
+        if f - last[0] >= 0.1:
+            last[0] = f
+            _status(run_id, progress=round(f, 2))
+
+    return store(run_id, area, simulate(area, rain, run.get("params") or {}, progress))
 
 
 def _job(run_id: str) -> None:
@@ -276,9 +336,16 @@ def status(run_id: str) -> dict:
     return doc
 
 
+def _static_depth(run_id: str) -> np.ndarray:
+    """River + hollow depth [H, rows, cols] without the flow model: static_depth.npz for runs since 17 Oct (their
+    depth.npz includes the flow model), else depth.npz."""
+    name = "static_depth.npz" if storage.run_exists(run_id, "static_depth.npz") else "depth.npz"
+    return np.load(io.BytesIO(storage.get_run(run_id, name)))["depth"].astype(np.float32)
+
+
 def hand_frames(run_id: str) -> bytes:
     """The HAND map's hourly depth in the same frame format (no velocity), for comparison in 3D."""
-    d = np.load(io.BytesIO(storage.get_run(run_id, "depth.npz")))["depth"].astype(np.float32)
+    d = _static_depth(run_id)
     d = np.nan_to_num(d, nan=0.0)
     z = np.zeros(d.shape[1:], np.float32)
     frames = [swe.encode_frame(z, z, z)] + [swe.encode_frame(d[t], z, z) for t in range(d.shape[0])]

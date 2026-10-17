@@ -113,6 +113,10 @@ def put_run(run_id: str, name: str, data: bytes, content_type: str = "applicatio
     blob.upload_from_string(data, content_type=content_type, timeout=UPLOAD_TIMEOUT_S, retry=UPLOAD_RETRY)
 
 
+def run_exists(run_id: str, name: str) -> bool:
+    return _bucket().blob(f"runs/{run_id}/{name}").exists()
+
+
 def get_run(run_id: str, name: str) -> bytes:
     return _bucket().blob(f"runs/{run_id}/{name}").download_as_bytes()
 

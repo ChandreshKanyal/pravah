@@ -37,9 +37,15 @@ const pkey = (o: object) => JSON.stringify(Object.entries(o).sort(([x], [y]) => 
 function scenLabel(r: RunResult): string {
   const total = Math.round(r.rain_series_mm_h.reduce((a, b) => a + b, 0)), H = r.rain_series_mm_h.length;
   const src = r.params.rain_source as string;
-  const name = r.title || r.params.preset_label || ({ forecast: "forecast rain", worst: "worst-case forecast", best: "best-case forecast",
+  const T = r.params.return_period_y;
+  // runs saved before 17 Oct froze the source's numbers into a hand-edited name ("50 mm/h ... for 4 h (edited by hand)"),
+  // which could contradict the hours run: keep only the source's name
+  const pl = r.params.preset_label?.endsWith("(edited by hand)") ? `${r.params.preset_label.split(":")[0].replace(/ \(edited by hand\)$/, "")}, edited by hand` : r.params.preset_label;
+  const name = r.title || pl || (src === "historical_extreme" && T ? `1-in-${T}-year rain` : null) || ({ forecast: "forecast rain", worst: "worst-case forecast", best: "best-case forecast",
     historical_extreme: "record rain", observed: "a past day's rain", manual: "custom rain" } as Record<string, string>)[src] || "scenario";
-  return `${name}, ${total} mm in ${H} h`;
+  const k = r.params.rain_scale ?? 1;
+  const scaled = Math.abs(k - 1) > 0.001 && (r.rain_label ?? "").includes("(not the actual");  // applied, not a fallback
+  return `${name}${scaled ? ` × ${k.toFixed(2)}` : ""}, ${total} mm in ${H} h`;
 }
 
 const DEFAULT_LAYERS: LayerKey[] = ["depth", "roads", "routes", "shelters", "bridges"];
@@ -231,7 +237,7 @@ export default function Workspace() {
       if (np.rain_series_override?.some((v) => v > 300)) Object.assign(np, { rain_series_override: null, override_start_local: null, preset_label: null });
       setP(np);
     }
-    setHour(r.rain_series_mm_h.length);
+    setHour(1);  // a run opens at its first hour, so the flood is seen building up (back from 3D restores the hour left)
     const [rd, rt] = await Promise.all([
       r.roads_geojson_url ? getGeoJson(r.roads_geojson_url).catch(() => null) : Promise.resolve(null),
       r.routes_geojson_url ? getGeoJson(r.routes_geojson_url).catch(() => null) : Promise.resolve(null),
@@ -284,9 +290,16 @@ export default function Workspace() {
   // commands from the assistant (confirmed by the user in the chat): run a scenario, switch layers, open the fixes list
   const command = (cmd: AppCommand) => {
     if (cmd.type === "run") {
-      const rainKeys = ["rain_source", "rain_preset", "manual_intensity_mm_h", "forecast_day_index", "worst_multiplier", "duration_h", "hyetograph", "observed_date"];
-      const reset = Object.keys(cmd.patch).some((k) => rainKeys.includes(k)) ? { rain_series_override: null, override_start_local: null, preset_label: null } : {};
-      const np = { ...p, ...reset, ...cmd.patch } as ScenarioParams;
+      // the same rules as the Scenario panel and the backend (models/scenario.apply_rain_change): a new source starts as
+      // its actual data, an explicit hyetograph is the shape, and hand edits for the old rain are dropped
+      const rainKeys = ["rain_source", "rain_preset", "manual_intensity_mm_h", "forecast_day_index", "worst_multiplier", "duration_h", "hyetograph", "observed_date", "return_period_y"];
+      const ks = Object.keys(cmd.patch);
+      const reset: Partial<ScenarioParams> = ks.some((k) => rainKeys.includes(k)) ? { rain_series_override: null, override_start_local: null, preset_label: null } : {};
+      if (ks.some((k) => ["rain_source", "rain_preset", "manual_intensity_mm_h", "observed_date"].includes(k)) && !ks.includes("rain_scale")) reset.rain_scale = 1;
+      if (ks.includes("rain_source") && !ks.includes("return_period_y")) reset.return_period_y = null;
+      if (ks.includes("hyetograph")) reset.rain_shape = (cmd.patch as Partial<ScenarioParams>).hyetograph;
+      else if (ks.some((k) => ["rain_source", "rain_preset"].includes(k)) && !ks.includes("rain_shape")) reset.rain_shape = null;
+      const np = { ...p, ...cmd.patch, ...reset } as ScenarioParams;
       setP(np);
       setTab("scenario");
       if (!running) doRun(false, np);
@@ -638,7 +651,7 @@ export default function Workspace() {
         {!ready && (
           <div className="prepare surface-float stack" role="status">
             <div className="row nowrap"><span className="spinner" /><div className="grow"><div className="title-l">Preparing {status?.name ?? "area"}</div>
-              <div className="body-s muted">About 2–3 minutes for a new area. You can leave this page open.</div></div></div>
+              <div className="body-s muted">About 3–5 minutes for a new area, up to 10 for a large dense city. You can leave this page open.</div></div></div>
             <Linear value={doneStages / STAGES.length} />
             <ul className="steps">
               {STAGES.map((g, i) => {

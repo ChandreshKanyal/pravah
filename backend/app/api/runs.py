@@ -20,10 +20,10 @@ log = logging.getLogger(__name__)
 
 @router.post("/api/runs", response_model=RunResult)
 def create_run(params: ScenarioParams, flow: bool = True, user: dict = Depends(require("analyst"))):
-    """`flow=false` (automatic map updates while settings change): skip the background 2D water model; the 3D view
-    starts it when opened."""
+    """`flow=false` (quick previews): no 2D flow model in the run (river and hollow water only, labelled), and none in
+    the background; the 3D view starts it when opened."""
     try:
-        result = run_pipeline(params)
+        result = run_pipeline(params, flow_model=flow)
     except AreaNotReady as e:
         raise HTTPException(409, str(e))
     if not flow:
