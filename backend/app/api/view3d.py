@@ -83,8 +83,21 @@ def _hillshade(dem: np.ndarray, cell: float) -> np.ndarray:
     return np.clip(hs, 0, 1)
 
 
-@lru_cache(maxsize=4)
+_tex_locks: dict[str, threading.Lock] = {}
+_tex_guard = threading.Lock()
+
+
 def _tex_base(aoi_id: str) -> np.ndarray:
+    """Cached per area; requests that arrive together (the warm-up thread and the page's base.jpg) wait for one
+    picture instead of each drawing it."""
+    with _tex_guard:
+        lock = _tex_locks.setdefault(aoi_id, threading.Lock())
+    with lock:
+        return _tex_base_cached(aoi_id)
+
+
+@lru_cache(maxsize=4)
+def _tex_base_cached(aoi_id: str) -> np.ndarray:
     """Per-area picture at 3x the grid: terrain tinted by elevation with a soft hillshade (the 3D view lights the relief
     itself), rivers (JRC surface water present >= 50 % of the time) and main streams (>= 10 km2 upstream) in blue.
     Context only, not model output."""
@@ -233,6 +246,7 @@ def building_risk(run_id: str, user: dict = Depends(require("viewer"))):
 
 MAJOR = {"motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary_link", "secondary", "secondary_link"}
 _ovl_mem: dict[str, bytes] = {}
+MAX_OVERLAYS = 16  # gzip JSON of a run's roads and routes, a few MB each: the recent ones only
 
 
 def _overlays(run_id: str) -> bytes:
@@ -292,6 +306,8 @@ def _overlays(run_id: str) -> bytes:
                             "c": b["first_closed_hour"], "r": b.get("reason")})
     data = gzip.compress(json.dumps({"roads": roads, "routes": routes, "shelters": shelters, "bridges": bridges},
                                     separators=(",", ":")).encode(), 6)
+    if len(_ovl_mem) >= MAX_OVERLAYS:
+        _ovl_mem.pop(next(iter(_ovl_mem)))
     _ovl_mem[run_id] = data
     return data
 

@@ -6,6 +6,7 @@ current `run_id`; `run_scenario` updates `run_id` and records `new_run_id` for t
 import difflib
 import json
 import logging
+from collections import OrderedDict
 
 from google.adk.tools import ToolContext
 
@@ -15,7 +16,8 @@ from app.services import firestore as fs
 from app.services import storage
 
 log = logging.getLogger(__name__)
-_runs: dict[str, dict] = {}
+_runs: "OrderedDict[str, dict]" = OrderedDict()  # recent run documents (each up to ~1 MB), the oldest dropped first
+MAX_RUNS = 32
 
 
 def load_run(run_id: str) -> dict:
@@ -23,12 +25,15 @@ def load_run(run_id: str) -> dict:
         doc = fs.get_doc("runs", run_id)
         if not doc:
             raise KeyError(f"unknown run {run_id}")
-        _runs[run_id] = doc
+        remember_run(doc)
+    _runs.move_to_end(run_id)
     return _runs[run_id]
 
 
 def remember_run(run: dict) -> None:
     _runs[run["run_id"]] = run
+    while len(_runs) > MAX_RUNS:  # it kept every run the assistant ever read, for the life of the instance
+        _runs.popitem(last=False)
 
 
 def run_summary(run: dict) -> dict:

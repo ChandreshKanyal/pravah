@@ -94,7 +94,11 @@ def verification_queue(aoi_id: str):
     if not run_id:
         return {"aoi_id": aoi_id, "run_id": None, "queue": []}
     import json
-    return {"aoi_id": aoi_id, "run_id": run_id, "queue": json.loads(storage.get_run(run_id, "verification.json"))}
+    try:
+        queue = json.loads(storage.get_run(run_id, "verification.json"))
+    except NotFound:  # a run without buildings (or deleted meanwhile): an empty queue, not a server error
+        queue = []
+    return {"aoi_id": aoi_id, "run_id": run_id, "queue": queue}
 
 
 @router.get("/api/aois")
