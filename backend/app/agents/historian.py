@@ -8,6 +8,7 @@ import uuid
 
 import requests
 from google.adk.agents import LlmAgent
+from google.adk.planners import BuiltInPlanner
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.adk.tools import google_search
@@ -26,8 +27,12 @@ At most 12 events, most significant first."""
 
 
 def _agent() -> LlmAgent:
-    return LlmAgent(name="historian", model=gemini.adk_model(get_settings().gemini_model_fast), tools=[google_search],
+    # the fast tier's thinking level, like the other fast agents (18 Oct, the fixes list's search on Kurla: 19 s with 16
+    # Google Search sources at LOW vs 39 s and no grounding sources at the model's default)
+    s = get_settings()
+    return LlmAgent(name="historian", model=gemini.adk_model(s.gemini_model_fast), tools=[google_search],
                     instruction="You find documented natural-hazard incidents with web sources. Answer only in JSON.",
+                    planner=BuiltInPlanner(thinking_config=types.ThinkingConfig(thinking_level=s.gemini_thinking_fast)),
                     generate_content_config=types.GenerateContentConfig(temperature=0.1))
 
 
