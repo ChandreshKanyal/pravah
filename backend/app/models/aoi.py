@@ -50,6 +50,9 @@ def build_aoi(req: AOIRequest) -> AOI:
     limit = MAX_KM_ALL
     if wkm > limit or hkm > limit:
         raise AOIValidationError(f"Area is {wkm:.1f} km x {hkm:.1f} km; the limit is {limit:.0f} km x {limit:.0f} km.")
+    from app.services.osm_local import covers
+    if not covers(req.bbox):
+        raise AOIValidationError("Pravah currently covers India only: draw the area inside India.")
     aoi_id = aoi_id_for(req.bbox)
     return AOI(
         aoi_id=aoi_id,

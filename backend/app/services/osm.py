@@ -18,7 +18,7 @@ log = logging.getLogger(__name__)
 # never depend on Overpass.
 OVERPASS_URLS = ["https://overpass-api.de/api", "https://overpass.private.coffee/api", "https://z.overpass-api.de/api"]
 ox.settings.overpass_rate_limit = False  # the status probe stalls under load; we back off ourselves
-ox.settings.http_user_agent = "Pravah/0.1 (flood and landslide decision-support research prototype; non-commercial)"
+ox.settings.http_user_agent = "Pravah/0.1 (flood decision-support research prototype; non-commercial)"
 # OSMnx uses this for both the HTTP read timeout and the Overpass server's [timeout:]; a dense 10 km box can need 2-4
 # min on a busy server, so it stays at 240 s (120 s made such queries fail on every server)
 ox.settings.requests_timeout = 240
@@ -217,8 +217,15 @@ def bundle(bbox: tuple[float, float, float, float]) -> dict:
     # separate requests use so the two paths cannot drift apart
     sel = ['way["highway"]'] + [_selector(k, v) for k, v in {**POI_TAGS, **WATERWAY_TAGS, **PLACE_TAGS}.items()]
     q = f"[out:json][timeout:{BUNDLE_TIMEOUT_S}];(" + "".join(f"{x}{bb};" for x in sel) + ");(._;>;);out;"
-    t0 = time.time()
-    els = _post(q)["elements"]
+    t0, els = time.time(), None
+    from app.services import osm_local
+    if osm_local.covers(bbox):  # India: our own copy of OpenStreetMap, no public server in the way
+        try:
+            els = osm_local.elements((w, s, e, n))
+        except Exception as ex:  # noqa: BLE001
+            log.warning("OSM tiles unavailable (%s); asking Overpass", ex)
+    if els is None:
+        els = _post(q)["elements"]
     log.info("OSM bundle: %d elements in %.0f s", len(els), time.time() - t0)
     out = {"drive": _network(els, "drive", poly, poly_buff), "walk": _network(els, "walk", poly, poly_buff)}
     poi_tags = {**POI_TAGS, **WATERWAY_TAGS}
