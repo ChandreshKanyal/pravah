@@ -30,6 +30,53 @@ Open items:
   when its map opens.
 - The Mac swaps heavily (~6 GB swap); slow first loads are mostly that.
 
+## 17 Oct, late afternoon: one model for every area (river / urban mode removed)
+Human request: "no mode selection ... uses all the best possible logic ... perhaps use some AI". Physics is chosen per
+cell and per channel from the data (`backend/app/engines/profile.py`); AI is used only for local facts with sources.
+- **Every area prepares every layer.** Waterlogging hollows and drain candidates (`_urban`) now run for all areas. New
+  areas use FABDEM bare-earth terrain (the surface model's building tops gave false slopes and false dams); areas
+  prepared as "river" before keep GLO-30 for consistency. There is one size limit, 10 km (was 15 km river / 4 km urban).
+  `scripts/backfill_waterlogging.py` added the layers to every existing area (done: Rudraprayag, Amingaon and 2 more).
+- **River flooding (HAND) only on reliable channels** (`profile.reliable_reaches`):
+  - not tidal (the whole channel within 1.5 m of sea level);
+  - not a one-cell stub (Mumbai's Mahim outlet hit the 30 m rating cap and flooded 14% of the box);
+  - not an urban drain (under 100 km2 and at least 50% built-up: an engineered nallah; its overflow is the
+    waterlogging below);
+  - a channel hitting the rating cap in a run is dropped for that run.
+- **Waterlogging** fills only hollows whose catchment is at least 30% built-up. **Depth** is the deeper of river and
+  waterlogging per cell. **Bridges** close on river stage (reliable channels) or flooded approaches.
+- **Evacuation rule unified**: people move where the FD2321 hazard rating reaches "danger for some" (0.75; 0.65 for
+  fragile buildings), with Manning speed from the channel slope for river water and v = 0 for standing water. This
+  gives 0.5 / 0.3 m for still water and about 0.26-0.3 m for river water (was "any wet building", 5 cm).
+  *Spec deviation.*
+- **Flow model**: storm-drain capacity applies under built-up cells only (a grid, not one number), ARF applies to every
+  area, and the ground keeps its hollows in flat towns (profile urban and flat) and is breached elsewhere.
+- **Forecast badges**: the higher of the river badge and the drain-capacity badge.
+- **Area profile** (built-up share, slopes, largest reliable river, tidal): one line above the scenario, e.g. "Dense
+  city · waterlogging · channels act as storm drains · tides not modelled". It sets 3D exaggeration and ground
+  conditioning and never switches a hazard off.
+- **Validation** (same storms, old -> new):
+  | Area | Flooded | People to move | Note |
+  |---|---|---|---|
+  | Mumbai, IMD very heavy | 1.55 -> 1.55 km2 | 7,531 -> 5,682 | Landslide closures 857 -> 75 |
+  | Amingaon, cloudburst | 0.013 -> 0.019 km2 | 12 -> 7 | |
+  | Rudraprayag, record | 0.227 -> 0.232 km2 | 1,159 -> 1,145 | |
+  An intermediate version with Mumbai's nallahs treated as rivers gave 67k people to move; that is why urban drains
+  are excluded from river physics.
+- **Storm-drain capacity with Gemini (AI for local facts only)**:
+  - `ScenarioParams.drain_capacity_mm_h` (each run records it); the area default is confirmed via `POST
+    /api/aoi/{id}/drain`. `POST /api/aoi/{id}/drain/lookup` runs two Gemini + Google Search lookups and offers a figure
+    only with a source (grounding, or a URL that opens and names the city), within 5-150 mm/h, and when the two lookups
+    agree within 20%. Nothing is saved until a person confirms.
+  - Results: Guwahati gave 7 and 30 mm/h on different calls (Assam SITA report vs news), which is why a person confirms.
+    Mumbai's "25 now, 50 planned" (BRIMSTOWAD) came back without a figure in the field, so the default stays. Rudraprayag
+    has no figure.
+  - UI: "Storm drains" section in the scenario panel (slider for one scenario, "Look up this city", "Use N mm/h").
+- Not changed: the flow emulator's drain feature (trained per area); Methods page rewritten ("One model for every
+  area"); the prepare dialog has no mode and says what is modelled.
+- To do after this: rerun "Fix before the rain" for river areas to add road hollows; re-run
+  `scripts/preprocess_demo_aoi.py all` if demo caches must match.
+
 ## 17 Oct, evening: water timeline, building colours, rain panel, state kept across views
 - **Runaway hour editor (root cause of "water fills the city and never changes")**: the hour-by-hour rain bars rescaled
   to 1.6x the dragged value on every render, so one drag climbed to 450-2,240 mm/h (Mumbai runs 9dcdc0009045,
@@ -61,6 +108,37 @@ Open items:
 - **Map state survives 3D / brief / drill**: settings, layers, tab, hour, map type, the shown run and the camera are saved
   per area in sessionStorage (`pravah:ws:{aoiId}`) and restored, without re-fitting the view. The shown run is written to
   `?run=`, so 3D opens the same run.
+- **Assistant scope**: Ask Pravah now answers only about Pravah itself, floods, landslides, rain and weather, and disaster
+  response. Anything else (coding, health, jokes, "ignore your instructions") gets a one-sentence redirect, and no tools
+  are called. Tested: a Rust for-loop question, hay fever, and a jailbreak-style request are all refused; Guwahati flood
+  areas and "which bridge closes first" are still answered. Replies no longer show raw `###` or backticks.
+- **Roads closing with no water (landslide false positives)**: in Amingaon (Guwahati, run 93ce3ee37bf7, cloudburst),
+  459 of 479 closed road pieces were "landslide". The LSI classes are relative to the training region, and the only slope
+  rule was "under 5 deg is flat", so 19% of cells reached class 5 under the cloudburst (median slope 13 deg, some 6 deg):
+  embankments and gentle rises. `landslide.actionable` now also caps cells under 15 deg at class 3 (no closures,
+  evacuations or shelter exclusions); the map still shows susceptibility.
+  - Amingaon, same settings (rerun c04836132325): landslide closures 459 -> 55, people to move 122 -> 12, no shelter
+    place 57 -> 0.
+  - Rudraprayag, record rain (e6c49d1a3cfc vs 630921409644): people to move 1,281 -> 1,159.
+  - *Spec deviation*: the 15 deg action floor is new (literature lower bound for rain-triggered shallow landslides).
+- **3D overlays**:
+  - Water is clipped to the simulated area, as on the 2D map. The hourly HAND frames had drawn lakes on the far bank of
+    the Brahmaputra, outside the box.
+  - Dry buildings are grey (196,199,204) instead of near-white.
+  - The model switch shows the model actually drawn, with the flow model's progress, and cannot pick the flow model
+    before it is ready.
+- Note: these verification runs became their areas' default runs: Amingaon c04836132325, Rudraprayag e6c49d1a3cfc
+  (no flow model). A backend restart leaves a queued flow model "stale" for 5 min; the 3D page then restarts it.
+- **3D scenario layers (as in 2D)**: new endpoint `GET /api/runs/{id}/3d/overlays.json` returns the run's roads (closure
+  hour, reason, blocked pieces), exit routes, shelters in use and closing bridges, converted to the 3D frame (UTM metres
+  from the grid centre, gzip, cached per run; Amingaon 87 KB). `three/overlays.ts` drapes them on the ground and follows
+  the model hour:
+  - Roads are light grey, and turn orange (closes later) or red (closed now) on the blocked pieces only.
+  - Exit routes are teal with a dark casing, width by people; once a road on a route closes it turns pale and dashed.
+  - Shelter zones are a blue ring (80 m) with a pin and a label ("S9 · 252 people").
+  - Closing bridges use the 2D marker icons.
+  Chips toggle each layer, and the legend lists them. The lines are opaque, and the casing and base roads write no depth
+  (transparent wide lines and equal-depth layers looked beaded).
 - Verification run fdbf999057a3 (Mumbai, IMD very heavy, 7 h, early peak; peak 71 mm/h) is now Mumbai's default run,
   replacing the broken 2,237 mm/h one.
 

@@ -62,6 +62,9 @@ cd frontend && npm run build && cd ..
 | GET | `/api/aois`, `/api/geocode?q=` | recent areas; search box (Maps Geocoding, display only) |
 | GET | `/api/aoi/{id}/3d/meta`, `dem.bin`, `base.jpg`, `imagery.jpg`, `buildings.json` | 3D view: the flow model's ground (FABDEM, conditioned), hillshade, Sentinel-2 true colour, building footprints |
 | GET | `/api/runs/{id}/3d/risk.bin` | per-building risk codes for the 3D view |
+| POST | `/api/aoi/{id}/drain/lookup` | Gemini + Google Search: the city's storm-drain design capacity with sources (nothing saved) |
+| POST | `/api/aoi/{id}/drain` | confirm the area's storm-drain capacity (mm/h, or null for the 25 mm/h default) |
+| GET | `/api/runs/{id}/3d/overlays.json` | roads (closure hour, blocked pieces), exit routes, shelters in use and closing bridges in the 3D frame |
 | GET / POST | `/api/runs/{id}/flow` | 2D water-flow model for a run: status/summary; POST starts it (runs automatically after each scenario) |
 | GET | `/api/runs/{id}/flow/frames.bin?model=flow\|hand` | water frames for the 3D animation (depth + velocity every 5 min, or the HAND map hourly), gzip |
 | GET | `/api/runs/{id}/advisory/versions[/{n}]` | immutable brief versions with review state |
@@ -86,7 +89,7 @@ cd frontend && npm run build && cd ..
 ## Code map
 
 `backend/app/engines/` pure math (grid, hydrology, rainfall, flood, ahp, fsi, fr, landslide, buildings, population,
-exposure, roads, shelters, routing, crowding, pluvial, drains, render, swe = 2D shallow-water flow model compiled with numba)
+exposure, roads, shelters, routing, crowding, pluvial, drains, render, profile = which physics applies where, per cell, swe = 2D shallow-water flow model compiled with numba)
 · `pipeline/flow.py` (background flow job per run) · `services/terrain.py` (FABDEM bare earth, breached for flow)
 · `services/` I/O (Earth Engine, OSM, GCS, Firestore, Weather, Gemini, history) · `agents/` Gemini via ADK (planner, analyst + tools, historian) and the advisor ·
 `pipeline/prepare_area.py` (static, per AOI) · `pipeline/run_pipeline.py` + `evac.py` (per scenario) · `pipeline/facts.py`
@@ -106,7 +109,7 @@ Sign-in: `src/auth.ts`; offline field photos: `src/offlineQueue.ts`.
 ## Data and licences
 
 © OpenStreetMap contributors (ODbL) · Google Open Buildings (CC BY 4.0) · MERIT Hydro and Global Flood Database (CC BY-NC 4.0,
-non-commercial) · FABDEM (CC BY-NC-SA 4.0, urban mode) · WorldPop · CHIRPS · NASA GPM IMERG · Dynamic World · Copernicus DEM
+non-commercial) · FABDEM (CC BY-NC-SA 4.0, bare-earth terrain) · WorldPop · CHIRPS · NASA GPM IMERG · Dynamic World · Copernicus DEM
 GLO-30 · JRC Global Surface Water · OpenLandMap · NASA Global Landslide Catalog · GRIP4 roads · Forecasts: Google Maps Platform
 Weather API. The Methods page lists each licence. Google Maps content is used for display,
 forecast and geocoding only, never as analysis input.
