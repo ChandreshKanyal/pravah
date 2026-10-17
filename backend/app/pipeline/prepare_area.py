@@ -86,6 +86,8 @@ def _osm(aoi_id: str, grid: GridSpec, warnings: list[str]) -> None:
         b = osm.bundle(bb)
         for k in missing:
             (storage.save_graph if k in ("drive", "walk") else storage.save_gdf)(aoi_id, files[k], b[k])
+        from app.services import places
+        storage.put_json(aoi_id, "places.json", places.from_gdf(b["places"]))  # runs never fetch them
         return
     except Exception as e:
         log.warning("OSM bundle failed (%s); trying the separate requests", e)

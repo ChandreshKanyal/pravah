@@ -21,6 +21,14 @@ All work is **committed** on `main` (no git remote is configured, so nothing is 
   no longer pays ~20 s of compiling. The cache is not baked into the image (Cloud Build's CPU may differ from Cloud Run's).
   Why steps are ~1 s: the explicit solver's stability limit (CFL 0.45) set by the fastest water (the river), not detail
   wanted; future options: local-inertial solver, river left to HAND, local time stepping (not for the deadline).
+- **Runs never call Overpass (00:45 IST 18 Oct, committed, needs a backend deploy):** a new area's first run (Japan
+  Trial, a4e2ac685379) took 416 s, of which the model ~18 s: `places.area_places` fetched place names from Overpass
+  inside the run and connections hung. Now: place names come with the roads in the prep bundle (`places.json`); a run
+  or brief without the cache gets [] and a background fetch (Overpass failures are no longer cached as "no places");
+  `_post` gives up a connection after 15 s (was minutes); OSM buildings (areas outside Open Buildings) go through
+  `_post` starting on the second mirror, since prep runs them alongside the roads bundle (Japan buildings 134 s -> 35 s).
+  Local check: run without places cache 27 s. Prep of Japan Trial was 181 s (buildings 134, osm 55, lsi 29, network 9);
+  a trivial Overpass query waits 29-48 s on the public server. BigQuery's OSM copy is stale (Nov 2022), not usable.
 - **Live timings on 00006 (8 CPU), each area's default scenario through the job flow, wall clock:** Rudraprayag 23 s
   (was 150 s; flow 14 s), Amingaon 26 s (flow 21), Mumbai 45 s (flow 31), Kalyan 67 s (flow 59, 9 h storm). People and
   flooded area identical to the defaults (1,608 / 7 / 17,195 / 2,525). Defaults left unchanged.

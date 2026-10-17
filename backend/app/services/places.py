@@ -9,24 +9,15 @@ from app.services import osm, storage
 
 log = logging.getLogger(__name__)
 
-PLACE_KINDS = ["city", "town", "village", "suburb", "hamlet", "neighbourhood", "quarter", "locality", "isolated_dwelling"]
+PLACE_KINDS = osm.PLACE_TAGS["place"]
 # a bigger place wins over a slightly nearer hamlet: effective distance = distance / weight
 WEIGHT = {"city": 3.0, "town": 2.5, "suburb": 1.8, "village": 1.6, "quarter": 1.3, "neighbourhood": 1.2, "hamlet": 1.0,
           "locality": 0.8, "isolated_dwelling": 0.6}
 DIRS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
 
 
-def area_places(aoi_id: str, grid=None) -> list[dict]:
-    """[{name, name_hi, kind, lon, lat}] for the AOI grid extent, cached in GCS. Empty list if OSM is unreachable."""
-    if storage.exists(aoi_id, "places.json"):
-        return storage.get_json(aoi_id, "places.json")
-    import osmnx as ox
-    grid = grid or storage.load_grid(aoi_id)
-    try:
-        gdf = osm._retry(ox.features_from_bbox, lonlat_bounds(grid), {"place": PLACE_KINDS})
-    except Exception as e:  # InsufficientResponseError (no places) or Overpass down
-        log.info("places unavailable for %s: %s", aoi_id, e)
-        gdf = None
+def from_gdf(gdf) -> list[dict]:
+    """[{name, name_hi, kind, lon, lat}] from OSM place features (named ones only)."""
     out = []
     if gdf is not None and len(gdf):
         for _, r in gdf.iterrows():
@@ -37,8 +28,46 @@ def area_places(aoi_id: str, grid=None) -> list[dict]:
             hi = r.get("name:hi")
             out.append({"name": name.strip(), "name_hi": hi.strip() if isinstance(hi, str) else "",
                         "kind": str(r.get("place") or "locality"), "lon": round(c.x, 6), "lat": round(c.y, 6)})
+    return out
+
+
+def _fetch(aoi_id: str, grid=None) -> list[dict]:
+    import osmnx as ox
+    grid = grid or storage.load_grid(aoi_id)
+    try:
+        gdf = osm._retry(ox.features_from_bbox, lonlat_bounds(grid), osm.PLACE_TAGS)
+    except ox._errors.InsufficientResponseError:  # OSM has no places here: remember that
+        gdf = None
+    except Exception as e:  # Overpass down: no cache, so the next run tries again
+        log.info("places unavailable for %s: %s", aoi_id, e)
+        return []
+    out = from_gdf(gdf)
     storage.put_json(aoi_id, "places.json", out)
     return out
+
+
+_fetching: set[str] = set()
+
+
+def area_places(aoi_id: str, grid=None, wait: bool = False) -> list[dict]:
+    """[{name, name_hi, kind, lon, lat}] for the AOI grid extent, cached in GCS (written at prep time with the roads).
+    Without a cache (areas prepared before 18 Oct) nothing waits on Overpass: [] now and a background fetch for next
+    time (a first run once waited 6.5 min on a struggling server). `wait=True` fetches in place."""
+    if storage.exists(aoi_id, "places.json"):
+        return storage.get_json(aoi_id, "places.json")
+    if wait:
+        return _fetch(aoi_id, grid)
+    if aoi_id not in _fetching:
+        import threading
+        _fetching.add(aoi_id)
+
+        def bg() -> None:
+            try:
+                _fetch(aoi_id, grid)
+            finally:
+                _fetching.discard(aoi_id)
+        threading.Thread(target=bg, daemon=True).start()
+    return []
 
 
 def _dist_m(lon1, lat1, lon2, lat2) -> float:

@@ -24,6 +24,8 @@ ox.settings.http_user_agent = "Pravah/0.1 (flood and landslide decision-support 
 ox.settings.requests_timeout = 240
 BUNDLE_TIMEOUT_S = 300  # the single combined request (osm.bundle) is the largest query
 
+# settlement names for labels (services/places.py): fetched with the roads at prep time so a run never calls Overpass
+PLACE_TAGS = {"place": ["city", "town", "village", "suburb", "hamlet", "neighbourhood", "quarter", "locality", "isolated_dwelling"]}
 POI_TAGS = {
     "amenity": True, "shop": True, "tourism": ["hotel", "guest_house", "hostel"],
     "public_transport": ["station"], "railway": ["station"],
@@ -129,13 +131,17 @@ class QueryTooBig(RuntimeError):
     """Overpass ran the query and gave up (timeout or memory): the same query fails on every mirror."""
 
 
-def _post(query: str, attempts: int = 4) -> dict:
-    """POST to the Overpass mirrors in turn, with back-off (OSMnx's own request retries a busy server forever). A query
-    the server ran out of time or memory on is not retried: the caller falls back to smaller requests."""
+CONNECT_TIMEOUT_S = 15  # a busy server sometimes leaves a second connection hanging for minutes (18 Oct: ~2 min, twice)
+
+
+def _post(query: str, attempts: int = 4, start: int = 0) -> dict:
+    """POST to the Overpass mirrors in turn from `start`, with back-off (OSMnx's own request retries a busy server
+    forever). A query the server ran out of time or memory on is not retried: the caller falls back to smaller requests.
+    A connection not accepted within CONNECT_TIMEOUT_S moves on to the next mirror."""
     for i in range(attempts):
-        url = OVERPASS_URLS[i % len(OVERPASS_URLS)]
+        url = OVERPASS_URLS[(start + i) % len(OVERPASS_URLS)]
         try:
-            r = requests.post(url + "/interpreter", data={"data": query}, timeout=BUNDLE_TIMEOUT_S + 30,
+            r = requests.post(url + "/interpreter", data={"data": query}, timeout=(CONNECT_TIMEOUT_S, BUNDLE_TIMEOUT_S + 30),
                               headers={"User-Agent": ox.settings.http_user_agent, "Accept-Encoding": "gzip"})
             if r.status_code == 200 and r.headers.get("content-type", "").startswith("application/json"):
                 j = r.json()
@@ -209,7 +215,7 @@ def bundle(bbox: tuple[float, float, float, float]) -> dict:
     bb = f"({s:.6f},{w:.6f},{n:.6f},{e:.6f})"
     # all highways (walk and drive are cut locally) plus the place and waterway tags, generated from the same dicts the
     # separate requests use so the two paths cannot drift apart
-    sel = ['way["highway"]'] + [_selector(k, v) for k, v in {**POI_TAGS, **WATERWAY_TAGS}.items()]
+    sel = ['way["highway"]'] + [_selector(k, v) for k, v in {**POI_TAGS, **WATERWAY_TAGS, **PLACE_TAGS}.items()]
     q = f"[out:json][timeout:{BUNDLE_TIMEOUT_S}];(" + "".join(f"{x}{bb};" for x in sel) + ");(._;>;);out;"
     t0 = time.time()
     els = _post(q)["elements"]
@@ -225,6 +231,10 @@ def bundle(bbox: tuple[float, float, float, float]) -> dict:
     except ox._errors.InsufficientResponseError:
         empty = gpd.GeoDataFrame(columns=["osmid", "geometry"], geometry="geometry", crs="EPSG:4326")
         out["pois"], out["waterways"] = empty, empty.copy()
+    try:
+        out["places"] = ox.features._create_gdf([{"elements": _subset(els, PLACE_TAGS)}], poly, PLACE_TAGS)
+    except ox._errors.InsufficientResponseError:
+        out["places"] = None
     return out
 
 
@@ -232,8 +242,12 @@ def buildings(bbox: tuple[float, float, float, float], crs: str) -> gpd.GeoDataF
     """OpenStreetMap building footprints, the fallback where Google Open Buildings has no coverage (e.g. Japan, Europe,
     North America). Height from the `height` tag, else `building:levels` x 3 m; NaN when neither is mapped."""
     import numpy as np
-    try:
-        gdf = _retry(ox.features_from_bbox, bbox, {"building": True})
+    poly = box(*bbox)
+    w, s_, e, n = bbox
+    q = (f"[out:json][timeout:{BUNDLE_TIMEOUT_S}];(way[\"building\"]({s_:.6f},{w:.6f},{n:.6f},{e:.6f});"
+         f"relation[\"building\"]({s_:.6f},{w:.6f},{n:.6f},{e:.6f}););(._;>;);out;")
+    try:  # starts on the second mirror: the roads bundle is on the first at the same moment (prepare_area runs both)
+        gdf = ox.features._create_gdf([{"elements": _post(q, start=1)["elements"]}], poly, {"building": True})
     except ox._errors.InsufficientResponseError:
         gdf = gpd.GeoDataFrame(columns=["geometry"], geometry="geometry", crs="EPSG:4326")
     gdf = gdf[gdf.geometry.geom_type.isin(["Polygon", "MultiPolygon"])].reset_index(drop=True)

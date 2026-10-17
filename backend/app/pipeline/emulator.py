@@ -253,7 +253,7 @@ def imd_category(total_mm: float, hours: int) -> str:
 def triggers(aoi_id: str, sweep: dict[int, list[tuple[float, np.ndarray]]], area) -> dict:
     """Per-settlement rain thresholds from the physics sweep {duration: [(storm total mm, peak depth grid), ...]}."""
     from app.services.places import area_places
-    places = [p for p in area_places(aoi_id, area.grid) if p.get("name")]
+    places = [p for p in area_places(aoi_id, area.grid, wait=True) if p.get("name")]
     ppl = _people_grid(area)
     rr, cc = np.nonzero(ppl > 0)
     if not places or not len(rr):
