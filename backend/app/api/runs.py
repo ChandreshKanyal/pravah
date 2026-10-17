@@ -19,11 +19,59 @@ log = logging.getLogger(__name__)
 
 
 @router.post("/api/runs", response_model=RunResult)
-def create_run(params: ScenarioParams, user: dict = Depends(require("analyst"))):
+def create_run(params: ScenarioParams, flow: bool = True, user: dict = Depends(require("analyst"))):
+    """`flow=false` (automatic map updates while settings change): skip the background 2D water model; the 3D view
+    starts it when opened."""
     try:
-        return run_pipeline(params)
+        result = run_pipeline(params)
     except AreaNotReady as e:
         raise HTTPException(409, str(e))
+    if not flow:
+        return result
+    try:  # the 2D water-flow model runs in the background for the 3D view
+        from app.pipeline import flow
+        flow.start(result.run_id)
+    except Exception:  # noqa: BLE001
+        log.exception("flow model not started for %s", result.run_id)
+    return result
+
+
+@router.delete("/api/runs/{run_id}")
+def delete_run(run_id: str, user: dict = Depends(require("analyst"))):
+    """Permanently delete a run (files, brief, 3D model, alert, drills). Archive is the reversible option."""
+    if not fs.get_doc("runs", run_id):
+        raise HTTPException(404, "Unknown run")
+    from app.pipeline import cleanup
+    res = cleanup.delete_run(run_id)
+    audit("delete_run", user, run_id=run_id, aoi_id=res.get("aoi_id"))
+    return res
+
+
+class RunMeta(BaseModel):
+    title: str | None = None
+    notes: str | None = None
+    starred: bool | None = None
+    archived: bool | None = None
+    make_current: bool | None = None  # this run becomes the one the Brief, Map and 3D open by default
+
+
+@router.patch("/api/runs/{run_id}/meta")
+def run_meta(run_id: str, body: RunMeta, user: dict = Depends(require("analyst"))):
+    """Name, annotate, star or archive a saved run (an experiment); results are never changed."""
+    doc = fs.get_doc("runs", run_id)
+    if not doc:
+        raise HTTPException(404, "Unknown run")
+    fields = {k: v for k, v in body.model_dump(exclude={"make_current"}).items() if v is not None}
+    if "title" in fields:
+        fields["title"] = fields["title"].strip()[:120] or None
+    if "notes" in fields:
+        fields["notes"] = fields["notes"][:4000]
+    if fields:
+        fs.merge_doc("runs", run_id, fields)
+    if body.make_current:
+        fs.update_aoi(doc["aoi_id"], {"latest_run_id": run_id})
+    audit("run_meta", user, aoi_id=doc["aoi_id"], run_id=run_id, fields=sorted(fields) + (["make_current"] if body.make_current else []))
+    return {"run_id": run_id, **fields}
 
 
 @router.get("/api/runs/{run_id}", response_model=RunResult)
@@ -315,3 +363,40 @@ def share_text(run_id: str, lang: str = "en", horizon: str = "immediate"):
             L.append(f"- {name}: {s['quantity']:,} {s['unit']} ({'अधिकतम' if hi else 'plan up to'} {s['quantity_high']:,})")
     L += ["", cur["disclaimer"]] + ([(tr or {}).get("disclaimer", "")] if hi and tr else [])
     return Response("\n".join(L), media_type="text/plain; charset=utf-8")
+
+
+@router.get("/api/runs/{run_id}/alert")
+def get_alert(run_id: str):
+    """The latest public-alert draft (CAP 1.2 fields, English and Hindi) for a run, if one was drafted."""
+    a = fs.get_doc("alerts", run_id)
+    if not a:
+        raise HTTPException(404, "No alert drafted yet")
+    return a
+
+
+@router.post("/api/runs/{run_id}/alert")
+async def draft_alert(run_id: str, user: dict = Depends(require("analyst"))):
+    """Draft a public alert (agents/alerts.py): Gemini text checked against the facts, flooded-area polygons, CAP levels."""
+    from app.agents import alerts
+    from app.pipeline.run_pipeline import load_area
+    run = fs.get_doc("runs", run_id)
+    if not run:
+        raise HTTPException(404, "Unknown run")
+    aoi = fs.get_aoi(run["aoi_id"]) or {}
+    a = await run_in_threadpool(alerts.draft, run, load_area(run["aoi_id"]), aoi.get("name") or "the area")
+    fs.set_doc("alerts", run_id, a)
+    audit("alert_draft", user, run_id, by_model=a["by"])
+    return a
+
+
+@router.get("/api/runs/{run_id}/alert/cap.xml")
+def alert_cap(run_id: str):
+    """CAP 1.2 XML (status Draft) for import into SACHET or any CAP-compliant system after review."""
+    from app.agents import alerts
+    a = fs.get_doc("alerts", run_id)
+    if not a:
+        raise HTTPException(404, "No alert drafted yet")
+    run = fs.get_doc("runs", run_id) or {}
+    name = (fs.get_aoi(run.get("aoi_id", "")) or {}).get("name") or "the area"
+    return Response(alerts.cap_xml(a, name), media_type="application/xml",
+                    headers={"Content-Disposition": f'attachment; filename="pravah-alert-{run_id}.cap.xml"'})

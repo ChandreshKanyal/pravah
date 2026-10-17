@@ -24,8 +24,14 @@ def create_aoi(req: AOIRequest, background: BackgroundTasks, user: dict = Depend
     except AOIValidationError as e:
         raise HTTPException(422, str(e))
     existing = fs.get_aoi(aoi.aoi_id)
-    if existing and existing.get("state") in ("preparing", "ready"):
+    from app.pipeline.prepare_area import ACTIVE
+    interrupted = existing and existing.get("state") in ("preparing", "queued") and aoi.aoi_id not in ACTIVE
+    if existing and existing.get("state") in ("preparing", "ready") and not interrupted:
         return {"aoi": aoi, "state": existing["state"], "status": existing.get("status", {})}
+    if interrupted:  # e.g. the server restarted mid-way: resume (finished steps are skipped)
+        fs.update_aoi(aoi.aoi_id, {"state": "queued"})
+        background.add_task(prepare_area, aoi)
+        return {"aoi": aoi, "state": "queued", "status": existing.get("status", {})}
     fs.set_aoi(aoi.aoi_id, {**aoi.model_dump(mode="json"), "state": "queued", "status": {}})
     background.add_task(prepare_area, aoi)
     return {"aoi": aoi, "state": "queued", "status": {}}
@@ -121,32 +127,91 @@ def archive_aoi(aoi_id: str, body: Archive, user: dict = Depends(require("analys
     return {"aoi_id": aoi_id, "archived": body.archived}
 
 
+def _runs(aoi_id: str) -> list[dict]:
+    return [fs.decode(d.to_dict()) for d in fs.get_db().collection("runs").where("aoi_id", "==", aoi_id).limit(300).stream()]
+
+
+_META = ("run_id", "created_at", "title", "notes", "starred", "archived")
+_summary: dict[str, dict] = {}  # run_id -> summary of the immutable result fields (runs never change after they finish)
+
+
+def _summarise(r: dict) -> dict:
+    keep = ("rain_label", "people_to_evacuate", "capacity_gap_people", "demand_range", "gap_range", "evac_window_h", "start_local")
+    row = {k: r.get(k) for k in keep}
+    b = r.get("bridges") or []
+    row["bridges_closing"] = sum(1 for x in b if x.get("first_closed_hour"))
+    row["bridges_total"] = len(b)
+    row["flooded_km2"] = (r.get("flooded_area_km2_by_hour") or [0])[-1]
+    e = r.get("exposure") or {}
+    row["flood_peak"] = max(e.get("exposed_pop_by_hour") or [0])
+    row["shelters_used"] = sum(1 for s in r.get("shelters") or [] if s.get("assigned", 0) > 0)
+    p = r.get("params") or {}
+    ch = {k: p.get(k) for k in ("disabled_shelter_ids", "visitors", "travel_mode", "evac_start_hour") if p.get(k)}
+    ch["extra_shelters"] = len(p.get("extra_shelters") or []) or None
+    ch["blocked_polygons"] = len(p.get("blocked_polygons") or []) or None
+    row["changes"] = {k: v for k, v in ch.items() if v}
+    row["duration_h"], row["rain_total_mm"] = int(p.get("duration_h") or 0), round(sum(r.get("rain_series_mm_h") or []), 1)
+    row["rain_source"], row["rain_preset"], row["river_offset_m"] = p.get("rain_source"), p.get("rain_preset"), p.get("river_offset_m")
+    return row
+
+
+def run_summaries(aoi_id: str) -> list[dict]:
+    """Summary rows of an area's runs. Lists only the small editable fields from Firestore (field projection) and
+    reads a full run document once, the first time it is seen: listing used to download every run in full (5-13 s)."""
+    docs = fs.get_db().collection("runs").where("aoi_id", "==", aoi_id).select(list(_META)).limit(300).stream()
+    metas = [d.to_dict() | {"run_id": d.to_dict().get("run_id") or d.id} for d in docs]
+    for m in metas:
+        if m["run_id"] not in _summary:
+            full = fs.get_doc("runs", m["run_id"]) or {}
+            _summary[m["run_id"]] = _summarise(full)
+    return [{**_summary[m["run_id"]], **{k: m.get(k) for k in _META}} for m in metas]
+
+
+@router.delete("/api/aoi/{aoi_id}")
+def delete_aoi(aoi_id: str, user: dict = Depends(require("analyst"))):
+    """Permanently delete an area with all its runs and prepared data."""
+    if not fs.get_aoi(aoi_id):
+        raise HTTPException(404, "Unknown AOI")
+    from app.api.runs import audit
+    from app.pipeline import cleanup
+    from app.pipeline.prepare_area import ACTIVE
+    if aoi_id in ACTIVE:
+        raise HTTPException(409, "This area is still being prepared; delete it when preparation finishes")
+    res = cleanup.delete_area(aoi_id)
+    audit("delete_area", user, aoi_id=aoi_id, runs=res["runs"])
+    return res
+
+
 @router.get("/api/aoi/{aoi_id}/runs")
-def aoi_runs(aoi_id: str, limit: int = Query(10, ge=1, le=30)):
-    """Recent scenarios for side-by-side comparison (summary fields only)."""
-    docs = fs.get_db().collection("runs").where("aoi_id", "==", aoi_id).limit(200).stream()
-    keep = ("run_id", "created_at", "rain_label", "people_to_evacuate", "capacity_gap_people", "demand_range", "gap_range",
-            "evac_window_h", "start_local", "params")
+def aoi_runs(aoi_id: str, limit: int = Query(10, ge=1, le=100), archived: bool = False):
+    """Saved scenarios (experiments) of an area, newest first, summary fields only. Archived runs only on request."""
     rows = []
-    for d in docs:
-        r = d.to_dict()
-        row = {k: r.get(k) for k in keep}
-        b = r.get("bridges") or []
-        row["bridges_closing"] = sum(1 for x in b if x.get("first_closed_hour"))
-        row["bridges_total"] = len(b)
-        row["flooded_km2"] = (r.get("flooded_area_km2_by_hour") or [0])[-1]
-        e = r.get("exposure") or {}
-        row["flood_peak"] = max(e.get("exposed_pop_by_hour") or [0])
-        row["shelters_used"] = sum(1 for s in r.get("shelters") or [] if s.get("assigned", 0) > 0)
-        p = row.pop("params") or {}
-        row["changes"] = {k: p.get(k) for k in ("disabled_shelter_ids", "extra_shelters", "blocked_polygons", "visitors",
-                                                "travel_mode", "evac_start_hour") if p.get(k)}
-        row["changes"]["extra_shelters"] = len(p.get("extra_shelters") or []) or None
-        row["changes"]["blocked_polygons"] = len(p.get("blocked_polygons") or []) or None
-        row["changes"] = {k: v for k, v in row["changes"].items() if v}
+    current = (fs.get_aoi(aoi_id) or {}).get("latest_run_id")
+    for row in run_summaries(aoi_id):
+        if bool(row.get("archived")) != archived:
+            continue
+        row["is_current"] = row["run_id"] == current
         rows.append(row)
     rows.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
     return rows[:limit]
+
+
+@router.get("/api/projects")
+def projects():
+    """Projects page: every prepared area with its saved runs counted (archived areas listed separately)."""
+    out = []
+    for d in fs.get_db().collection("aois").limit(200).stream():
+        a = d.to_dict()
+        if not a.get("bbox"):
+            continue
+        runs = [r.to_dict() for r in fs.get_db().collection("runs").where("aoi_id", "==", a["aoi_id"]).select(list(_META)).limit(300).stream()]
+        runs = [r for r in runs if not r.get("archived")]  # counts only: the small fields, not whole run documents
+        last = max((str(r.get("created_at") or "") for r in runs), default="")
+        out.append({k: a.get(k) for k in ("aoi_id", "name", "bbox", "mode", "state", "prepared_at", "latest_run_id", "archived")} |
+                   {"runs": len(runs), "starred": sum(1 for r in runs if r.get("starred")), "last_run_at": last or None})
+    out.sort(key=lambda r: str(r.get("last_run_at") or r.get("prepared_at") or ""), reverse=True)
+    out.sort(key=lambda r: bool(r.get("archived")))
+    return out
 
 
 class Official(BaseModel):

@@ -155,7 +155,8 @@ def build_facts(run: dict, area_extra: dict | None = None) -> dict:
     H = len(run["rain_series_mm_h"])
     roads = load_roads(run["run_id"])
     bridges = run.get("bridges", [])
-    closing = [b for b in bridges if b.get("first_closed_hour")]
+    closing = [b for b in bridges if b.get("first_closed_hour") and b.get("reason") not in ("construction", "closed", "disused")]
+    not_open = [b for b in bridges if b.get("reason") in ("construction", "closed", "disused")]
     peak = max(e.get("exposed_pop_by_hour") or [0])
     ls_peak = max(e.get("landslide_exposed_pop_by_hour") or [0])
     br = e.get("buildings_by_risk", {})
@@ -168,7 +169,8 @@ def build_facts(run: dict, area_extra: dict | None = None) -> dict:
          "unit": "buildings"},
         {"id": "K3", "label": "Capacity gap (people with no reachable shelter place)", "value": run.get("capacity_gap_people", 0),
          "unit": "people"},
-        {"id": "K4", "label": "Bridges closing in the scenario", "value": len(closing), "unit": f"of {len(bridges)} bridges"},
+        {"id": "K4", "label": "Bridges the storm closes (river at the deck)", "value": len(closing),
+         "unit": f"of {len(bridges)} bridges" + (f"; {len(not_open)} more marked not open in OpenStreetMap" if not_open else "")},
         {"id": "K5", "label": "Flooded area at the worst hour", "value": (run.get("flooded_area_km2_by_hour") or [0])[-1],
          "unit": "km2"},
         {"id": "K6", "label": "People in landslide hazard zones (peak)", "value": ls_peak, "unit": "people"},
@@ -220,7 +222,8 @@ def build_facts(run: dict, area_extra: dict | None = None) -> dict:
         "breakdown": run.get("demand_breakdown", {}),
         "official": area_extra.get("official", {}),
         "bridges": [{"id": b["id"], "name": b["name"], "place": b.get("place", ""), "first_closed_hour": b.get("first_closed_hour"),
-                     "reason": b.get("reason"), "lonlat": [b["lon"], b["lat"]]} for b in bridges if b.get("first_closed_hour")][:12],
+                     "reason": b.get("reason"), "deck_m": b.get("deck_m"), "peak_vs_deck_m": b.get("peak_vs_deck_m"),
+                     "lonlat": [b["lon"], b["lat"]]} for b in bridges if b.get("first_closed_hour")][:12],
         "closed_roads": closed,
         "routes": routes,
         "assembly_points": [{"id": a["id"], "place": a.get("place", ""), "capacity": a["capacity"], "area_m2": round(a.get("area_m2", 0)),
@@ -355,10 +358,16 @@ def rules_advisory(facts: dict) -> list[Recommendation]:
     H = facts["scenario"]["H"]
     for b in facts["bridges"][:4]:
         h = b["first_closed_hour"]
+        if b.get("reason") in ("construction", "closed", "disused"):  # OpenStreetMap status, not the storm
+            out.append(Recommendation(horizon="immediate", priority="P2",
+                                      action=f"Confirm with PWD whether {_bridge(b)} is open; keep evacuation routes off it",
+                                      location_label=_where(b, b["name"]), evidence_ids=[b["id"]], owner="PWD (roads and bridges)",
+                                      why=f"OpenStreetMap marks it as {b['reason']}; routes in this scenario avoid it.", confidence="low"))
+            continue
         out.append(Recommendation(horizon="immediate", priority="P1",
                                   action=f"Close {_bridge(b)} to traffic and post police at both ends",
                                   location_label=_where(b, b["name"]), evidence_ids=[b["id"]], owner="PWD (roads and bridges)",
-                                  why=f"Estimated to close at hour {h} of {H} ({b['reason']}).", confidence="medium"))
+                                  why=f"Estimated to close at hour {h} of {H}: the river reaches its deck.", confidence="medium"))
     k = {x["id"]: x for x in facts["key_numbers"]}
     if k["K3"]["value"] > 0:
         out.append(Recommendation(horizon="immediate", priority="P1",

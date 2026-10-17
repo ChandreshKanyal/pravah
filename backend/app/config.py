@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     lsi_threshold: str = "auto"
     # "class_shift": +-1 class by threshold exceedance (17 Oct); "graded_g": score x g (16 Oct); spec: score x clip(R)
     lsi_modulation: str = "class_shift"
+    flow_max_cell_hours: int = 1_200_000  # 2D flow model: 30 m cells x storm hours above this run on 60 m cells
     apply_arf: bool = True  # TP-29 areal reduction of point rain in the rational method (spec: none)
     # S13 urban: rain up to this intensity is carried by storm drains (Mumbai's historical design standard is 25 mm/h;
     # BRIMSTOWAD upgrades target 50 mm/h). Only the excess ponds.

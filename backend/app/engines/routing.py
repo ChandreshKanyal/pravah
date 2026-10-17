@@ -10,22 +10,21 @@ OVERFLOW_COST = 10_000_000
 WALK_FLAT_KMH = 6 * math.exp(-3.5 * 0.05)  # Tobler on flat ground, 5.04 km/h
 
 
-def edge_states(cells: list[list[int]], bridge: np.ndarray, blocked: np.ndarray, depth: np.ndarray,
-                lsi_dyn: np.ndarray | None, stage: np.ndarray, reach_id_30: np.ndarray,
-                depth_limit_m: float, bridge_cut_stage_m: float,
+def edge_states(cells: list[list[int]], blocked: np.ndarray, depth: np.ndarray, lsi_dyn: np.ndarray | None,
+                depth_limit_m: float, bridge_first: np.ndarray | None = None, bridge_cells: list[set] | None = None,
                 lsi_close_share: float = 0.2) -> tuple[np.ndarray, list[str], np.ndarray]:
     """first_closed_hour (1-based, NEVER if open), reason, and edge_lsi[e, t] (max LSI class along edge).
 
     NOTE(spec-drift, human decision 16 Oct "soften + scope"):
     - landslide closes an edge only when >= lsi_close_share of its sample cells are class 5 (spec: any cell);
       roads score high LSI by construction (distance-to-road factor) and OSM edges here are long;
-    - a bridge's interior cells lie over the river, so bridges close on reach stage >= cut or when an approach
-      (first/last cell) exceeds the depth limit (spec: any depth > 0 along the bridge).
+    - bridges (engines/bridges.py) close only when OSM marks them under construction/closed or the river reaches
+      their deck; `bridge_first[e]` is the first such hour for the spans edge e runs over (NEVER if none). The cells
+      over a span (`bridge_cells[e]`) are left out of the flood and landslide tests: they lie above the water.
     """
     H = depth.shape[0]
     d_flat = depth.reshape(H, -1)
     l_flat = lsi_dyn.reshape(H, -1) if lsi_dyn is not None else None
-    rid_flat = reach_id_30.ravel()
     E = len(cells)
     first = np.full(E, NEVER, np.int64)
     reason = [""] * E
@@ -36,20 +35,21 @@ def edge_states(cells: list[list[int]], bridge: np.ndarray, blocked: np.ndarray,
             continue
         if not c:
             continue
+        if bridge_cells is not None and bridge_cells[e]:
+            c = [x for x in c if x not in bridge_cells[e]]
+        bf = int(bridge_first[e]) if bridge_first is not None else NEVER
+        if not c:
+            if bf < NEVER:
+                first[e], reason[e] = bf, "bridge"
+            continue
         dc = np.nan_to_num(d_flat[:, c])  # NaN = permanent river, not flood
         slide5 = np.zeros(H, bool)
         if l_flat is not None:
             lc = l_flat[:, c]
             edge_lsi[e] = lc.max(axis=1)
             slide5 = (lc == 5).mean(axis=1) >= lsi_close_share
-        if bridge[e]:
-            approach = dc[:, [0, -1]].max(axis=1)
-            rids = np.unique(rid_flat[c])
-            rids = rids[rids >= 0]
-            st = stage[rids].max(axis=0) if len(rids) else np.zeros(H)
-            causes = [("bridge", (st >= bridge_cut_stage_m) | (approach > depth_limit_m)), ("landslide", slide5)]
-        else:
-            causes = [("flood", dc.max(axis=1) > depth_limit_m), ("landslide", slide5)]
+        bridge_now = np.arange(1, H + 1) >= bf
+        causes = [("bridge", bridge_now), ("flood", dc.max(axis=1) > depth_limit_m), ("landslide", slide5)]
         for t in range(H):
             hit = [name for name, m in causes if m[t]]
             if hit:
@@ -151,3 +151,29 @@ def assembly_points(max_depth: np.ndarray, hand: np.ndarray, slope_deg: np.ndarr
         if len(out) >= top:
             break
     return out
+
+
+def hazard_pieces(geom, grid, hit_flat: np.ndarray, step_m: float = 30.0, pad_m: float = 30.0,
+                  skip: set | None = None) -> list[tuple[float, float]]:
+    """Where along an edge the closing hazard actually is: (start, end) fractions of the line's length covering the
+    sample points whose cell is hit (bool per flat cell index), padded by `pad_m` and merged. A slide or a flooded dip
+    blocks a road at a place, so the map draws these pieces as closed and the rest of a long edge as cut off."""
+    L = float(geom.length)
+    if L <= 0:
+        return []
+    d = np.append(np.arange(0, L, step_m), L)
+    pts = [geom.interpolate(x) for x in d]
+    xs = np.array([p.x for p in pts]); ys = np.array([p.y for p in pts])
+    c = np.floor((xs - grid.x0) / grid.cell).astype(int)
+    r = np.floor((grid.y0 - ys) / grid.cell).astype(int)
+    ok = (r >= 0) & (r < grid.height) & (c >= 0) & (c < grid.width)
+    flat = np.where(ok, r * grid.width + c, -1)
+    hit = np.array([f >= 0 and bool(hit_flat[f]) and not (skip and int(f) in skip) for f in flat])
+    out: list[list[float]] = []
+    for i in np.flatnonzero(hit):
+        a, b = max(0.0, d[i] - pad_m), min(L, d[i] + pad_m)
+        if out and a <= out[-1][1]:
+            out[-1][1] = b
+        else:
+            out.append([a, b])
+    return [(round(a / L, 4), round(b / L, 4)) for a, b in out]

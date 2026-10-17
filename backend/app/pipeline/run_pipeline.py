@@ -59,6 +59,9 @@ class Area:
     fsi: np.ndarray | None = None
     aoi_mask: np.ndarray | None = None  # cells inside the drawn bbox; the grid adds a 3 km hydrology buffer
     src_cache: dict = field(default_factory=dict)
+    lsi_noroad: np.ndarray | None = None  # landslide index with the distance-to-road factor neutral (road closures)
+    lsi_edges_noroad: list[float] | None = None
+    bridges: dict | None = None  # {"spans": [...], "links": {mode: {edge row: [span index]}}} (engines/bridges.py)
 
     def with_urban_dem(self, surface_dem: np.ndarray) -> "Area":
         """Urban ponding levels use the same DEM the depressions were built from (FABDEM when available)."""
@@ -107,6 +110,9 @@ def load_area(aoi_id: str) -> Area:
         drain_cands=storage.get_json(aoi_id, "drain_candidates.json") if urban and storage.exists(aoi_id, "drain_candidates.json") else [],
         fsi=sus.get("fsi"),
         aoi_mask=_bbox_mask(grid, doc.get("bbox")),
+        bridges=storage.get_json(aoi_id, "bridges.json") if storage.exists(aoi_id, "bridges.json") else None,
+        lsi_noroad=sus.get("lsi_static_noroad"),
+        lsi_edges_noroad=sus["lsi_edges_noroad"].tolist() if "lsi_edges_noroad" in sus else None,
     ).with_urban_dem(terr["dem"])
 
 
@@ -197,6 +203,26 @@ def historical_max_mm(area: Area) -> float:
     return mm
 
 
+_obs: dict[tuple, list[float]] = {}
+
+
+def observed_series(area: Area, day_iso: str, H: int) -> tuple[list[float], str, list[str], str | None]:
+    """Actual rain of a past local day from NASA GPM IMERG (~2 days behind): its wettest H hours."""
+    from datetime import date as _date, datetime, timedelta
+    from app.services import earth_engine as ees
+    day = _date.fromisoformat(day_iso)
+    key = (area.aoi_id, day.isoformat())
+    if key not in _obs:  # Earth Engine data: safe to keep
+        lon, lat = area_centroid(area)
+        start = (datetime(day.year, day.month, day.day) - timedelta(hours=5, minutes=30)).isoformat() + "Z"  # IST midnight
+        _obs[key] = ees.imerg_hourly(lon, lat, start, 24)
+    hours = _obs[key]
+    series, k = rainfall.wettest_window(hours, H)
+    warn = [] if sum(hours) > 0 else ["NASA IMERG shows no rain that day here (or the day is not processed yet; it runs about 2 days behind)"]
+    return ([round(float(x), 2) for x in series], f"Observed rain {day.strftime('%a %d %b')} (NASA IMERG, {sum(hours):.0f} mm that day), "
+            f"wettest {H} h from {k:02d}:00", warn, f"{day.isoformat()}T{k:02d}:00")
+
+
 def rain_series(p: ScenarioParams, area: Area) -> tuple[list[float], str, list[str], str | None]:
     """S10.5: forecast / worst / best / historical_extreme / manual hourly series (mm/h), a human label, warnings and
     the local clock time of hour 1 for forecast scenarios (None for hypothetical rain)."""
@@ -206,7 +232,9 @@ def rain_series(p: ScenarioParams, area: Area) -> tuple[list[float], str, list[s
     src = p.rain_source
     if p.rain_series_override:  # replay of an observed storm (scripts/event_replay.py)
         series = [max(0.0, float(v)) for v in p.rain_series_override][:24]
-        return series, p.preset_label or f"Observed rain, {len(series)} h", warnings, None
+        return series, p.preset_label or f"Observed rain, {len(series)} h", warnings, p.override_start_local
+    if src == RainSource.observed and p.observed_date:
+        return observed_series(area, p.observed_date, H)
     if src in (RainSource.forecast, RainSource.worst, RainSource.best):
         try:
             lon, lat = area_centroid(area)
@@ -214,7 +242,9 @@ def rain_series(p: ScenarioParams, area: Area) -> tuple[list[float], str, list[s
             daily, hourly = prov.daily(lat, lon, 10), prov.hourly(lat, lon, 240)
             k = p.forecast_day_index if p.forecast_day_index is not None else rainfall.worst_day_index(daily, hourly)
             day = daily[min(k, len(daily) - 1)]["date"]
-            series, start = rainfall.wettest_window(rainfall.day_hours(hourly, day), H)
+            first = rainfall.first_covered_hour(hourly, day)  # never a window in hours already past
+            series, start = rainfall.wettest_window(rainfall.day_hours(hourly, day)[first:], H)
+            start += first
             mult = {RainSource.worst: p.worst_multiplier, RainSource.best: p.best_multiplier}.get(src, 1.0)
             series = [v * mult for v in series]
             label = f"Forecast {_date.fromisoformat(day).strftime('%a %d %b')}, wettest {H} h from {start:02d}:00"
@@ -236,6 +266,9 @@ def rain_series(p: ScenarioParams, area: Area) -> tuple[list[float], str, list[s
                             f"({mm:.0f} mm, CHIRPS 2001-2024, IMD reduction rule)"), warnings, None
         except Exception as e:
             warnings.append(f"Historical extreme unavailable ({e.__class__.__name__}); used manual rain instead")
+    if p.rain_preset:
+        series, label = rainfall.preset_series(p.rain_preset, H, p.hyetograph)
+        return series, label, warnings, None
     series = rainfall.manual_series(p.manual_intensity_mm_h, H, p.hyetograph)
     label = p.preset_label or f"Manual {p.manual_intensity_mm_h:g} mm/h for {H} h ({p.hyetograph.replace('_', ' ')})"
     return series, label, warnings, None
@@ -314,6 +347,11 @@ def run_pipeline(p: ScenarioParams) -> RunResult:
         methods["landslide_exceedance_max"] = round(float(R.max()), 2)
         methods["landslide_trigger_hours"] = [int(t + 1) for t in np.flatnonzero(trig)]
         lsi_act = ls.actionable(lsi_dyn, trig)
+        lsi_road = lsi_act  # road closures: the index without the road factor when the area has it
+        if area.lsi_noroad is not None:
+            lsi_road = ls.actionable(ls.lsi_dynamic_classes(area.lsi_noroad, area.lsi_edges_noroad, rain, area.slope_deg,
+                                                            g_slope=cfg.lsi_g_slope, g_min=cfg.lsi_g_min, g_max=cfg.lsi_g_max,
+                                                            threshold=thr, mode=cfg.lsi_modulation), trig)
         if not trig.any():
             warnings.append(f"Rain stays below the landslide trigger threshold ({rainfall.LANDSLIDE_THRESHOLDS[thr][2]}; "
                             f"peak {R.max():.0%} of it): slopes are shown as susceptibility only, no landslide closures "
@@ -321,7 +359,7 @@ def run_pipeline(p: ScenarioParams) -> RunResult:
                             "cloudbursts, and in replays of three recorded Rudraprayag landslide events the trigger was not "
                             "reached either (Methods: Track record). For planning, also run a record or IMD preset scenario.")
     else:
-        lsi_act = None
+        lsi_act = lsi_road = None
         warnings.append("Landslide susceptibility not prepared for this area")
 
     t2 = time.time()
@@ -341,7 +379,7 @@ def run_pipeline(p: ScenarioParams) -> RunResult:
     t3 = time.time()
     # urban mode does not model river stage, so bridges close only on flooded approaches
     stage_for_bridges = np.zeros_like(h) if area.pluvial is not None else h
-    ev = evac.plan(area, p, depth, lsi_act, stage_for_bridges, ctx, warnings) if ctx else {}
+    ev = evac.plan(area, p, depth, lsi_road, stage_for_bridges, ctx, warnings) if ctx else {}
     timings["routing"] = round(time.time() - t3, 2)
 
     t1 = time.time()
@@ -420,8 +458,8 @@ def run_pipeline(p: ScenarioParams) -> RunResult:
 def _evac_window(ev: dict) -> int | None:
     """First hour an evacuation route stops being passable, else the first bridge closure: the 'move before' hour."""
     hrs = [r["passable_until_h"] for r in ev.get("routes_summary", []) if r.get("passable_until_h")]
-    if not hrs:
-        hrs = [b["first_closed_hour"] for b in ev.get("bridges", []) if b.get("first_closed_hour")]
+    if not hrs:  # bridges the storm closes; ones OpenStreetMap marks as not open were never usable
+        hrs = [b["first_closed_hour"] for b in ev.get("bridges", []) if b.get("first_closed_hour") and b.get("reason") not in ("construction", "closed", "disused")]
     return int(min(hrs)) if hrs else None
 
 

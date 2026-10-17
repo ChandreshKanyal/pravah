@@ -53,6 +53,11 @@ class RunResult(BaseModel):
     created_at: datetime
     rain_series_mm_h: list[float]  # length H
     rain_label: str  # e.g. "Forecast day 3 (Thu), worst case x1.5"
+    # experiment bookkeeping (Projects page): set later through PATCH /api/runs/{id}/meta
+    title: str | None = None
+    notes: str = ""
+    starred: bool = False
+    archived: bool = False
     stage_by_reach_m: dict[str, list[float]]  # reach_id -> stage per hour (envelope)
     flooded_area_km2_by_hour: list[float]
     depth_png_urls: list[str]  # one URL per hour (coloured overlay)

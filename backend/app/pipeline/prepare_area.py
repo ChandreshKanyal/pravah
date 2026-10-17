@@ -5,6 +5,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
+import geopandas as gpd
 import numpy as np
 import osmnx as ox
 from rasterio.features import rasterize
@@ -60,6 +61,13 @@ def _ee_group(aoi_id: str, grid: GridSpec, images: dict, group: str, warnings: l
 
 def _buildings(aoi: AOI, grid: GridSpec, warnings: list[str]) -> None:
     gdf, w = ees.fetch_buildings(aoi.bbox, grid)
+    if len(gdf) == 0:  # Open Buildings covers the Global South only: fall back to OpenStreetMap footprints
+        try:
+            gdf = osm.buildings(tuple(aoi.bbox), grid.crs)
+            w = [f"Google Open Buildings has no coverage here; using {len(gdf):,} OpenStreetMap building footprints"
+                 " (heights from OSM tags where mapped)"] if len(gdf) else w + ["No OpenStreetMap buildings either"]
+        except Exception as e:
+            w = w + [f"OpenStreetMap buildings unavailable: {e.__class__.__name__}"]
     warnings.extend(w)
     storage.save_gdf(aoi.aoi_id, "buildings.parquet", gdf)
 
@@ -73,6 +81,11 @@ def _osm(aoi_id: str, grid: GridSpec, warnings: list[str]) -> None:
             storage.save_graph(aoi_id, name, osm.graph(bb, net))
         except Exception as e:
             warnings.append(f"OSM {net} network unavailable: {e}")
+    if not storage.exists(aoi_id, "bridge_ways.parquet"):
+        try:
+            storage.save_gdf(aoi_id, "bridge_ways.parquet", osm.bridge_ways(bb))
+        except Exception as e:
+            warnings.append(f"OSM bridges unavailable: {e}")
     if not (storage.exists(aoi_id, "pois.parquet") and storage.exists(aoi_id, "waterways.parquet")):
         try:
             pois, water = osm.pois_and_waterways(bb)
@@ -193,11 +206,20 @@ def _lsi(aoi: AOI, grid: GridSpec, warnings: list[str], meta: dict) -> None:
     a_layers = {"slope_deg": tc["slope_deg"], "aspect_deg": tc["aspect_deg"], "curv": tc["curv"], "ndvi": lc["ndvi"],
                 "soil_clay": lc["soil_clay"], "rain_clim": hz["rain_clim"], "dist_stream_m": h["dist_stream_m"],
                 "dist_road_m": dv["dist_road_m"]}
-    raw, info = ls.lsi_raw(ls.classify(a_layers, rain_edges), ratings, cfg.lsi_ahp_matrix)
+    a_cls = ls.classify(a_layers, rain_edges)
+    raw, info = ls.lsi_raw(a_cls, ratings, cfg.lsi_ahp_matrix)
     val, cls, edges = ls.normalise_and_classify(raw, train_raw, t["slope_deg"])
+    # Road closures use the same index with the distance-to-road factor neutral (its mean rating): road cuts do raise
+    # susceptibility, but judging a road closed because it is a road is circular (road cells were 6.5x more often in
+    # class 5 than other ground in Rudraprayag, 16 Oct).
+    neutral = lambda c: {**c, "road": np.full_like(c["road"], -1)}  # noqa: E731
+    train_nr, _ = ls.lsi_raw(neutral(t_cls), ratings, cfg.lsi_ahp_matrix)
+    raw_nr, _ = ls.lsi_raw(neutral(a_cls), ratings, cfg.lsi_ahp_matrix)
+    val_nr, _, edges_nr = ls.normalise_and_classify(raw_nr, train_nr, t["slope_deg"])
     sus = storage.load_layers(aoi.aoi_id, "susceptibility") if storage.exists(aoi.aoi_id, "susceptibility.npz") else {}
     storage.save_layers(aoi.aoi_id, "susceptibility", {**sus, "lsi_static": val, "lsi_class": cls,
-                                                       "lsi_edges": np.asarray(edges, np.float32)}, grid)
+                                                       "lsi_edges": np.asarray(edges, np.float32),
+                                                       "lsi_static_noroad": val_nr, "lsi_edges_noroad": np.asarray(edges_nr, np.float32)}, grid)
     storage.save_png(aoi.aoi_id, "lsi_static", to_png_classes(cls))
     meta["lsi"] = {**info, "method": method, "landslide_records": n, "ratings": ratings,
                    "auc": None if auc is None else round(auc, 3),
@@ -311,7 +333,41 @@ def _network(aoi: AOI, grid: GridSpec, warnings: list[str], meta: dict) -> None:
     storage.put_json(aoi_id, "medical.json", out[1])
     meta["network"] = {m: {"nodes": int(len(nd)), "edges": int(len(ed)), "bridges": int(ed["bridge"].sum())}
                        for m, (ed, nd) in tables.items()}
+    meta["bridges"] = build_bridges(aoi_id, grid, warnings)
     meta["shelters"] = {"osm": n_osm, "total": len(out[0]), "medical": len(out[1])}
+
+
+def build_bridges(aoi_id: str, grid: GridSpec, warnings: list[str]) -> dict:
+    """Real bridge spans with deck heights and their links to the routable edges (engines/bridges.py) -> bridges.json."""
+    from app.engines import bridges as brg
+    if not storage.exists(aoi_id, "bridge_ways.parquet"):
+        try:
+            storage.save_gdf(aoi_id, "bridge_ways.parquet", osm.bridge_ways(lonlat_bounds(grid)))
+        except Exception as e:
+            warnings.append(f"OSM bridges unavailable: {e}")
+            return {"spans": 0}
+    ways = storage.load_gdf(aoi_id, "bridge_ways.parquet")
+    h30 = storage.load_layers(aoi_id, "hydro30")
+    water = storage.load_gdf(aoi_id, "waterways.parquet").to_crs(grid.crs) if storage.exists(aoi_id, "waterways.parquet") else None
+    water_lines = [g for g in water.geometry if g is not None and g.geom_type in ("LineString", "MultiLineString")] if water is not None else None
+    spans = brg.spans(ways.to_crs(grid.crs) if len(ways) else None, grid, h30["hand"], h30["reach_id"],
+                      h30.get("dist_stream_m"), water_lines)
+    links = {}
+    for m in ("walk", "drive"):
+        if storage.exists(aoi_id, f"edges_{m}.parquet"):
+            edges = storage.load_gdf(aoi_id, f"edges_{m}.parquet").reset_index(drop=True)
+            links[m] = {str(e): ks for e, ks in brg.link_edges(spans, edges.geometry).items()}
+    out = []
+    for s in spans:
+        r, c = xy_to_rowcol(grid, s["x"], s["y"])
+        lon, lat = rowcol_to_lonlat(grid, int(np.clip(r, 0, grid.height - 1)), int(np.clip(c, 0, grid.width - 1)))
+        line = gpd.GeoSeries([s["geometry"]], crs=grid.crs).to_crs("EPSG:4326").iloc[0]
+        out.append({k: v for k, v in s.items() if k not in ("geometry", "x", "y")} |
+                   {"lon": round(float(lon), 6), "lat": round(float(lat), 6), "line": [[round(x, 6), round(y, 6)] for x, y in line.coords]})
+    storage.put_json(aoi_id, "bridges.json", {"spans": out, "links": links})
+    return {"spans": len(out), "over_river": sum(1 for s in out if s["reach"] >= 0),
+            "not_open": sum(1 for s in out if s["status"] != "open"),
+            "deck_at_minimum": sum(1 for s in out if s["deck_source"] == "minimum")}
 
 
 def _urban(aoi: AOI, grid: GridSpec, warnings: list[str], meta: dict) -> None:
@@ -349,8 +405,19 @@ def _overlays(aoi_id: str) -> None:
     storage.save_png(aoi_id, "hand", to_png(np.where(hand <= 20, hand, np.nan), "hand", 0, 20))
 
 
+ACTIVE: set[str] = set()  # areas being prepared in this process (a "preparing" area not in here was interrupted)
+
+
 def prepare_area(aoi: AOI, force: frozenset[str] = frozenset()) -> dict:
     """Idempotent: steps whose outputs exist are skipped unless named in `force` (e.g. {"lsi", "network"})."""
+    ACTIVE.add(aoi.aoi_id)
+    try:
+        return _prepare(aoi, force)
+    finally:
+        ACTIVE.discard(aoi.aoi_id)
+
+
+def _prepare(aoi: AOI, force: frozenset[str]) -> dict:
     t0 = time.time()
     aoi_id, grid = aoi.aoi_id, make_grid(aoi.bbox)
     prev = fs.get_aoi(aoi_id) or {}
@@ -387,7 +454,7 @@ def prepare_area(aoi: AOI, force: frozenset[str] = frozenset()) -> dict:
                 status[g] = "ready"
             else:
                 tasks.append(ex.submit(run, g, _ee_group, aoi_id, grid, images, g, warnings, meta))
-        if storage.exists(aoi_id, "buildings.parquet"):
+        if storage.exists(aoi_id, "buildings.parquet") and "buildings" not in force:
             status["buildings"] = "ready"
         else:
             tasks.append(ex.submit(run, "buildings", _buildings, aoi, grid, warnings))
@@ -433,4 +500,10 @@ def prepare_area(aoi: AOI, force: frozenset[str] = frozenset()) -> dict:
                            "meta": {**meta, "timings_s": timings},
                            "prepare_seconds": secs, "prepared_at": datetime.now(timezone.utc)})
     log.info("prepare_area %s: %s in %ss", aoi_id, state, secs)
+    # pre-monsoon improvements (pipeline/improvements.py) run after the area is usable: the map opens without waiting
+    # for satellite checks and web search; the map's "Finding fixes" chip follows their progress
+    if status.get("network") == "ready" and status.get("hydrology") == "ready" and (
+            not storage.exists(aoi_id, "improvements.json") or "improvements" in force):
+        from app.pipeline import improvements as impv
+        impv.start(aoi_id)
     return {"state": state, "status": status, "warnings": warnings, "meta": {**meta, "timings_s": timings}, "seconds": secs}

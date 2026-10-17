@@ -89,15 +89,59 @@ def caine_threshold(D_h):
     return landslide_threshold(D_h, "caine")
 
 
+def design_storm_weights(duration_h: int) -> np.ndarray:
+    """Hourly shares of an early-peaked design storm (sum 1): the alternating block method (Chow, Maidment & Mays 1988)
+    on the IMD reduction curve P_t ~ t^(1/3), so every run of k consecutive hours around the peak holds the depth the
+    curve gives for k hours. Largest block at hour ceil(H/3); the next blocks alternate after and before it."""
+    H = max(1, int(duration_h))
+    blocks = np.diff(np.cbrt(np.arange(H + 1, dtype=float)))  # decreasing hourly increments
+    peak = math.ceil(H / 3) - 1
+    order, left, right, after = [peak], peak - 1, peak + 1, True
+    while len(order) < H:
+        if right < H and (after or left < 0):
+            order.append(right)
+            right += 1
+        else:
+            order.append(left)
+            left -= 1
+        after = not after
+    w = np.zeros(H)
+    w[order] = blocks
+    return w / w.sum()
+
+
 def distribute_total(total_mm: float, duration_h: int, hyetograph: str = "constant") -> list[float]:
-    """Spread a rain total over H hours. triangular_front: peak at hour ceil(H/3), linear up and down."""
+    """Spread a rain total over H hours. constant: evenly. triangular_front ("Early peak"): the IMD-consistent design
+    storm of `design_storm_weights` (a 4 h storm puts 63 % of its rain in the peak hour, as the reduction rule implies)."""
     H = max(1, int(duration_h))
     if hyetograph == "triangular_front" and H > 1:
-        p = math.ceil(H / 3)
-        t = np.arange(1, H + 1, dtype=float)
-        w = np.where(t <= p, t / p, (H - t + 1) / (H - p + 1))
-        return (w / w.sum() * total_mm).tolist()
+        return (design_storm_weights(H) * total_mm).tolist()
     return [total_mm / H] * H
+
+
+# IMD rainfall categories (mm in 24 h; the top of each band, so a preset is the worst case of its category) and the
+# IMD cloudburst definition (>= 100 mm in one hour).
+RAIN_PRESETS = {
+    "imd_heavy": (115.5, "IMD heavy rain (64.5-115.5 mm/day)"),
+    "imd_very_heavy": (204.4, "IMD very heavy rain (115.6-204.4 mm/day)"),
+    "imd_extreme": (300.0, "IMD extremely heavy rain (>= 204.5 mm/day, 300 used)"),
+    "cloudburst": (100.0 * 24 ** (1 / 3), "Cloudburst (IMD: 100 mm in one hour)"),
+}
+
+
+def preset_series(preset: str, duration_h: int, hyetograph: str = "constant") -> tuple[list[float], str]:
+    """Hourly rain for an IMD category or a cloudburst over H hours. The depth of the wettest H hours comes from the
+    daily total by the IMD reduction rule. A cloudburst is always early-peaked: its peak hour is exactly 100 mm and the
+    hours around it follow the same curve (100 x H^(1/3) mm in H hours)."""
+    p24, name = RAIN_PRESETS[preset]
+    H = max(1, min(24, int(duration_h)))
+    depth = daily_to_duration_mm(p24, H)
+    shape = "triangular_front" if preset == "cloudburst" else hyetograph
+    series = distribute_total(depth, H, shape)
+    how = "early peak" if shape == "triangular_front" and H > 1 else "steady"
+    if preset == "cloudburst":
+        return series, f"{name}: {depth:.0f} mm in {H} h, peak {max(series):.0f} mm in one hour"
+    return series, f"{name}: {depth:.0f} mm in the wettest {H} h ({how}, peak {max(series):.0f} mm/h), IMD reduction rule"
 
 
 def manual_series(intensity_mm_h: float, duration_h: int, hyetograph: str = "constant") -> list[float]:
@@ -123,6 +167,12 @@ def day_hours(hourly: list[dict], day: str) -> list[float]:
         if h["local_date"] == day:
             out[int(h["local_hour"]) % 24] = float(h["precip_mm"])
     return out
+
+
+def first_covered_hour(hourly: list[dict], day: str) -> int:
+    """First local hour of `day` that has a forecast value (today's past hours have none)."""
+    hrs = [int(h["local_hour"]) % 24 for h in hourly if h["local_date"] == day]
+    return min(hrs) if hrs else 0
 
 
 def worst_day_index(daily: list[dict], hourly: list[dict] | None = None) -> int:

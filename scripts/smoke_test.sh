@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# S17.4 smoke test: health -> demo AOI (cached) -> default run -> advisory (rules, instant) -> Gemini advisory job.
+# S17.4 smoke test: health -> demo AOI (cached) -> default run -> flow model started -> advisory (rules, instant) -> Gemini advisory job.
 # Usage: scripts/smoke_test.sh [BASE]   (default: the Firebase Hosting URL; use http://localhost:8080 locally)
 set -euo pipefail
 BASE="${1:-https://project-0fd9c4ae-bf90-452f-a80.web.app}"
@@ -21,6 +21,9 @@ RUN=$(curl -fsS -X POST "$BASE/api/runs" -H 'content-type: application/json' \
   -d "{\"aoi_id\":\"$AOI\",\"rain_source\":\"historical_extreme\",\"duration_h\":4}" | j 'd["run_id"]')
 echo "run $RUN in $(( $(date +%s) - T0 )) s"
 curl -fsS "$BASE/api/runs/$RUN" | j 'd["rain_label"], d["people_to_evacuate"], d["capacity_gap_people"]'
+
+step "water-flow model for the 3D view (starts by itself in the background)"
+curl -fsS "$BASE/api/runs/$RUN/flow" | j 'd["state"]' | grep -Eq "queued|running|ready"
 
 step "advisory (rules fallback, instant)"
 curl -fsS -X POST "$BASE/api/runs/$RUN/advisory?rules_only=true" | j 'd["generated_by"], len(d["recommendations"]), sorted({r["horizon"] for r in d["recommendations"]})'

@@ -13,6 +13,8 @@ FSI_MATRIX = [
     [1 / 2, 1 / 2, 1 / 2, 1 / 2, 1, 1, 1],
     [1 / 3, 1 / 2, 1 / 2, 1 / 2, 1 / 2, 1, 1],
 ]
+GFD_MAX_HAND_M = 20.0
+GFD_MAX_SLOPE_DEG = 10.0
 CLASS_EDGES = [0.2, 0.4, 0.6, 0.8]  # very low / low / moderate / high / very high
 CLASS_NAMES = ["very low", "low", "moderate", "high", "very high"]
 
@@ -21,7 +23,11 @@ def factor_scores(hand, gfd_count, gsw_occ, dist_stream_m, upa, rain_clim, slope
                   hand_max=30.0, dist_max=1000.0, rain_lo=50.0, rain_hi=300.0, slope_max=30.0) -> dict[str, np.ndarray]:
     """Each factor mapped to 0..1 (1 = more susceptible). Missing values score 0 (C: grid mean)."""
     z = np.nan_to_num
-    gfd = z(gfd_count).astype(float)
+    # satellite flood counts (MODIS 250 m) also mark cloud shadow and snow on ridges; a flood pixel high above the
+    # drainage or on a steep slope is physically implausible and is not counted (checked 16 Oct: Rudraprayag ridge
+    # pixels 460-600 m above the river)
+    plausible = (z(hand, nan=hand_max) <= GFD_MAX_HAND_M) & (z(slope_deg, nan=slope_max) <= GFD_MAX_SLOPE_DEG)
+    gfd = np.where(plausible, z(gfd_count), 0).astype(float)
     p99 = max(1.0, float(np.percentile(gfd, 99)))
     upa = z(upa)
     C = np.asarray(C, dtype=float)

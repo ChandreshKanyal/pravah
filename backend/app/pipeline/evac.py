@@ -10,6 +10,7 @@ from scipy.spatial import cKDTree
 from shapely.geometry import LineString, mapping, shape
 
 from app.config import get_settings
+from app.engines import bridges as brg
 from app.engines import routing
 from app.engines.grid import rowcol_to_lonlat
 from app.engines.shelters import capacity
@@ -51,9 +52,21 @@ def plan(area, p: ScenarioParams, depth: np.ndarray, lsi_dyn: np.ndarray | None,
         blk = gpd.GeoSeries(polys, crs="EPSG:4326")
         blocked = np.array([any(geom.intersects(b) for b in blk) for geom in net.edges_ll.geometry])
     limit = p.walk_depth_limit_m if p.travel_mode == "walk" else p.vehicle_depth_limit_m
-    first, reason, edge_lsi = routing.edge_states(E["cells"].tolist(), E["bridge"].to_numpy(), blocked, depth,
-                                                  lsi_dyn, stage, area.reach_id_30, limit, p.bridge_cut_stage_m,
-                                                  get_settings().lsi_close_share)
+    # bridges: real OSM spans; closed by OSM status (construction etc.) or when the river reaches the deck
+    spans = (area.bridges or {}).get("spans", [])
+    links = (area.bridges or {}).get("links", {}).get(p.travel_mode, {})
+    if area.bridges is None:
+        warnings.append("Bridge spans are not prepared for this area; bridges are treated as roads (re-prepare the area)")
+    s_first, s_reason, s_over = brg.closure_hours(spans, stage, p.bridge_margin_m)
+    bridge_first = np.full(len(E), routing.NEVER, np.int64)
+    bridge_cells: list[set] = [set() for _ in range(len(E))]
+    for e_key, ks in links.items():
+        e = int(e_key)
+        if e < len(E):
+            bridge_first[e] = min(int(s_first[k]) for k in ks)
+            bridge_cells[e] = set().union(*(spans[k]["cells"] for k in ks))
+    first, reason, edge_lsi = routing.edge_states(E["cells"].tolist(), blocked, depth, lsi_dyn, limit,
+                                                  bridge_first, bridge_cells, get_settings().lsi_close_share)
     # S8.2 adjusted network at the evaluation hour
     t_eval = min(H, p.evac_start_hour + 1)
     w = routing.edge_weight(E["t0_s"].to_numpy(), edge_lsi[:, t_eval - 1], E["crowd_e"].to_numpy(),
@@ -176,22 +189,19 @@ def plan(area, p: ScenarioParams, depth: np.ndarray, lsi_dyn: np.ndarray | None,
         if spare_ap:
             warnings.append(f"Assembly points with spare capacity: {', '.join(spare_ap[:5])}")
 
-    # S8.9 bridges (one row per physical bridge, both directions merged)
-    bridges, seen = [], {}
-    for e in np.flatnonzero(E["bridge"].to_numpy()):
-        key = frozenset((E.at[e, "u"], E.at[e, "v"]))
-        if key in seen:
-            b = bridges[seen[key]]
-            if first[e] < (b["first_closed_hour"] or routing.NEVER):
-                b["first_closed_hour"], b["reason"] = int(first[e]), reason[e]
+    # S8.9 bridges: one row per physical span that crosses a modelled river or that OSM marks as not open
+    bridges = []
+    for k, sp in enumerate(spans):
+        if sp["reach"] < 0 and sp["status"] == "open":
             continue
-        mid = net.edges_ll.geometry.iloc[e].interpolate(0.5, normalized=True)
-        seen[key] = len(bridges)
-        bridges.append({"id": f"B{len(bridges) + 1}", "name": E.at[e, "name"] or "Unnamed bridge",
-                        "lon": round(mid.x, 6), "lat": round(mid.y, 6),
-                        "first_closed_hour": None if first[e] >= routing.NEVER else int(first[e]),
-                        "reason": reason[e] or None})
-    bridges.sort(key=lambda b: (b["first_closed_hour"] or routing.NEVER, b["id"]))
+        bridges.append({"id": "", "name": sp["name"] or "Unnamed bridge", "lon": sp["lon"], "lat": sp["lat"],
+                        "first_closed_hour": None if s_first[k] >= routing.NEVER else int(s_first[k]),
+                        "reason": s_reason[k] or None, "status": sp["status"], "deck_m": sp["deck_m"],
+                        "deck_source": sp.get("deck_source", "terrain"), "length_m": sp["length_m"], "osmid": sp["osmid"],
+                        "peak_vs_deck_m": None if not np.isfinite(s_over[k]) else round(float(s_over[k]), 1)})
+    bridges.sort(key=lambda b: (b["first_closed_hour"] or routing.NEVER, -(b["peak_vs_deck_m"] if b["peak_vs_deck_m"] is not None else -99)))
+    for i, b in enumerate(bridges, start=1):  # B1 = first to close, then the ones the river gets closest to
+        b["id"] = f"B{i}"
 
     shelters_out = []
     for s in supply:
@@ -204,11 +214,22 @@ def plan(area, p: ScenarioParams, depth: np.ndarray, lsi_dyn: np.ndarray | None,
     # S7.8 staging points: dry, flat, near a drive road open all scenario, close to the worst clusters
     staging = _staging(area, p, depth, exposure_ctx.get("clusters", []), first, net)
 
+    # where on each closed edge the hazard is (the rest of a long edge is only cut off): pieces as length fractions,
+    # from every hour the cause holds (roads do not reopen in a scenario)
+    pieces: dict[int, list] = {}
+    flood_any = (np.nan_to_num(depth) > limit).any(axis=0).ravel()
+    slide_any = (lsi_dyn == 5).any(axis=0).ravel() if lsi_dyn is not None else None
+    for i in np.flatnonzero(first < routing.NEVER):
+        hit = flood_any if reason[i] == "flood" else slide_any if reason[i] == "landslide" else None
+        if hit is not None:
+            pieces[int(i)] = routing.hazard_pieces(E.geometry.iloc[i], grid, hit, skip=bridge_cells[i] or None)
     roads_fc = {"type": "FeatureCollection", "features": [
         {"type": "Feature", "geometry": mapping(shapely.set_precision(g, 1e-6)), "properties": {
             "first_closed_hour": None if first[i] >= routing.NEVER else int(first[i]), "reason": reason[i] or None,
             "bridge": bool(E.at[i, "bridge"]), "name": E.at[i, "name"], "highway": E.at[i, "highway"],
-            "length_m": round(float(E.at[i, "length_m"]), 1), "lsi_max": int(edge_lsi[i].max()) if H else 0}}
+            "length_m": round(float(E.at[i, "length_m"]), 1), "lsi_max": int(edge_lsi[i].max()) if H else 0,
+            # flat [a0, b0, a1, b1, ...]: Firestore stores no nested arrays
+            **({"hazard": [f for ab in pieces[i] for f in ab]} if pieces.get(i) else {})}}
         for i, g in enumerate(net.edges_ll.geometry)]}
     routes_fc = {"type": "FeatureCollection", "features": [
         {"type": "Feature", "geometry": r.pop("geometry"), "properties": r} for r in routes]}

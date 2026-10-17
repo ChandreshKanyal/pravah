@@ -115,3 +115,15 @@ def put_run(run_id: str, name: str, data: bytes, content_type: str = "applicatio
 
 def get_run(run_id: str, name: str) -> bytes:
     return _bucket().blob(f"runs/{run_id}/{name}").download_as_bytes()
+
+
+def put_run_gz(run_id: str, name: str, data: bytes, content_type: str = "application/octet-stream") -> None:
+    """Large binaries stored gzip-encoded and served as-is with Content-Encoding: gzip (see get_run_gz)."""
+    blob = _bucket().blob(f"runs/{run_id}/{name}")
+    blob.content_encoding = "gzip"
+    blob.upload_from_string(gzip.compress(data, 6), content_type=content_type, timeout=UPLOAD_TIMEOUT_S, retry=UPLOAD_RETRY)
+
+
+def get_run_gz(run_id: str, name: str) -> bytes:
+    """The stored gzip bytes, not decompressed."""
+    return _bucket().blob(f"runs/{run_id}/{name}").download_as_bytes(raw_download=True)

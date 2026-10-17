@@ -3,6 +3,7 @@ from datetime import date
 from fastapi import APIRouter, HTTPException, Query
 
 from app.engines import rainfall
+from app.models.scenario import ScenarioParams
 from app.pipeline.run_pipeline import AreaNotReady, area_centroid, load_area, screening
 from app.services import earth_engine as ees
 from app.services.weather import get_provider
@@ -42,3 +43,20 @@ def forecast(aoi_id: str, duration_h: int = Query(4, ge=1, le=24)):
         "provider": prov.name, "attribution": "Forecast data: Google Maps Platform Weather API",
         "past_90d_source": "NASA GPM IMERG V07 via Earth Engine", "warnings": warnings,
     }
+
+
+@router.post("/api/aoi/{aoi_id}/rain-hours")
+def rain_hours(aoi_id: str, params: ScenarioParams):
+    """The exact hourly rain (mm in each hour) a scenario would use, from the run's own rain builder (forecast, worst,
+    record, observed past day, IMD presets, custom), so the Scenario panel shows it and staff can edit it hour by hour."""
+    from app.pipeline.run_pipeline import rain_series
+    try:
+        area = load_area(aoi_id)
+    except AreaNotReady as e:
+        raise HTTPException(409, str(e))
+    p = params.model_copy(update={"aoi_id": aoi_id, "rain_series_override": None})
+    try:
+        series, label, warnings, start = rain_series(p, area)
+    except Exception as e:  # observed rain needs Earth Engine
+        raise HTTPException(502, f"Rain unavailable: {e.__class__.__name__}")
+    return {"series": [round(float(x), 1) for x in series], "label": label, "start_local": start, "warnings": warnings}
