@@ -40,8 +40,25 @@ export const getStaticLayers = (id: string) => call<StaticLayers>(`/api/aoi/${id
 export const getImprovements = (id: string) => call<Improvements>(`/api/aoi/${id}/improvements`);
 export const refreshImprovements = (id: string) => call<{ state: string }>(`/api/aoi/${id}/improvements`, { method: "POST" });
 export const getForecast = (id: string, duration_h: number) => call<Forecast>(`/api/forecast?aoi_id=${id}&duration_h=${duration_h}`);
-export const createRun = (p: ScenarioParams, opts?: { flow?: boolean }) =>
-  call<RunResult>(`/api/runs${opts?.flow === false ? "?flow=false" : ""}`, { method: "POST", body: JSON.stringify(p) });
+type RunJob = { job_id?: string; status: "running" | "done" | "error"; run_id?: string; code?: number; error?: string };
+// a run with the flow model takes minutes; holding one request open that long can be dropped on the way (the run
+// finishes, the reply never arrives), so the backend answers at once and the page asks every few seconds
+export async function createRun(p: ScenarioParams, opts?: { flow?: boolean }): Promise<RunResult> {
+  const job = await call<RunJob>(`/api/run-jobs${opts?.flow === false ? "?flow=false" : ""}`, { method: "POST", body: JSON.stringify(p) });
+  const until = Date.now() + 17 * 60_000;  // the backend reports a lost job after 16 min; this is only a backstop
+  let misses = 0;
+  while (Date.now() < until) {
+    await new Promise((res) => setTimeout(res, 3000));
+    let s: RunJob;
+    try { s = await call<RunJob>(`/api/run-jobs/${job.job_id}`); misses = 0; } catch (e) {
+      if (++misses >= 10) throw e;  // a few failed polls (network blip) are retried; the run keeps going on the server
+      continue;
+    }
+    if (s.status === "done" && s.run_id) return getRun(s.run_id);
+    if (s.status === "error") throw new Error(s.error || `${s.code ?? "error"}`);
+  }
+  throw new Error("The run took too long; open it from the runs list when it finishes.");
+}
 export const getRun = (id: string) => call<RunResult>(`/api/runs/${id}`);
 export const getGeoJson = (url: string) => call<GeoJSON.FeatureCollection>(url);
 export const listAois = () => call<AoiListItem[]>("/api/aois");

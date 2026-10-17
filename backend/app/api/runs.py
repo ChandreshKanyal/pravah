@@ -1,5 +1,6 @@
 import logging
 import re
+import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -34,6 +35,50 @@ def create_run(params: ScenarioParams, flow: bool = True, user: dict = Depends(r
     except Exception:  # noqa: BLE001
         log.exception("flow model not started for %s", result.run_id)
     return result
+
+
+RUN_JOB_LOST_S = 960  # past Cloud Run's 900 s request timeout plus margin: a job still "running" was lost with its instance
+_run_pool = None
+
+
+def _run_job(job_id: str, params: ScenarioParams, flow: bool, user: dict) -> None:
+    try:
+        result = create_run(params, flow, user)
+        fs.merge_doc("run_jobs", job_id, {"status": "done", "run_id": result.run_id})
+    except HTTPException as e:
+        fs.merge_doc("run_jobs", job_id, {"status": "error", "code": e.status_code, "error": str(e.detail)[:500]})
+    except Exception as e:  # noqa: BLE001
+        log.exception("run job %s failed", job_id)
+        fs.merge_doc("run_jobs", job_id, {"status": "error", "code": 500, "error": f"{e.__class__.__name__}: {e}"[:500]})
+
+
+@router.post("/api/run-jobs")
+def start_run_job(params: ScenarioParams, flow: bool = True, user: dict = Depends(require("analyst"))):
+    """The website's way to run a scenario: answers at once with a job id, and the page polls GET /api/run-jobs/{id}.
+    A run with the flow model takes minutes on Cloud Run, and a connection held silent that long can be dropped on the
+    way (seen on a phone hotspot: the run finished, the reply never arrived). The job state lives in Firestore, so a
+    poll answered by another instance still sees it. POST /api/runs stays for scripts and the smoke test."""
+    global _run_pool
+    from concurrent.futures import ThreadPoolExecutor
+    _run_pool = _run_pool or ThreadPoolExecutor(2)  # flow simulations queue on their own lock (pipeline/flow.py)
+    job_id = uuid.uuid4().hex[:12]
+    fs.set_doc("run_jobs", job_id, {"status": "running", "aoi_id": params.aoi_id,
+                                    "started_at": datetime.now(timezone.utc).isoformat()})
+    _run_pool.submit(_run_job, job_id, params, flow, user)
+    return {"job_id": job_id, "status": "running"}
+
+
+@router.get("/api/run-jobs/{job_id}")
+def get_run_job(job_id: str):
+    """{status: running | done | error, run_id when done, code and error when it failed}."""
+    doc = fs.get_doc("run_jobs", job_id)
+    if not doc:
+        raise HTTPException(404, "Unknown run job")
+    if doc.get("status") == "running":
+        age = (datetime.now(timezone.utc) - datetime.fromisoformat(doc["started_at"])).total_seconds()
+        if age > RUN_JOB_LOST_S:
+            return {**doc, "status": "error", "code": 504, "error": "The run stopped without a result (the server restarted). Please run it again."}
+    return doc
 
 
 @router.delete("/api/runs/{run_id}")

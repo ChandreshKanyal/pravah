@@ -9,12 +9,15 @@ All work is **committed** on `main` (no git remote is configured, so nothing is 
 12:00 IST.
 
 **Deployed tonight (by the agent, at the human's request):**
-- Backend revision 00003 (2 CPU) is live and healthy. A redeploy with **8 CPU / 8 GiB** (`scripts/deploy_backend.sh`) was
-  started at ~22:00; check `gcloud run services describe pravah-backend --region asia-south1` for revision 00004, then
-  re-time Rudraprayag: `curl -X POST https://pravah-backend-265255051442.asia-south1.run.app/api/runs -d
-  '{"aoi_id":"56f044f26351","rain_source":"historical_extreme","duration_h":4}' -H 'content-type: application/json'`
-  (2 CPU: 263 s total, flow model 249 s; Mac: 57 s; expected 70-90 s on 8 CPU). If it is still slow: option B, lower
-  `flow_max_cell_hours` so large areas use 60 m cells (~8x less work), and re-validate.
+- Backend revision **00004 (8 CPU / 8 GiB)** is live (23:05). Rudraprayag record rain, 4 h: 176 s on a fresh instance,
+  155 s warm (flow model 159 / 142 s); 2 CPU was 263 s, the Mac 57 s. 4x the CPUs gave <2x, so more CPU will not help.
+  Option B (lower `flow_max_cell_hours` so large areas use 60 m cells, ~8x less work, then re-validate) is still open.
+- **Runs are now jobs (23:20, committed, NOT yet deployed):** a 155 s warm run finished on the server ("200 OK" in the
+  log) but the reply never reached the client: a connection silent for minutes was dropped on the way (phone hotspot).
+  The website now calls `POST /api/run-jobs` (answers at once with a job id, the run continues in a thread) and polls
+  `GET /api/run-jobs/{id}` every 3 s; job state is in Firestore `run_jobs` so any instance can answer. A job still
+  "running" after 16 min is reported as lost. `POST /api/runs` is unchanged (scripts, smoke test). Tested locally
+  (done after 104 s; unprepared area -> error 409; unknown job -> 404). Deploy backend first, then hosting.
 - Website deployed; the production build calls Cloud Run **directly** (`frontend/.env.production`), because Firebase
   Hosting's `/api` rewrite to Cloud Run cuts requests at 60 s and runs now take longer. CORS checked from web.app.
 - Deploy fixes: `backend/.gcloudignore` (the upload was 884 MB of local venv), Dockerfile installs `libexpat1` (rasterio
