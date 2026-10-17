@@ -1,15 +1,199 @@
 # Pravah progress
 
-## Current status (hand-off, 2026-10-17 IST, after the policy-maker review)
+## State at stop (17 Oct 2026, ~13:00 IST) - read this first
 
-**Where we are:** S0-S19 plus a policy-maker review pass, all committed **locally**. Backend tests 75/75
+Everything since commit bf3cab5 is **uncommitted** (about 110 files) and **not deployed**. Tests 93/93 (`backend/.venv/bin/python
+-m pytest -q`), `npx tsc --noEmit` clean. Local: backend `uvicorn app.main:app --port 8080` (restart after backend edits),
+frontend `vite --port 5173`. Data lives in Firestore `(default)` and bucket `pravah-dss-data-project-0fd9c4ae-bf90-452f-a80`
+(both asia-south1, ~485 MB). Model: `gemini-3.8-flash` everywhere (LOW thinking; HIGH for the brief and drill plan).
+
+Behaviour the human asked for today (keep it):
+- Map opens on **live roads** (Google traffic layer); scenario closures, flood and routes appear only after Run scenario in
+  this visit (or "Show last run", History, a `?run=` link). No automatic runs. Top bar: forecast, fixes, live/what-if chip,
+  zoom-to-area icon. When settings change after a run, the run fades with "Last run · Run to update".
+- Road closures drawn only on the hazard stretches (`hazard` = flat [a0,b0,...] length fractions per closed edge, from
+  `routing.hazard_pieces`); the rest of a closed edge is thin red "no through road".
+- One **Ask Pravah** assistant (bottom-right Gemini button, every page): streamed answers (`POST /api/assistant/stream`, SSE)
+  with Gemini-style animated sparkle, live step line and "Show thinking"; every action is a card the user confirms.
+- Projects: delete runs and whole areas (permanent, confirmed; `pipeline/cleanup.py`); archive remains the reversible option.
+
+Open items:
+- Commit in pieces (no AI co-author; never `backend/cache/*.json`), then the human deploys: `./scripts/deploy_backend.sh`;
+  `cd frontend && npm run build && cd .. && ~/.npm-global/bin/firebase deploy --only hosting --project project-0fd9c4ae-bf90-452f-a80`;
+  `./scripts/smoke_test.sh`.
+- Every run still becomes the area's default (`run_pipeline` sets `latest_run_id`): the Rudraprayag default is now a dry
+  forecast run, not the record-rain run with the Gemini brief (f253c9ee67ec). Restore via Projects -> Make default, or
+  stop auto-replacing the default.
+- Emulators, rain triggers and the demo 3D flows predate the `tail_h` fix: recompute (heavy on the 8 GB Mac).
+- Gemini returns no thinking summaries at LOW thinking; "Show thinking" lists the real tool steps instead.
+- Takaoka (786e4120442d, Japan): OSM buildings only (16k, partial); fixes job was interrupted by a restart and reruns
+  when its map opens.
+- The Mac swaps heavily (~6 GB swap); slow first loads are mostly that.
+
+## 17 Oct, evening: water timeline, building colours, rain panel, state kept across views
+- **Runaway hour editor (root cause of "water fills the city and never changes")**: the hour-by-hour rain bars rescaled
+  to 1.6x the dragged value on every render, so one drag climbed to 450-2,240 mm/h (Mumbai runs 9dcdc0009045,
+  8f7faab1186f, 451b75a37db4, labelled "edited by hand"). The city flooded fully in hour 1. Now the scale is frozen while
+  dragging, widens only on release, and is capped at 300 mm/h (about the world one-hour record). The backend clamps
+  `rain_series_override` to 0-300 (clamped, not rejected, so old runs still load). Opening a saved run with values over
+  300 drops its edit and goes back to the source rain.
+- **2D flashing**: each hour was a new BitmapLayer (blank while its PNG loaded). Now there is one layer per run, and every
+  hour's PNG is preloaded and swapped in (depth and LSI).
+- **2D envelope (by design, now labelled)**: the hourly map is the SPEC worst-case envelope. Stage never recedes, and urban
+  ponding adds only rain above the 25 mm/h drain capacity, so an early-peak storm floods in its peak hour and then holds.
+  The legend reads "Deepest flood so far ... see 3D for water draining away". *Not done:* driving the 2D map from the flow
+  model's frames (possible: render `flow/frames.bin` hours to PNG).
+- **3D first run**: the hourly model now plays from the start like the flow model (it used to jump to the last hour). It
+  switches to the flow model when that finishes, unless the person chose a model, and no longer refetches on every
+  flow-status poll.
+- **3D buildings by water over time**: each building takes the deepest water in the grid cells under its footprint, padded
+  by half a cell, for the frame nearest the current time. Grey under 15 cm, yellow from 15 cm, orange from 50 cm, red
+  from 1 m. Recoloured only when a building changes class. The brief's static risk colours remain when no water frames
+  are loaded.
+- **Rain panel redesign**: one switch with four sources (Forecast / Past day / Record / Design). Each source shows its
+  choices in the same "label over chips" layout:
+  - Forecast: Day, plus Case (as forecast / worse than forecast with a multiplier).
+  - Past day: recent days and the wettest days.
+  - Design: Strength (IMD heavy, very heavy, extreme, cloudburst, your own).
+  Then come Duration, Shape and the hourly card, which shows its total and peak. "Intensity" is now "Average rain over the
+  storm", because early peak concentrates it (72 mm/h for 7 h means a 264 mm/h peak hour). The IMD chips no longer silently
+  switch the source. A new River section holds river level and upstream flow (moved out of Advanced).
+- **Map state survives 3D / brief / drill**: settings, layers, tab, hour, map type, the shown run and the camera are saved
+  per area in sessionStorage (`pravah:ws:{aoiId}`) and restored, without re-fitting the view. The shown run is written to
+  `?run=`, so 3D opens the same run.
+- Verification run fdbf999057a3 (Mumbai, IMD very heavy, 7 h, early peak; peak 71 mm/h) is now Mumbai's default run,
+  replacing the broken 2,237 mm/h one.
+
+## 17 Oct, afternoon
+
+- Fixed: Firestore now rejects arrays inside arrays (`overlay_corners`): `services/firestore.py` wraps inner arrays as
+  {"_a": [...]} on write and unwraps on read (new runs were failing to save). Run list (`/api/aoi/{id}/runs`) uses a field
+  projection plus an in-memory per-run summary (13 s -> 0.1 s); Projects counts use the projection too.
+- Preparation: "Fix before the rain" runs in a background thread after the area is ready (`improvements.start`, chip shows
+  the step); channel rasterising in one pass (was minutes in a large city); a preparation interrupted by a restart resumes
+  when the area is chosen again (`prepare_area.ACTIVE`); OSM building footprints when Open Buildings has no coverage
+  (`osm.buildings`), heights from `height` / `building:levels`.
+- 3D: buildings were not drawn after a comment swallowed the `.then` chain of the buildings fetch (fixed); the shaded
+  base texture no longer overwrites Sentinel-2 imagery when it loads later; empty building lists are not cached.
+- Street View: Google-only outdoor panoramas within 100 m / 300 m / 1 km (user photo spheres rendered black), Back to map
+  button, Esc, overlays hidden while open.
+- Snackbar: the same message replaces itself instead of stacking.
+
+## 17 Oct, late morning: map declutter and "Fix before the rain"
+
+- **Map declutter** (human: "too cluttered"): rasters, roads, closing bridges and hospitals cut at the drawn box (people and
+  flooded area are only counted inside it; the 3 km buffer is hydrology only); default layers are flood, road status,
+  routes, shelters in use, closing bridges; marker ids only at zoom >= 15; smaller shelter markers. Google POI density
+  can only be lowered in the Cloud Console map style (Map ID), not in code.
+- **Fix before the rain** (human asked for Gemini to look at Street View/satellite near drains, garbage, parked cars and flag
+  spots with proof). Built differently, on purpose (decision): Google satellite/Street View may not be sent to AI (Maps
+  terms), and 10 m open imagery cannot see a blocked drain or rubbish, so a Gemini "finding" there would be invented.
+  Three evidence kinds, kept apart in the UI: **web** (Gemini + Google Search; a link is kept only if its site was a
+  grounding source or the page opens and names the place; Google geocoding, vague results dropped; compared with HAND /
+  road hollows), **imagery** (Sentinel-2 NDVI on mapped rivers/canals, culverted stretches excluded; Dynamic World built-up
+  or bare-ground change since 2016-17 on former wetland or the floodway; Gemini reviews before/after or true/false-colour
+  clips and leads it says the images contradict are dropped), **model** (culverts and drain crossings by catchment and
+  people on low ground, bridge openings capped at 3; urban road hollows 2-300 cells; graph-bridge roads that are the only
+  drivable way out, on low ground or over a stream). People open Google imagery/Street View themselves; "Check in the
+  field" opens Field check with the place preset. Code: `engines/improvements.py`, `pipeline/improvements.py` (steps
+  `clogged`, `congested`, `improvements`, run in the background once the area is ready), `api/improvements.py`,
+  `src/components/ImprovementsPanel.tsx`; Methods section "Fix before the rain". Links: `?fixes=1`, `?fix=I3`.
+  Built for both demo areas (Mumbai 20 items: 2 reported, 8 culverts/bridges, 6 single exits, 2 low spots, 2 new
+  construction; Rudraprayag 15). About 1.5 min per area. Tests 92/92, tsc clean.
+- **Ask Pravah everywhere** (human request): one Gemini assistant on every page (`agents/assistant.py`, `POST /api/assistant`,
+  `src/components/Assistant.tsx`) replaces the map-only chat. General facts via Gemini + Google Search (sources shown);
+  `find_place` (geocoding), `list_my_areas`, the read-only analysis tools when an area is open; anything that moves,
+  prepares, runs or switches layers is a *proposed action* the user confirms (run settings validated against
+  ScenarioParams). Map commands go through a `pravah:command` event (pending in sessionStorage until the map loads).
+- Afternoon fixes: live roads (Google traffic) until a scenario is run in the visit; road closures drawn only on the
+  hazard stretches ("no through road" for the rest); Firestore nested-array encoding (new runs were failing to save);
+  run list via field projection + summary cache (13 s -> 0.1 s); "Fix before the rain" runs after the area opens;
+  interrupted preparations resume; OSM building fallback outside Open Buildings coverage; delete runs and areas.
+
+- Loading screen now speaks in stages (terrain, weather and history, roads, population, infrastructure, risk, clogged
+  drains, congested roads, analytics) with the active one spinning.
+
+## Overnight pass (16-17 Oct, human asleep: "do whatever you want")
+
+Human asks, in order: merge Decision/Analyst into one view; rain options must change the simulation accurately; remove the
+India past-flood/landslide overlays (mostly rivers); bridges closed only when under construction or overtopped; make real
+use of AI/GenAI for a production-grade simulator and preparedness tool; self-explanatory journey; a Projects tab to keep
+areas and runs as experiments; then audit the engine and fix flaws. All of it is **uncommitted** (see "State at stop").
+
+**Done and verified (tests 86/86, `npm run build` passes, screenshots checked):**
+- One view (no mode switch); rain presets server-side (`rain_preset`), IMD-consistent "Early peak" design storm, cloudburst
+  fixed (100 mm in the peak hour), live preview of the exact hourly rain, "settings changed" notice; India map overlays gone.
+- **Bridges** (`engines/bridges.py`): real OSM spans (the routing graph merges spans into km-long edges), deck height = HAND
+  at the abutments (3 m minimum, flagged), close only when the reach stage reaches the deck (optional margin,
+  `bridge_margin_m`) or from hour 1 when OSM says construction/closed/disused; flyovers never close on stage. Backfilled for
+  all prepared areas (`scripts/build_bridges.py`); new areas get it in the network step.
+- **Landslide road closures** use the landslide index with the distance-to-road factor neutral (`lsi_static_noroad`):
+  road cells were 6.5x over-represented in class 5. Rudraprayag record rain: roads closed 138 -> 36, bridges closing
+  14 -> 2, people to move 2,295 -> 1,281, gap 1,367 -> 617 (the LSI was also recomputed with current training code).
+- **FSI** ignores satellite flood pixels > 20 m above drainage or on slopes > 10 deg. **Dry forecast** windows no longer
+  start in hours already past.
+- **Projects page** (`/projects`): areas, every saved run with title, notes, star, compare (up to 3), default run (what
+  Brief/Map/3D open), archive, copy link; `?run=` opens any run on Map, 3D and Drill, and the area nav keeps it.
+  Optional run name before running.
+- **AI emulator** (`engines/emulator.py`, `pipeline/emulator.py`): ~100 shallow-water runs per area (64-storm Sobol
+  design + 36-run sweep), POD + thin-plate RBF on physically meaningful features (rain above drain capacity, its peak,
+  total, duration, river level), leave-one-out validated. Mumbai: median CSI 0.97, p10 0.87, depth MAE 1.5 cm; answers
+  in ~2 ms. "What-if" tab: live sliders, overlay, people in knee-deep water, IMD category, "set up as full scenario".
+- **Rain triggers** per OSM settlement (mm in 1/3/6 h, IMD category) from the physics sweep itself (not the emulator,
+  which was inconsistent at 1 h).
+- **Gemini tabletop drill** (`agents/drill.py`, `/area/:id/drill`): deterministic model timeline -> 7-9 grounded injects
+  (ids and numbers checked, 2 labelled fictional), each decision scored 0-3, after-action report; rules fallback.
+- **CAP 1.2 public alert drafts** (`agents/alerts.py`, Brief -> "Public alert"): EN + HI text checked against facts,
+  flooded-area polygons, CAP levels, status always Draft, XML for SACHET.
+- **2D-model cross-check** in Results (HAND map vs shallow-water model: area, people, agreement) and people counts in the
+  flow summary. Ask Pravah has two new tools: `instant_what_if`, `rain_triggers`. Brief rules/prompt treat
+  construction bridges as "confirm with PWD", not "close".
+- "Next steps" row in Results (brief, 3D, drill, Projects). Demo areas refreshed (`preprocess_demo_aoi.py all --force
+  lsi,fsi`): Rudraprayag default run `f253c9ee67ec` (Gemini brief), Mumbai `7005b50db709` (10,829 to move, gap 498; 14
+  bridges closing = OSM construction, urban mode has no river stage). Old default runs remain in Projects.
+
+**17 Oct morning (human back):**
+- Hour-by-hour rain editor (`components/RainHours.tsx`, `POST /api/aoi/{id}/rain-hours`): the exact mm per hour the
+  model will use, filled automatically from the source (forecast day, worst, record, IMD preset, custom, or the new
+  **Past** source: a past day's observed rain from NASA IMERG, `rain_source=observed` + `observed_date`, with chips for
+  the last 10 days and the 3 wettest of 90). Dragging an hour makes it `rain_series_override` (label "... (edited by
+  hand)", clock kept via `override_start_local`); changing any rain setting refills it; Reset returns to the source.
+- Engine flaw fixed: the 2D model stopped when the rain stopped, so water arriving later from uphill never counted
+  (short storms looked safer than long ones in the triggers). It now runs `TAIL_H = 2` h after the rain (3D timeline
+  extends with 0 mm hours; emulator training uses it too). **The emulators, triggers and demo flows computed overnight
+  predate this and must be recomputed** (heavy on this 8 GB Mac: run when the laptop is free).
+
+**Open / next (overnight, as of 17 Oct ~07:40 IST):**
+- This Mac (M1, 8 GB) swapped hard under several numba jobs plus the desktop apps (115 MB free, 3.4 GB compressed);
+  model runs slowed from ~12 s to ~3 min. Firestore writes then timed out and killed two jobs: emulator and flow
+  status writes are now best effort (final state retries). Training is cheaper now: big grids (> 200k cells) train on
+  60 m cells with 32 Sobol storms + 10 sweep sizes; `train(aoi, sweep_only=True)` keeps the stored emulator and
+  reruns only the trigger sweep.
+- Running in the background: Mumbai trigger sweep (keeps its validated 66-run emulator, median CSI 0.97), then
+  Rudraprayag full training at 60 m. Check `GET /api/aoi/{id}/emulator` -> "ready" and `/triggers`. If it did not
+  finish: `cd backend && .venv/bin/python -c "from app.pipeline import emulator; emulator.train('56f044f26351')"`.
+- Bug found and fixed after the demo refresh: OSM "under construction" bridges (closed from hour 1) set the evacuation
+  deadline to "before the rain starts" and counted as storm closures. Now only bridges the river overtops drive the
+  deadline, K4 and the "Bridges closed" label (test added). **The Mumbai default run `7005b50db709` was made before
+  this fix: re-run it** (`backend/.venv/bin/python scripts/preprocess_demo_aoi.py mumbai`, then POST its flow).
+- Both demo briefs are Gemini now (Mumbai v2). 3D flow ready for both new default runs (Rudraprayag 2D model wets
+  3.15 km2 vs HAND 0.23 km2, CSI 0.04: shown as "models disagree" in Results; Mumbai CSI 0.36).
+- Urban mode: Mithi river bridges never overtop (no river stage in urban mode); stated limitation.
+- Nothing committed. Suggested commits: (1) engine fixes (bridges, road-neutral LSI, FSI mask, forecast window, presets);
+  (2) flow model + 3D page; (3) AI: emulator, triggers, drill, alerts, chat tools; (4) Projects + journey; (5) theme +
+  legends (the stopped sub-agent's work: reviewed overnight; the key lists only symbols drawn at the selected hour from the
+  same definitions as the map, red = closed throughout, so "Road closed" appears whenever closed roads are drawn); (6) docs. Never commit `backend/cache/*.json`; no AI co-author.
+
+## Previous hand-off (2026-10-16 20:30 IST, after the policy review and the 3D water-flow pass)
+
+**Where we are:** S0-S19 plus a policy-maker review pass, all committed **locally**. Backend tests 81/81
 (`cd backend && .venv/bin/pytest -q`); frontend `npm run build` passes; local smoke test passes
 (`scripts/smoke_test.sh http://localhost:8080`). UI checked in a real Chrome window (Brief, Map, Compare, Methods track
 record, Field check at phone width). **Deployed:** still only S0; the human redeploys.
 **Local preview:** backend `cd backend && .venv/bin/uvicorn app.main:app --port 8080`, frontend `cd frontend && npx vite`
--> http://localhost:5173. Decision view is the default (top-right switch); Analyst view shows every control.
+-> http://localhost:5173. One view for everyone (the Decision/Analyst switch was merged away on 16 Oct): every control and layer is shown.
 
-**What changed in the policy review (17 Oct):**
+**What changed in the policy review (16 Oct):**
 - Brief rebuilt for a District Magistrate: deterministic bottom line (who moves, from where, by when, shelter gap), rounded
   figures with a sensitivity range (depth +-30 %, population +-20 %), "who must move" breakdown, OSM place names and landmarks
   instead of ids, one responsible department and a deadline per action, Sphere supplies, official IMD/CWC panel (typed by
@@ -17,12 +201,46 @@ record, Field check at phone width). **Deployed:** still only S0; the human rede
   Hindi (numbers checked), WhatsApp / 2G plain text.
 - Map: clock times for forecast scenarios and an evacuation-window marker, IMD rain presets, pilgrims/tourists input,
   gauge-style river input, searchable shelters, only used shelters drawn, one meaning per colour (red = closed), dashed
-  white area boundary, scenario comparison tab, technical layers and 3D only in Analyst view.
+  white area boundary, scenario comparison tab, technical layers and 3D (now in the single merged view).
 - Field check works offline on phones (IndexedDB queue, device location). Sign-in and roles coded, **off by default**
   (enable: docs/CONFIG.md). Old areas can be archived from Explore.
 - Evidence: `scripts/event_replay.py` replays IMERG rain of recorded events; results on Methods -> Track record.
   **Finding:** the Himalayan landslide trigger was NOT reached for any of 3 recorded Rudraprayag events (0.36-0.95 of the
   threshold) -> stated in Methods, limitations and every brief where the trigger is not reached. Mumbai: reached for both.
+
+**What changed in the 3D water-flow pass (16 Oct evening):**
+- New second flood model for the 3D view: `engines/swe.py`, the 2D shallow-water equations (finite volume, HLL, Chen &
+  Noelle 2017 hydrostatic reconstruction, implicit Manning, CFL 0.45, outflow-only edges), numba-compiled. It runs
+  automatically in the background after every scenario (`pipeline/flow.py`, Firestore `flows/{run}`), about 1 min for
+  Mumbai and 2-3 min for Rudraprayag at 30 m on 2 vCPU (longer storms over big areas switch to 60 m cells). Frames every
+  5 min (depth + velocity) go to GCS `runs/{id}/flow/frames.bin` (gzip, 2.5-5 MB).
+- Ground: FABDEM bare earth for all areas (`services/terrain.py`); hilly areas are breached 4-connected (Lindsay 2016) so
+  streams pass the false dams of narrow gorges. Before: canopy pits of 15-28 m filled with water.
+- Checks (`tests/test_swe.py`, 6): lake at rest exact, Manning steady depth on 5 % and 60 % slopes, mass error ~1e-15,
+  no inflow through the edge, inflow volume, breaching, frame coding. Backend tests 81/81.
+- 3D page rebuilt in three.js (`frontend/src/three/`): terrain from the same ground, Sentinel-2 true colour (Earth Engine,
+  cached per area), water as an animated surface (flow-advected ripples, sky reflection, foam on fast water, smooth
+  shorelines), white flow lines, "Danger to people" colouring (FD2321 hazard rating), model-cell boxes, click a
+  spot for its depth/speed now, arrival and peak time and a depth-over-time chart, continuous storm timeline with speed.
+- Demo runs have flow results: Rudraprayag `cd03a7237c8c` (max 5.7 m, 6.1 m/s, water >= 5 cm on 3.1 km², 53 % of the HAND
+  flood area also wet); Mumbai `b72eb7c305fb` (max 3.3 m, 4.2 km², all of the HAND ponding area also wet).
+- The brief and 2D map still use HAND (and the SPEC §2.4 disclaimer names HAND); the flow model is shown next to it.
+
+**State at stop (16 Oct ~21:00 IST, human paused work to review): NOTHING from the 3D water pass is committed.**
+- Done and checked in Chrome (uncommitted): flow model + API + 3D page (above), Methods "Water flow (3D)" section,
+  README API rows, smoke test checks that the flow job starts, numba in `backend/requirements.txt` (+ `NUMBA_CACHE_DIR`
+  in the Dockerfile), `@deck.gl/mesh-layers` removed (3D is three.js). Backend tests 81/81; `npx tsc --noEmit` clean.
+  API path verified: POST `/api/runs/90bbc88655b8/flow` -> queued -> running -> ready in 68 s (30 m, Mac).
+- A sub-agent ("day/night toggle + legend audit", human request) was **stopped mid-way**, its work is unreviewed:
+  restored theme toggle (`frontend/src/theme.ts`, App.tsx top bar, MapCanvas colour scheme, index.html), 3D pill in the
+  Decision nav, and partial legend/colour/road-status edits in `MapLegend.tsx`, `layers/factories.ts`, `LayerPanel.tsx`,
+  `Results.tsx`, `TimeSlider.tsx`, `Workspace.tsx`, `styles.css`. It had checked tooltips vs legend (Decision view) and was
+  about to check the technical layers (the views are now merged). Next: review that diff, finish the legend audit (one colour = one meaning, swatches match
+  rendering, "Closed" entry whenever roads are drawn closed, light + dark, both demo areas, hour 1 and last hour).
+- Then: `cd frontend && npm run build`, screenshots, commit in logical pieces (backend flow model; 3D page; theme +
+  legends), never with an AI co-author line.
+- Uncommitted flow fixes not yet in the running backend: stale-job rule (5 min without progress) and 10-minute frames
+  for storms > 6 h; restart uvicorn to pick them up. `backend/cache/*.json` files are local caches (do not commit).
 
 **Human to-do (in order):**
 1. Deploy (agent deploys are blocked):
@@ -31,8 +249,8 @@ record, Field check at phone width). **Deployed:** still only S0; the human rede
 3. Decide on sign-in for the demo (docs/CONFIG.md steps; leaving it off lets judges try everything, approvals then record
    typed names as unverified).
 4. Demo day only: `MIN_INSTANCES=1 ./scripts/deploy_backend.sh`; set back to 0 afterwards.
-5. Click through (Decision view): Explore -> Rudraprayag -> Brief (Hindi, Share, Approve) -> Map (hours, compare) -> Methods
-   track record; Analyst view: scenario presets, 3D, Ask Pravah.
+5. Click through: Explore -> Rudraprayag -> Brief (Hindi, Share, Approve) -> Map (hours, compare) -> Methods
+   track record; scenario presets, 3D, Ask Pravah.
 6. S18.5: confirm submission requirements on the Hack2skill dashboard (repo, video, deck, write-up).
 7. Optional: confirm NASA GLC and GRIP4 licence terms; Weather API caching period.
 
@@ -82,7 +300,8 @@ scenarios; Gemini HIGH thinking takes about 1 min per brief (background job); IM
 | S17 deployment | scripts ready, **not deployed** | 2026-10-16 02:00 | `scripts/smoke_test.sh` (passes locally), deploy script sets Firebase CORS + `MIN_INSTANCES`; httpx URL logging silenced (keys were in query strings). | | | Run the deploy + smoke test (hand-off above). |
 | S18 demo prep | done (local) | 2026-10-16 02:25 | `scripts/preprocess_demo_aoi.py` (both demo AOIs + run + advisory), `scripts/backtest.py` (GFD POD/FAR/CSI -> `meta.backtest`, shown on Methods). Both boxes have no GFD pixels: reported as such. | | | Record the 3-minute demo video (S18.3). |
 | S19 3D view | done (local) | 2026-10-16 02:30 | `api/view3d.py` (DEM float32 mesh, hillshade + depth texture per hour, buildings with ground z, height and run risk), `pages/View3D.tsx` (standalone deck.gl, SimpleMeshLayer terrain + extruded PolygonLayer, exaggeration, time slider). | TerrainLayer did not render in this setup; a custom mesh in UTM metre offsets aligns exactly with buildings. No Google 3D tiles / Elevation API. | | |
-| Policy review | done (local), not deployed | 2026-10-17 | See hand-off. Backend: `services/places.py`, `auth.py`, facts (round_people, deadlines, bottom_line, supplies, road/shelter names), runs API (versions, review, audit, translate, share.txt), aoi API (runs list, official, archive), run fields (start_local, evac_window_h, demand_breakdown/range, gap_range), params (preset_label, visitors, rain_series_override), IMERG hourly; `scripts/event_replay.py`. Frontend: Decision/Analyst (`mode.ts`), Brief page, OfficialStatus, CompareRuns, TimeSlider clock + window, ScenarioPanel presets, LayerPanel gating, offline field check, sign-in (`auth.ts`). Tests `tests/test_policy.py` (10). | Ranges are a what-if band (depth +-30 %, population +-20 %), not a statistical interval. deck.gl overlay is non-interleaved in all browsers (9.4 interleaved race). Approvals without sign-in record typed names as unverified. IMD/CWC entered by staff (no scraping). | Satellite-rain landslide trigger (LHASA-style percentile) not yet built. | Deploy; decide sign-in. |
+| 3D water flow | done (local), not deployed | 2026-10-16 20:30 | `engines/swe.py` (2D shallow water, numba), `pipeline/flow.py` (background job, inflow at entering rivers, HAND comparison), `services/terrain.py` (FABDEM + breaching), `api/flow.py`, `api/view3d.py` (flow ground, Sentinel-2 imagery, per-area buildings + per-run risk), `frontend/src/three/` (scene, shaders, FlowTimeline), `pages/View3D.tsx` rebuilt, Methods "Water flow (3D)". Tests `tests/test_swe.py` (6). | 3D page uses three.js instead of standalone deck.gl (custom water shaders, vertex texture fetch). The flow model is a second model; the brief stays on HAND. | Brief/2D map could switch to the flow model later (changes every demo number and the mandated disclaimer). | Deploy (adds numba to requirements). |
+| Policy review | done (local), not deployed | 2026-10-16 | See hand-off. Backend: `services/places.py`, `auth.py`, facts (round_people, deadlines, bottom_line, supplies, road/shelter names), runs API (versions, review, audit, translate, share.txt), aoi API (runs list, official, archive), run fields (start_local, evac_window_h, demand_breakdown/range, gap_range), params (preset_label, visitors, rain_series_override), IMERG hourly; `scripts/event_replay.py`. Frontend: Decision/Analyst (`mode.ts`), Brief page, OfficialStatus, CompareRuns, TimeSlider clock + window, ScenarioPanel presets, LayerPanel gating, offline field check, sign-in (`auth.ts`). Tests `tests/test_policy.py` (10). | Ranges are a what-if band (depth +-30 %, population +-20 %), not a statistical interval. deck.gl overlay is non-interleaved in all browsers (9.4 interleaved race). Approvals without sign-in record typed names as unverified. IMD/CWC entered by staff (no scraping). | Satellite-rain landslide trigger (LHASA-style percentile) not yet built. | Deploy; decide sign-in. |
 
 ## Decisions
 - `pravah/` has its own git repo (`git init` inside it); the parent home directory is also a git repo, left untouched.
@@ -99,7 +318,18 @@ scenarios; Gemini HIGH thinking takes about 1 min per brief (background job); IM
   urban/scope fixes found while testing Mumbai. Human (16 Oct): UI must look and feel like a Google product -> Material 3.
 - Landslide modulation changed from graded g (16 Oct "soften + scope") to class shift + LHASA-style rain gate (configurable,
   `lsi_modulation=graded_g` restores the old behaviour).
-- Policy review (17 Oct, human "do all" after a critique): Decision view is the default; analysts switch to Analyst view.
+- Policy review (16 Oct, human "do all" after a critique): Decision view is the default; analysts switch to Analyst view.
+- Views merged (16 Oct, human: "merge them both, it confuses the user"): the Decision/Analyst switch is gone; one view shows every control and layer (`mode.ts` deleted). Areas with a run open on the Brief; top bar Brief, Map, 3D, Field check. Roles from sign-in still gate running and approving.
+- Rain options audited (16 Oct, human: options must change the simulation with accurate data). Spec deviation: "Early peak" is no longer a linear triangle but the alternating-block design storm on the IMD reduction curve P_t ~ t^(1/3) (Chow et al. 1988), so every k-hour window around the peak holds the IMD k-hour depth; total unchanged. IMD presets are now a `rain_preset` param built server-side (`rainfall.preset_series`; previously a rounded manual intensity). Cloudburst fixed: was 100 mm/h x H through a triangle (4 h = 400 mm, 160 mm/h peak); now peak hour exactly 100 mm, 100 x H^(1/3) mm in H h, always early-peaked. Rain shape hidden where it has no effect (forecast sources, cloudburst). Panel shows the exact hourly series the model receives (`frontend/src/rain.ts` mirrors the backend) and flags settings that differ from the run on the map.
+- India map history overlays removed (16 Oct, human: the red areas were mostly rivers and water bodies). Check found the GFD heat map (MODIS 2000-2018) misses Mumbai 2005 and Kerala 2018 and marks ridge pixels 460-600 m above drainage near Rudraprayag as flooded. Explore no longer shows past floods or landslide dots; in an area, "Past incidents" (reported landslides, web reports) draws only once a scenario has run. Open: GFD counts are still an FSI input (`fsi.py` "hist"); masking them by HAND/slope was proposed, not done. (Done overnight: HAND <= 20 m and slope <= 10 deg.)
+- Bridges (16 Oct night, human: "closed only when actually closed for construction or water above the bridge height").
+  Spec deviation: the spec's single `bridge_cut_stage_m` (3 m for every bridge) is replaced by per-span deck heights
+  (HAND at the abutments) and OSM status; approach flooding and landslides no longer close a bridge (the roads beside it
+  still close on their own). `bridge_cut_stage_m` kept only so old runs load.
+- Landslide road closures use a road-neutral LSI (16 Oct night). Spec deviation: S8.1 used the displayed LSI.
+- AI emulator, triggers, drills, CAP alerts, Projects (16 Oct night, human: "real use of AI ... production ready ...
+  projects tab"). Triggers come from a physics sweep, not the emulator (emulator thresholds were non-monotone in duration).
+  Alerts are CAP status Draft with a non-official sender; never auto-issued.
 - Brief headline is deterministic (bottom line); Gemini writes the situation summary and recommendations, still validated.
 - Uncertainty is shown as a sensitivity range: demand re-counted with flood depth x0.7/x1.3 and population x0.8/x1.2.
 - Every action has one owner from a fixed list of Indian district departments and a model-derived deadline.
@@ -110,3 +340,13 @@ scenarios; Gemini HIGH thinking takes about 1 min per brief (background job); IM
 - deck.gl GoogleMapsOverlay runs non-interleaved everywhere: 9.4's interleaved mode can create the Deck before the map's GL
   context arrives, leaving a 300x150 canvas (layers clipped); seen in Chrome and Safari.
 - Event replays use IMERG V07 hourly rain; the landslide trigger miss in Rudraprayag is published, not tuned away.
+- 3D water (16 Oct): a 2D shallow-water model runs per scenario in the background for the 3D view; the brief keeps HAND so
+  its numbers and the SPEC disclaimer stay as they are; the 3D panel reports the agreement between the two.
+- The flow model and the 3D terrain use FABDEM bare earth (GLO-30 canopy made 15-28 m pits); hilly areas are breached
+  4-connected (8-connected cuts are still dams for a face-flux solver), cities keep their hollows.
+- Flow inputs mirror the HAND model's: same runoff coefficients, TP-29 ARF over the drawn box, urban drain capacity,
+  upstream inflow shared by new outside catchment at entering reaches, river level above normal as rating-curve discharge
+  on rivers with >= 100 km2 outside catchment.
+- Danger to people uses the DEFRA/EA FD2321 hazard rating (debris factor 0.5 above 0.25 m), drawn in purples so it does
+  not clash with red/orange building risk.
+- 3D frames are 8-bit (sqrt-coded depth from 1 cm, signed sqrt velocity to 8 m/s), 5-minute steps (10 for storms > 6 h).
