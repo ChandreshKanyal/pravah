@@ -64,3 +64,67 @@ def pois_and_waterways(bbox: tuple[float, float, float, float]) -> tuple[gpd.Geo
     if "tunnel" in gdf:
         is_water |= (gdf["tunnel"] == "culvert").fillna(False).astype(bool)
     return gdf[~is_water].reset_index(drop=True), gdf[is_water].reset_index(drop=True)
+
+
+ROAD_BRIDGE_COLS = ["name", "highway", "construction", "access", "bridge", "layer", "disused", "abandoned"]
+
+
+def bridge_ways(bbox: tuple[float, float, float, float]) -> gpd.GeoDataFrame:
+    """Road and footway bridges as OSM mapped them (one way per span or carriageway), before graph simplification
+    merges each span into the roads on either side. Railway, aqueduct and pipeline bridges are left out."""
+    try:
+        gdf = _retry(ox.features_from_bbox, bbox, {"bridge": True})
+    except ox._errors.InsufficientResponseError:
+        return gpd.GeoDataFrame(columns=["osmid", "geometry", *ROAD_BRIDGE_COLS], geometry="geometry", crs="EPSG:4326")
+    gdf = gdf.reset_index()
+    gdf = gdf[(gdf["element"] == "way") & gdf.geometry.geom_type.eq("LineString")]
+    gdf = gdf[gdf["highway"].notna()] if "highway" in gdf else gdf.iloc[0:0]
+    gdf["osmid"] = "way/" + gdf["id"].astype(str)
+    for c in ROAD_BRIDGE_COLS:
+        gdf[c] = gdf[c].astype("string") if c in gdf else None
+    return gdf[["osmid", "geometry", *ROAD_BRIDGE_COLS]].reset_index(drop=True)
+
+
+ROAD_BRIDGE_COLS = ["name", "highway", "construction", "access", "bridge", "layer", "disused", "abandoned"]
+
+
+def bridge_ways(bbox: tuple[float, float, float, float]) -> gpd.GeoDataFrame:
+    """Road and footway bridges as OSM mapped them (one way per span or carriageway), before graph simplification
+    merges each span into the roads on either side. Railway, aqueduct and pipeline bridges are left out."""
+    try:
+        gdf = _retry(ox.features_from_bbox, bbox, {"bridge": True})
+    except ox._errors.InsufficientResponseError:
+        return gpd.GeoDataFrame(columns=["osmid", "geometry", *ROAD_BRIDGE_COLS], geometry="geometry", crs="EPSG:4326")
+    gdf = gdf.reset_index()
+    gdf = gdf[(gdf["element"] == "way") & gdf.geometry.geom_type.eq("LineString")]
+    gdf = gdf[gdf["highway"].notna()] if "highway" in gdf else gdf.iloc[0:0]
+    gdf["osmid"] = "way/" + gdf["id"].astype(str)
+    for c in ROAD_BRIDGE_COLS:
+        gdf[c] = gdf[c].astype("string") if c in gdf else None
+    return gdf[["osmid", "geometry", *ROAD_BRIDGE_COLS]].reset_index(drop=True)
+
+
+def buildings(bbox: tuple[float, float, float, float], crs: str) -> gpd.GeoDataFrame:
+    """OpenStreetMap building footprints, the fallback where Google Open Buildings has no coverage (e.g. Japan, Europe,
+    North America). Height from the `height` tag, else `building:levels` x 3 m; NaN when neither is mapped."""
+    import numpy as np
+    try:
+        gdf = _retry(ox.features_from_bbox, bbox, {"building": True})
+    except ox._errors.InsufficientResponseError:
+        gdf = gpd.GeoDataFrame(columns=["geometry"], geometry="geometry", crs="EPSG:4326")
+    gdf = gdf[gdf.geometry.geom_type.isin(["Polygon", "MultiPolygon"])].reset_index(drop=True)
+
+    def num(col):
+        if col not in gdf:
+            return np.full(len(gdf), np.nan)
+        return gdf[col].astype(str).str.extract(r"([0-9]+(?:\.[0-9]+)?)")[0].astype(float).to_numpy()
+    h = num("height")
+    h = np.where(np.isfinite(h), h, num("building:levels") * 3.0)
+    out = gpd.GeoDataFrame({"geometry": gdf.geometry.values}, geometry="geometry", crs="EPSG:4326").to_crs(crs)
+    out["area_m2"] = out.geometry.area
+    out["confidence"] = 1.0
+    out["height_m"] = np.where((h > 0) & (h < 400), h, np.nan)
+    out["presence_2023"], out["presence_2016"] = 1.0, np.nan
+    out = out[out["area_m2"] >= 10].reset_index(drop=True)
+    out["bid"] = [f"o{i}" for i in range(len(out))]
+    return out[["bid", "geometry", "area_m2", "confidence", "height_m", "presence_2023", "presence_2016"]]

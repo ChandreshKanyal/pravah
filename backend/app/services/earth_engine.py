@@ -291,3 +291,107 @@ def fetch_fabdem(grid: GridSpec) -> np.ndarray:
     col = ee.ImageCollection(FABDEM_ID)
     img = col.filterBounds(grid_region(grid)).mosaic().setDefaultProjection(col.first().projection()).rename("dem_bare")
     return fetch_grid(resample(img, "bilinear"), grid, ["dem_bare"])["dem_bare"]
+
+
+def s2_rgb(grid: GridSpec, k: int = 3) -> np.ndarray:
+    """Cloud-masked Sentinel-2 true colour (median of the last dry season) on the grid at cell / k, uint8 RGB, for the
+    3D terrain texture. Copernicus Sentinel data are free and open (attribution required)."""
+    init_ee()
+    region = grid_region(grid)
+    d0, d1 = _last_dry_season(date.today())
+
+    def clear(img):
+        scl = img.select("SCL")  # 3 cloud shadow, 8-9 cloud, 10 cirrus
+        return img.updateMask(scl.neq(3).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10)))
+
+    col = (ee.ImageCollection(S2_ID).filterBounds(region).filterDate(d0, d1)
+           .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 40)).map(clear))
+    img = col.select(["B4", "B3", "B2"]).median().visualize(min=0, max=2600, gamma=1.2)
+    fine = GridSpec(crs=grid.crs, x0=grid.x0, y0=grid.y0, cell=grid.cell / k, width=grid.width * k, height=grid.height * k)
+    arr = _compute_block(img, fine, 0, 0, fine.height, fine.width)
+    return np.stack([arr["vis-red"], arr["vis-green"], arr["vis-blue"]], axis=-1).astype(np.uint8)
+
+
+# ---------- improvements: open imagery that may legally be analysed by AI (Copernicus Sentinel, Dynamic World, JRC) ----------
+S2_L1C_ID = "COPERNICUS/S2_HARMONIZED"  # top-of-atmosphere, archive from 2015 (SR coverage over India starts later)
+EARLY = ("2016-01-01", "2017-12-31")    # "before": the first full years of Sentinel-2 and Dynamic World
+
+
+def box_grid(grid: GridSpec, bbox, cell: float = 10.0) -> GridSpec:
+    """A grid over the drawn box only (in the analysis grid's CRS) at Sentinel-2 resolution."""
+    from app.engines.grid import _to_utm
+    w, s, e, n = bbox
+    xs, ys = _to_utm(grid.crs).transform([w, e, e, w], [s, s, n, n])
+    x0, y1 = min(xs), min(ys)
+    return GridSpec(crs=grid.crs, x0=float(x0), y0=float(max(ys)), cell=cell,
+                    width=int(np.ceil((max(xs) - x0) / cell)), height=int(np.ceil((max(ys) - y1) / cell)))
+
+
+def _l1c_clear(img):
+    qa = img.select("QA60")  # bits 10 and 11: opaque cloud and cirrus
+    return img.updateMask(qa.bitwiseAnd(1 << 10).eq(0).And(qa.bitwiseAnd(1 << 11).eq(0)))
+
+
+def _sr_clear(img):
+    scl = img.select("SCL")  # 3 cloud shadow, 8-9 cloud, 10 cirrus
+    return img.updateMask(scl.neq(3).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10)))
+
+
+def recent_window(region, today: date, days: int = 75, max_cloud: int = 60) -> tuple[ee.ImageCollection, str, str, int]:
+    """Clear Sentinel-2 surface reflectance from the last `days` days; falls back to the last dry season when the
+    monsoon left too few scenes. Returns (collection, start, end, scenes)."""
+    from datetime import timedelta
+    d1 = today.isoformat()
+    d0 = (today - timedelta(days=days)).isoformat()
+    col = ee.ImageCollection(S2_ID).filterBounds(region).filterDate(d0, d1).filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", max_cloud))
+    n = int(col.size().getInfo())
+    if n < 2:
+        d0, d1 = _last_dry_season(today)
+        col = ee.ImageCollection(S2_ID).filterBounds(region).filterDate(d0, d1).filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 30))
+        n = int(col.size().getInfo())
+    return col.map(_sr_clear), d0, d1, n
+
+
+def improvement_layers(grid: GridSpec, bbox, today: date | None = None) -> dict:
+    """10 m arrays over the box: recent NDVI and MNDWI, JRC water occurrence, Dynamic World built and wet probability
+    then (2016-17) and now (last 12 months). Plus the dates used."""
+    init_ee()
+    today = today or date.today()
+    bg = box_grid(grid, bbox)
+    region = grid_region(bg)
+    col, d0, d1, n = recent_window(region, today)
+    med = col.median()
+    ndvi = med.normalizedDifference(["B8", "B4"]).rename("ndvi")
+    mndwi = med.normalizedDifference(["B3", "B11"]).rename("mndwi")
+    occ = ee.Image(GSW_ID).select(["occurrence"], ["water_occ"])
+    dw = ee.ImageCollection(DW_ID).filterBounds(region)
+    then = dw.filterDate(*EARLY)
+    now = dw.filterDate(ee.Date(today.isoformat()).advance(-365, "day"), ee.Date(today.isoformat()))
+    built_then = then.select("built").mean().rename("built_then")
+    built_now = now.select("built").mean().rename("built_now")
+    wet_then = then.select("water").mean().add(then.select("flooded_vegetation").mean()).rename("wet_then")
+    bare_then = then.select("bare").mean().rename("bare_then")
+    bare_now = now.select("bare").mean().rename("bare_now")
+    img = (ndvi.addBands(mndwi).addBands(occ.unmask(0)).addBands(built_then).addBands(built_now).addBands(wet_then)
+           .addBands(bare_then).addBands(bare_now))
+    arr = fetch_grid(img, bg, ["ndvi", "mndwi", "water_occ", "built_then", "built_now", "wet_then", "bare_then", "bare_now"])
+    return {"grid": bg, "arrays": arr, "recent": (d0, d1, n), "early": EARLY,
+            "built_now_window": ((today.replace(year=today.year - 1)).isoformat(), today.isoformat())}
+
+
+def s2_chip(lon: float, lat: float, window: tuple[str, str], half_m: float = 300, false_colour: bool = False,
+            l1c: bool = False, px: int = 384) -> bytes:
+    """A small Sentinel-2 picture around a point (true colour, or false colour where vegetation is red), median of the
+    clear scenes in `window`. Copernicus Sentinel data: free and open, attribution required."""
+    import requests
+    init_ee()
+    pt = ee.Geometry.Point([lon, lat])
+    rect = pt.buffer(half_m).bounds()
+    col = ee.ImageCollection(S2_L1C_ID if l1c else S2_ID).filterBounds(rect).filterDate(*window).filter(
+        ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 60)).map(_l1c_clear if l1c else _sr_clear)
+    bands = ["B8", "B4", "B3"] if false_colour else ["B4", "B3", "B2"]
+    vis = col.select(bands).median().visualize(min=0, max=3200 if false_colour else 2600, gamma=1.2)
+    url = vis.getThumbURL({"region": rect, "dimensions": px, "format": "png"})
+    r = requests.get(url, timeout=60)
+    r.raise_for_status()
+    return r.content

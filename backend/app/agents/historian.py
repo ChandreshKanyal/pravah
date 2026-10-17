@@ -64,12 +64,12 @@ def _geocode(place: str, bbox) -> dict | None:
     return None
 
 
-async def _run(place: str, bbox) -> tuple[str, dict, list]:
+async def _run(place: str, bbox, prompt: str = PROMPT) -> tuple[str, dict, list]:
     ss = InMemorySessionService()
     sid = uuid.uuid4().hex
     await ss.create_session(app_name="pravah_hist", user_id="historian", session_id=sid)
     runner = Runner(app_name="pravah_hist", agent=_agent(), session_service=ss)
-    msg = types.Content(role="user", parts=[types.Part(text=PROMPT.format(place=place, bbox=bbox))])
+    msg = types.Content(role="user", parts=[types.Part(text=prompt.format(place=place, bbox=bbox))])
     text, entry, sources = "", "", []
     async for ev in runner.run_async(user_id="historian", session_id=sid, new_message=msg):
         gm = getattr(ev, "grounding_metadata", None)
@@ -85,16 +85,21 @@ async def _run(place: str, bbox) -> tuple[str, dict, list]:
     return text, entry, sources
 
 
-def find_incidents(place: str, bbox) -> dict:
-    """{incidents, sources, search_entry_point}. Runs the agent in its own event loop (called from sync code)."""
+def search(place: str, bbox, prompt: str = PROMPT) -> tuple[str, str, list]:
+    """Runs the search agent in its own event loop (called from sync code): (answer text, entry point html, sources)."""
     try:
-        text, entry, sources = asyncio.run(_run(place, bbox))
+        return asyncio.run(_run(place, bbox, prompt))
     except RuntimeError:  # already inside an event loop
         loop = asyncio.new_event_loop()
         try:
-            text, entry, sources = loop.run_until_complete(_run(place, bbox))
+            return loop.run_until_complete(_run(place, bbox, prompt))
         finally:
             loop.close()
+
+
+def find_incidents(place: str, bbox) -> dict:
+    """{incidents, sources, search_entry_point}."""
+    text, entry, sources = search(place, bbox)
     items = _parse(text)
     for it in items:
         it["marker"] = _geocode(f"{it['place']}, India", bbox) if bbox else None
