@@ -102,6 +102,9 @@ def find_incidents(place: str, bbox) -> dict:
     """{incidents, sources, search_entry_point}."""
     text, entry, sources = search(place, bbox)
     items = _parse(text)
-    for it in items:
-        it["marker"] = _geocode(f"{it['place']}, India", bbox) if bbox else None
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(6) as ex:  # up to 12 geocodes, at the same time
+        markers = list(ex.map(lambda it: _geocode(f"{it['place']}, India", bbox) if bbox else None, items))
+    for it, m in zip(items, markers):
+        it["marker"] = m
     return {"incidents": items, "sources": sources[:12], "search_entry_point": entry}

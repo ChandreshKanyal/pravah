@@ -75,8 +75,11 @@ def _once(aoi_id: str) -> dict:
     city = d.get("city") or ""
     # a figure counts only with a source: a page Google Search returned (grounding), or a URL the model gave that opens
     # and names the city (grounding metadata is sometimes empty; a URL from memory could be invented)
-    checked = [{"uri": u, "title": re.sub(r"^https?://(www\.)?", "", u).split("/")[0]} for u in (d.get("source_urls") or [])[:5]
-               if isinstance(u, str) and _opens(u, city)]
+    urls = [u for u in (d.get("source_urls") or [])[:5] if isinstance(u, str)]
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(5) as ex:  # each check can wait 8 s; one after another that was up to 40 s
+        opens = list(ex.map(lambda u: _opens(u, city), urls))
+    checked = [{"uri": u, "title": re.sub(r"^https?://(www\.)?", "", u).split("/")[0]} for u, ok in zip(urls, opens) if ok]
     srcs = (sources or []) + [c for c in checked if c["uri"] not in {x.get("uri") for x in sources or []}]
     ok = isinstance(v, (int, float)) and 5 <= v <= 150 and bool(srcs)
     return {"found": ok, "city": city, "mm_h": float(v) if ok else None,

@@ -369,7 +369,9 @@ def base_rain(p: ScenarioParams, area: Area) -> tuple[list[float], str, list[str
         try:
             lon, lat = area_centroid(area)
             prov = get_provider()
-            daily, hourly = prov.daily(lat, lon, 10), prov.hourly(lat, lon, 240)
+            with ThreadPoolExecutor(2) as ex:  # two independent requests (hourly pages through 10 days)
+                fd, fh = ex.submit(prov.daily, lat, lon, 10), ex.submit(prov.hourly, lat, lon, 240)
+                daily, hourly = fd.result(), fh.result()
             k = p.forecast_day_index if p.forecast_day_index is not None else rainfall.worst_day_index(daily, hourly)
             day = daily[min(k, len(daily) - 1)]["date"]
             first = rainfall.first_covered_hour(hourly, day)  # never a window in hours already past

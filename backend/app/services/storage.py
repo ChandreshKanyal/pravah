@@ -14,10 +14,10 @@ from google.cloud import storage
 from google.cloud.storage.retry import DEFAULT_RETRY
 
 from app.config import get_settings
+from app.models.grid import GridSpec
 
 UPLOAD_TIMEOUT_S = 300  # slow home uplinks: an 11 MB GeoJSON timed out at the 60 s default
 UPLOAD_RETRY = DEFAULT_RETRY.with_timeout(600)  # overall retry budget (library default 120 s)
-from app.models.grid import GridSpec
 
 
 @lru_cache

@@ -1,11 +1,15 @@
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 
 from fastapi import APIRouter, HTTPException, Query
+from google.api_core.exceptions import NotFound
 
 from app.engines import rainfall
 from app.models.scenario import ScenarioParams
-from app.pipeline.run_pipeline import AreaNotReady, area_centroid, load_area, screening
+from app.pipeline.run_pipeline import AreaNotReady, load_area, screening
+from app.engines.grid import lonlat_bounds
 from app.services import earth_engine as ees
+from app.services import storage
 from app.services.weather import get_provider
 
 router = APIRouter()
@@ -14,26 +18,34 @@ _past: dict[tuple, list] = {}
 
 @router.get("/api/forecast")
 def forecast(aoi_id: str, duration_h: int = Query(4, ge=1, le=24)):
-    """S10.8: hourly (240 h) + daily (10 d) rain, alerts, worst day, past 90 days, 10-day screening strip."""
+    """S10.8: hourly (240 h) + daily (10 d) rain, alerts, worst day, past 90 days, 10-day screening strip. The area,
+    the three forecast requests and the past rain load at the same time (they ran one after another)."""
     try:
-        area = load_area(aoi_id)
-    except AreaNotReady as e:
-        raise HTTPException(409, str(e))
-    lon, lat = area_centroid(area)
+        w, s, e, n = lonlat_bounds(storage.load_grid(aoi_id))  # the area's centre, as area_centroid gives it
+    except NotFound:
+        raise HTTPException(409, f"AOI {aoi_id} is not prepared yet")
+    lon, lat = (w + e) / 2, (s + n) / 2
     prov = get_provider()
     warnings = []
-    try:
-        hourly, daily = prov.hourly(lat, lon, 240), prov.daily(lat, lon, 10)
-        alerts = prov.alerts(lat, lon)
-    except Exception as e:
-        hourly, daily, alerts = [], [], []
-        warnings.append(f"Forecast provider unavailable: {e.__class__.__name__}")
     key = (aoi_id, date.today().isoformat())
-    if key not in _past:  # Earth Engine (not Maps) data: safe to keep for the day
+    with ThreadPoolExecutor(5) as ex:
+        f_area = ex.submit(load_area, aoi_id)
+        fh, fd, fa = ex.submit(prov.hourly, lat, lon, 240), ex.submit(prov.daily, lat, lon, 10), ex.submit(prov.alerts, lat, lon)
+        fp = ex.submit(ees.imerg_daily, lon, lat, date.today(), 90) if key not in _past else None
         try:
-            _past[key] = ees.imerg_daily(lon, lat, date.today(), 90)
+            hourly, daily, alerts = fh.result(), fd.result(), fa.result()
         except Exception as e:
-            warnings.append(f"Past-90-day rainfall unavailable: {e.__class__.__name__}")
+            hourly, daily, alerts = [], [], []
+            warnings.append(f"Forecast provider unavailable: {e.__class__.__name__}")
+        if fp is not None:  # Earth Engine (not Maps) data: safe to keep for the day
+            try:
+                _past[key] = fp.result()
+            except Exception as e:
+                warnings.append(f"Past-90-day rainfall unavailable: {e.__class__.__name__}")
+        try:
+            area = f_area.result()
+        except AreaNotReady as e:
+            raise HTTPException(409, str(e))
     return {
         "hourly": hourly, "daily": daily, "alerts": alerts,
         "worst_day_index": rainfall.worst_day_index(daily, hourly),

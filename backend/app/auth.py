@@ -34,18 +34,28 @@ def _verify(token: str) -> dict | None:
     return claims
 
 
+_roles: dict[str, tuple[float, str]] = {}
+ROLE_TTL_S = 60  # a role change applies within a minute; every signed-in request read Firestore before
+
+
 def _role_for(email: str) -> str:
     cfg = get_settings()
     if email and email.lower() in {e.strip().lower() for e in cfg.admin_emails.split(",") if e.strip()}:
         return "admin"
+    hit = _roles.get(email.lower()) if email else None
+    if hit and hit[0] > time.time():
+        return hit[1]
+    role = cfg.default_role
     try:
         from app.services import firestore as fs
         doc = fs.get_doc("users", email.lower()) if email else None
         if doc and doc.get("role") in ROLES:
-            return doc["role"]
+            role = doc["role"]
     except Exception:
-        pass
-    return cfg.default_role
+        return role  # not cached: the next request asks again
+    if email:
+        _roles[email.lower()] = (time.time() + ROLE_TTL_S, role)
+    return role
 
 
 def current_user(authorization: str | None = Header(None)) -> dict:

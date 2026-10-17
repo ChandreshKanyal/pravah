@@ -126,36 +126,51 @@ def get_run(run_id: str):
 
 
 def area_extra(aoi_id: str, run_id: str) -> dict:
-    """Area-level facts for the advisory: medical, crowding, verification queue, forecast, history (best effort)."""
-    out: dict = {}
-    for key, name in (("medical", "medical.json"), ("crowding", "crowd_hotspots.json")):
-        if storage.exists(aoi_id, name):
-            out[key] = storage.get_json(aoi_id, name)
-    try:
-        import json
-        out["verification"] = json.loads(storage.get_run(run_id, "verification.json"))
-    except Exception:
-        pass
-    try:
-        from app.pipeline.run_pipeline import area_centroid, load_area
+    """Area-level facts for the advisory: medical, crowding, verification queue, forecast, history (best effort). The
+    reads run at the same time (they went one after another), and the forecast point comes from the grid instead of
+    loading the whole area."""
+    import json
+
+    from google.api_core.exceptions import NotFound
+
+    def opt_json(name: str):
+        try:
+            return storage.get_json(aoi_id, name)
+        except NotFound:
+            return None
+
+    def forecast():
+        from app.engines.grid import lonlat_bounds
         from app.services.weather import get_provider
-        lon, lat = area_centroid(load_area(aoi_id))
-        daily = get_provider().daily(lat, lon, 10)
+        w, s, e, n = lonlat_bounds(storage.load_grid(aoi_id))
+        daily = get_provider().daily((s + n) / 2, (w + e) / 2, 10)
         if daily:
-            w = max(daily, key=lambda d: d["precip_mm"])
-            out["forecast"] = {"worst_day": w["date"], "max_daily_mm": round(w["precip_mm"], 1),
-                               "source": "Google Maps Platform Weather API"}
-    except Exception as e:
-        log.info("advisory forecast unavailable: %s", e)
-    try:
+            d = max(daily, key=lambda d: d["precip_mm"])
+            return {"worst_day": d["date"], "max_daily_mm": round(d["precip_mm"], 1), "source": "Google Maps Platform Weather API"}
+        return None
+
+    def places_():
         from app.services import places
-        out["places"] = places.area_places(aoi_id)
-    except Exception:
-        pass
-    aoi = fs.get_aoi(aoi_id) or {}
+        return places.area_places(aoi_id)
+
+    jobs = {"medical": lambda: opt_json("medical.json"), "crowding": lambda: opt_json("crowd_hotspots.json"),
+            "verification": lambda: json.loads(storage.get_run(run_id, "verification.json")), "forecast": forecast,
+            "places": places_, "aoi": lambda: fs.get_aoi(aoi_id), "history": lambda: fs.get_doc("history_cache", aoi_id)}
+    got: dict = {}
+    with ThreadPoolExecutor(len(jobs)) as ex:
+        futs = {k: ex.submit(fn) for k, fn in jobs.items()}
+        for k, f in futs.items():
+            try:
+                got[k] = f.result()
+            except Exception as e:  # each part is optional
+                if k == "forecast":
+                    log.info("advisory forecast unavailable: %s", e)
+                got[k] = None
+    out: dict = {k: got[k] for k in ("medical", "crowding", "verification", "forecast", "places") if got[k] is not None}
+    aoi = got["aoi"] or {}
     if aoi.get("official"):
         out["official"] = aoi["official"]
-    doc = fs.get_doc("history_cache", aoi_id)
+    doc = got["history"]
     if doc:
         out["history"] = {"gfd_events": len(doc.get("gfd_events", [])),
                           "agreement_pct": doc.get("agreement_pct")}
