@@ -197,7 +197,7 @@ export default function Explore() {
         </>}>
         {draft && size && (
           <div className="stack">
-            <p className="body-m muted">Pravah gathers terrain, rivers, land cover, population, buildings, roads and shelters for this box. A new area takes about 2–3 minutes; areas prepared before open instantly.</p>
+            <p className="body-m muted">Pravah gathers terrain, rivers, land cover, population, buildings, roads and shelters for this box. A new area takes about 3–5 minutes (up to 10 for a large dense city); areas prepared before open instantly.</p>
             <Field label="Area name" support="Shown in reports, e.g. the town or ward">
               <input value={draft.name} autoFocus onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder=" " />
             </Field>

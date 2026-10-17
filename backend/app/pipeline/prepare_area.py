@@ -73,24 +73,38 @@ def _buildings(aoi: AOI, grid: GridSpec, warnings: list[str]) -> None:
 
 
 def _osm(aoi_id: str, grid: GridSpec, warnings: list[str]) -> None:
+    """OpenStreetMap roads (walk and drive), road bridges, places and waterways. One Overpass request for all of them
+    (osm.bundle, 17 Oct: ~40 s for Dera Ghazi Khan, results identical to the five separate requests that took 2-6 min);
+    if that fails, the separate requests one after another (in parallel they were refused by the busy public server)."""
     bb = lonlat_bounds(grid)
-    for name, net in (("G_walk.graphml", "walk"), ("G_drive.graphml", "drive")):
-        if storage.exists(aoi_id, name):
-            continue
+    files = {"drive": "G_drive.graphml", "walk": "G_walk.graphml", "bridges": "bridge_ways.parquet",
+             "pois": "pois.parquet", "waterways": "waterways.parquet"}
+    missing = [k for k, f in files.items() if not storage.exists(aoi_id, f)]
+    if not missing:
+        return
+    try:
+        b = osm.bundle(bb)
+        for k in missing:
+            (storage.save_graph if k in ("drive", "walk") else storage.save_gdf)(aoi_id, files[k], b[k])
+        return
+    except Exception as e:
+        log.warning("OSM bundle failed (%s); trying the separate requests", e)
+    for kind in ("walk", "drive"):
+        if kind in missing:
+            try:
+                storage.save_graph(aoi_id, files[kind], osm.graph(bb, kind))
+            except Exception as e:
+                warnings.append(f"OSM {kind} network unavailable: {e}")
+    if "bridges" in missing:
         try:
-            storage.save_graph(aoi_id, name, osm.graph(bb, net))
-        except Exception as e:
-            warnings.append(f"OSM {net} network unavailable: {e}")
-    if not storage.exists(aoi_id, "bridge_ways.parquet"):
-        try:
-            storage.save_gdf(aoi_id, "bridge_ways.parquet", osm.bridge_ways(bb))
+            storage.save_gdf(aoi_id, files["bridges"], osm.bridge_ways(bb))
         except Exception as e:
             warnings.append(f"OSM bridges unavailable: {e}")
-    if not (storage.exists(aoi_id, "pois.parquet") and storage.exists(aoi_id, "waterways.parquet")):
+    if "pois" in missing or "waterways" in missing:
         try:
             pois, water = osm.pois_and_waterways(bb)
-            storage.save_gdf(aoi_id, "pois.parquet", pois)
-            storage.save_gdf(aoi_id, "waterways.parquet", water)
+            storage.save_gdf(aoi_id, files["pois"], pois)
+            storage.save_gdf(aoi_id, files["waterways"], water)
         except Exception as e:
             warnings.append(f"OSM POIs/waterways unavailable: {e}")
 
