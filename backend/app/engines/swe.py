@@ -22,6 +22,7 @@ storm-drain capacity in urban mode) and river inflow where reaches enter the gri
 """
 import heapq
 import math
+import threading
 import time
 from dataclasses import dataclass, field
 
@@ -234,11 +235,23 @@ def decode_depth(code: np.ndarray) -> np.ndarray:
     return H_CODE * (code.astype(np.float32) / 255) ** 2
 
 
+# One simulation at a time per process, whoever calls (runs, 3D jobs, emulator training, the start-up compile). Numba's
+# default "workqueue" threading layer (Cloud Run's image has no OpenMP or TBB unless installed) terminates the whole
+# process when two threads launch parallel kernels at once (checked 18 Oct); emulator training and the start-up compile
+# called this without the flow model's lock.
+_KERNELS = threading.Lock()
+
+
 def simulate(dem: np.ndarray, cell: float, runoff_c: np.ndarray, manning: np.ndarray, rain_mm_h, drain_mm_h: float | np.ndarray = 0.0,
              sources: list[dict] | None = None, frame_s: int = 300, progress=None, tail_h: float = 0.0) -> FlowResult:
     """Run the storm on the grid. `sources`: [{rows, cols, q: [m3/s per hour]}] inflows spread over their cells.
     Rain beyond the series is zero; the run lasts len(rain_mm_h) + tail_h hours (the tail lets water from uphill arrive
     after the rain stops, where the peak often comes). Frames every `frame_s` seconds, frame 0 dry."""
+    with _KERNELS:
+        return _simulate(dem, cell, runoff_c, manning, rain_mm_h, drain_mm_h, sources, frame_s, progress, tail_h)
+
+
+def _simulate(dem, cell, runoff_c, manning, rain_mm_h, drain_mm_h, sources, frame_s, progress, tail_h) -> FlowResult:
     z = np.asarray(dem, np.float64)
     if np.isnan(z).any():  # holes take the nearest valid height
         from scipy import ndimage
@@ -258,13 +271,12 @@ def simulate(dem: np.ndarray, cell: float, runoff_c: np.ndarray, manning: np.nda
     smax_row, clip_row = np.zeros(ny), np.zeros(ny)
     src_cells = [(np.asarray(s["rows"]), np.asarray(s["cols"]), np.asarray(s["q"], float)) for s in (sources or [])]
 
-    def rate_at(hour: int, t: float) -> np.ndarray:
-        i = rain[hour] if hour < len(rain) else 0.0
-        out = C * np.maximum(0.0, i - drain_mm_h) / 3.6e6  # drain capacity: a number, or a grid (built-up cells only)
+    def add_sources(out: np.ndarray, base: np.ndarray, hour: int, t: float) -> None:
+        for rr, cc, _ in src_cells:  # only the inflow cells change within an hour (the inflow ramps in over hour 1)
+            out[rr, cc] = base[rr, cc]
         for rr, cc, q in src_cells:
             qh = q[min(hour, len(q) - 1)] * min(1.0, t / 3600.0)  # ramp the inflow in over the first hour
             out[rr, cc] += qh / (len(rr) * dx * dy)
-        return out
 
     frames = [encode_frame(h, u, v)]
     t, steps, dt, clipped, v_out = 0.0, 0, 1.0, 0.0, 0.0
@@ -272,17 +284,23 @@ def simulate(dem: np.ndarray, cell: float, runoff_c: np.ndarray, manning: np.nda
     next_frame = float(frame_s)
     wall = time.time()
     hour = -1
-    rate = None
+    rate, rate_sum, base = None, 0.0, None
     while t < T - 1e-9:
         hr_now = int(t // 3600)
         if hr_now != hour or (t < 3600 and src_cells):
+            if hr_now != hour:  # rain changes by the hour: the full grid once per hour
+                i = rain[hr_now] if hr_now < len(rain) else 0.0
+                base = C * np.maximum(0.0, i - drain_mm_h) / 3.6e6  # drain capacity: a number, or a grid (built-up cells only)
+                rate = base.copy() if src_cells else base
             hour = hr_now
-            rate = rate_at(hour, t)
+            if src_cells:
+                add_sources(rate, base, hour, t)
+            rate_sum = rate.sum()  # recomputed only when the rate changes (it was summed over the grid every step)
         s = smax_row.max()
         dt = min(DT_MAX, CFL / s if s > 0 else DT_MAX, next_frame - t, (hour + 1) * 3600.0 - t)
         _fluxes(h, u, v, z, FXh, FXuL, FXuR, FXv, FYh, FYvL, FYvR, FYu)
         v_out += dt * dy * (FXh[:, nx].sum() - FXh[:, 0].sum()) + dt * dx * (FYh[ny, :].sum() - FYh[0, :].sum())
-        v_in += dt * rate.sum() * dx * dy
+        v_in += dt * rate_sum * dx * dy
         t += dt
         _update(h, hu, hv, u, v, n2, rate, dt, dx, dy, t, FXh, FXuL, FXuR, FXv, FYh, FYvL, FYvR, FYu,
                 hmax, vmax, hrmax, t_arr, smax_row, clip_row)
@@ -398,21 +416,40 @@ def downscale_frame(frame: np.ndarray, z: np.ndarray, k: int) -> np.ndarray:
     model cell's."""
     if k == 1:
         return frame
+    return _downscale(frame, _downscale_ground(z, k))
+
+
+def downscale_frames(frames: list[np.ndarray], z: np.ndarray, k: int) -> np.ndarray:
+    """downscale_frame for every frame of a run, stacked [F, 3, rows, cols]: the fine ground's per-block sort is the
+    same for every frame, so it is done once, and the frames are filled in parallel threads (NumPy releases the GIL)."""
+    if k == 1:
+        return np.stack(frames)
+    g = _downscale_ground(z, k)
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(8) as ex:
+        return np.stack(list(ex.map(lambda f: _downscale(f, g), frames)))
+
+
+def _downscale_ground(z: np.ndarray, k: int) -> dict:
     ny, nx = z.shape
-    zp = np.pad(np.asarray(z, np.float64), ((0, (-ny) % k), (0, (-nx) % k)), mode="edge")
+    z64 = np.asarray(z, np.float64)
+    zp = np.pad(z64, ((0, (-ny) % k), (0, (-nx) % k)), mode="edge")
     by, bx = zp.shape[0] // k, zp.shape[1] // k
-    zb = zp.reshape(by, k, bx, k).transpose(0, 2, 1, 3).reshape(by, bx, k * k)
-    zs = np.sort(zb, axis=-1)
-    cs = np.cumsum(zs, axis=-1)
+    zs = np.sort(zp.reshape(by, k, bx, k).transpose(0, 2, 1, 3).reshape(by, bx, k * k), axis=-1)
+    nxt = np.concatenate([zs[..., 1:], np.full(zs.shape[:-1] + (1,), np.inf)], axis=-1)
+    return {"k": k, "ny": ny, "nx": nx, "by": by, "bx": bx, "z": z64, "cs": np.cumsum(zs, axis=-1), "nxt": nxt}
+
+
+def _downscale(frame: np.ndarray, g: dict) -> np.ndarray:
+    k, ny, nx, by, bx = g["k"], g["ny"], g["nx"], g["by"], g["bx"]
     vol = decode_depth(frame[0]).astype(np.float64)[:by, :bx] * (k * k)  # m x fine-cell area
     j = np.arange(1, k * k + 1)
-    lev = (vol[..., None] + cs) / j  # level if water covers the j lowest sub-cells
-    nxt = np.concatenate([zs[..., 1:], np.full(zs.shape[:-1] + (1,), np.inf)], axis=-1)
-    first = np.argmax(lev <= nxt, axis=-1)
+    lev = (vol[..., None] + g["cs"]) / j  # level if water covers the j lowest sub-cells
+    first = np.argmax(lev <= g["nxt"], axis=-1)
     level = np.take_along_axis(lev, first[..., None], axis=-1)[..., 0]
     level = np.where(vol > 0, level, -np.inf)
     rep = lambda a: np.repeat(np.repeat(a, k, 0), k, 1)[:ny, :nx]  # noqa: E731
-    h = np.maximum(rep(level) - np.asarray(z, np.float64), 0.0)
+    h = np.maximum(rep(level) - g["z"], 0.0)
     u = rep(decode_velocity(frame[1])[:by, :bx])
     v = rep(decode_velocity(frame[2])[:by, :bx])
     return encode_frame(h, u, -v)

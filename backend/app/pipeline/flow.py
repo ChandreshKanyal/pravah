@@ -150,11 +150,11 @@ def model_setup(area, rain: list[float], params: dict, force_k: int | None = Non
     zc = swe.coarsen(dem, k)
     if k > 1 and ground.get("conditioned"):  # carve again at the model resolution (averaging re-blocks narrow cuts)
         zc = swe.condition(swe.coarsen(bare_dem(area.aoi_id)[0], k))[0].astype(np.float64)
+    drain = _drain_mm_h(area.aoi_id, params.get("drain_capacity_mm_h"))
     return {"k": k, "dem": dem, "ground": ground, "z": zc, "C": swe.coarsen(np.nan_to_num(C, nan=0.5), k), "n": swe.coarsen(n, k),
             # storm drains only under built-up cells; elsewhere rain soaks in through the runoff coefficient
-            "rain": [x * arf for x in rain], "drain": swe.coarsen((lc == 6) * _drain_mm_h(area.aoi_id, params.get("drain_capacity_mm_h")), k), "sources": sources,
-            "drain_mm_h": _drain_mm_h(area.aoi_id, params.get("drain_capacity_mm_h")),
-            "arf": arf, "urban": urban}
+            "rain": [x * arf for x in rain], "drain": swe.coarsen((lc == 6) * drain, k), "sources": sources,
+            "drain_mm_h": drain, "arf": arf, "urban": urban}
 
 
 def run_maxima(area, rain: list[float], params: dict, force_k: int | None = None) -> np.ndarray:
@@ -182,7 +182,7 @@ def _simulate(area, rain: list[float], params: dict, progress=None) -> dict:
     frame_s = FRAME_S if len(rain) <= 6 else 2 * FRAME_S
     res = swe.simulate(m["z"], grid.cell * k, m["C"], m["n"], m["rain"], m["drain"], m["sources"], frame_s, progress, tail_h=TAIL_H)
     z30 = np.asarray(dem, np.float64)
-    frames = np.stack([swe.downscale_frame(f, z30, k) for f in res.frames])  # [F, 3, rows, cols] uint8
+    frames = swe.downscale_frames(res.frames, z30, k)  # [F, 3, rows, cols] uint8
     if k > 1:  # maxima on the analysis grid: depth from the downscaled frames, the rest repeated from the model cells
         rep = lambda a: np.repeat(np.repeat(a, k, 0), k, 1)[:grid.height, :grid.width]  # noqa: E731
         res.hmax = swe.decode_depth(frames[:, 0].max(axis=0))

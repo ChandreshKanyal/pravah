@@ -91,17 +91,23 @@ def nearest(places: list[dict], lon: float, lat: float, max_m: float = 3000) -> 
 _GENERIC = {"temple", "mandir", "school", "church", "mosque", "masjid", "hospital", "college", "office", "building"}
 
 
-def area_landmarks(aoi_id: str) -> list[dict]:
+def landmarks_from(points: list[dict]) -> list[dict]:
     """Named schools, temples, halls and hospitals (the area's shelters and medical points) to tell apart places
     inside one town, where OSM has no neighbourhood names."""
     out = []
+    for x in points:
+        n = (x.get("name") or "").strip()
+        if n and n.lower() not in _GENERIC and not n.lower().startswith(("large building", "unnamed", "candidate")):
+            out.append({"name": n, "lon": x["lon"], "lat": x["lat"]})
+    return out
+
+
+def area_landmarks(aoi_id: str) -> list[dict]:
+    pts = []
     for name in ("shelters.json", "medical.json"):
         if storage.exists(aoi_id, name):
-            for x in storage.get_json(aoi_id, name):
-                n = (x.get("name") or "").strip()
-                if n and n.lower() not in _GENERIC and not n.lower().startswith(("large building", "unnamed", "candidate")):
-                    out.append({"name": n, "lon": x["lon"], "lat": x["lat"]})
-    return out
+            pts += storage.get_json(aoi_id, name)
+    return landmarks_from(pts)
 
 
 def label(places: list[dict], lon: float, lat: float, hindi: bool = False, landmarks: list[dict] | None = None) -> str:

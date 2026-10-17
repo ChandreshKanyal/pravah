@@ -38,5 +38,7 @@ def _warm_flow_model() -> None:
         t = time.time()
         z = swe.condition(np.add.outer(np.arange(8.0), np.arange(8.0)))[0]  # _breach (60 m runs re-carve the ground)
         swe.simulate(z, 30.0, np.full(z.shape, 0.5), np.full(z.shape, 0.04), [20.0], 0.0, frame_s=3600)
-        logging.getLogger(__name__).info("flow model compiled in %.1f s", time.time() - t)
+        import numba
+        logging.getLogger(__name__).info("flow model compiled in %.1f s (numba threading layer: %s)", time.time() - t,
+                                         numba.threading_layer())
     threading.Thread(target=warm, daemon=True).start()

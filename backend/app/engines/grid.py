@@ -1,5 +1,6 @@
 """Analysis grid (SPEC §4.2) and terrain derivatives (S1.7). Pure NumPy/pyproj, no I/O."""
 import math
+from functools import lru_cache
 
 import numpy as np
 from pyproj import Transformer
@@ -12,10 +13,14 @@ def utm_epsg(lon: float, lat: float) -> int:
     return (32600 if lat >= 0 else 32700) + zone
 
 
+# Transformers are built once per CRS (pyproj >= 3.1 makes them thread-safe): building one takes milliseconds, and the
+# conversions below are called in loops (every shelter, drain candidate, bridge and exposure cluster)
+@lru_cache(maxsize=32)
 def _to_utm(crs: str) -> Transformer:
     return Transformer.from_crs("EPSG:4326", crs, always_xy=True)
 
 
+@lru_cache(maxsize=32)
 def _to_lonlat(crs: str) -> Transformer:
     return Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
 

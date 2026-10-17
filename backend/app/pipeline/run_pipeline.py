@@ -2,6 +2,7 @@
 import io
 import json
 import logging
+import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -10,6 +11,7 @@ from datetime import datetime, timezone
 from functools import lru_cache
 
 import numpy as np
+from google.api_core.exceptions import NotFound
 
 from app.config import get_settings
 from app.engines import profile as prof
@@ -61,6 +63,8 @@ class Area:
     hollows_ok: np.ndarray | None = None  # per depression: waterlogs (catchment mostly built-up)
     reach_ok: np.ndarray | None = None  # per reach: river stage meaningful (not tidal, not a stub)
     profile: dict = field(default_factory=dict)
+    places: list[dict] | None = None  # OSM settlement names (places.json; None for areas prepared before 18 Oct)
+    landmarks: list[dict] = field(default_factory=list)  # named shelters and hospitals, for place labels
 
     def with_urban_dem(self, surface_dem: np.ndarray) -> "Area":
         """Urban ponding levels use the same DEM the depressions were built from (FABDEM when available)."""
@@ -69,43 +73,83 @@ class Area:
         return self  # SRC tables by Manning's n, plus the flow path
 
 
-@lru_cache(maxsize=4)
+_area_locks: dict[str, threading.Lock] = {}
+_area_locks_guard = threading.Lock()
+
+
 def load_area(aoi_id: str) -> Area:
-    if not storage.exists(aoi_id, "reaches.json"):
+    """Static data of an area, cached per process (4 areas). Concurrent first requests for one area (opening it asks for
+    the forecast, the rain hours and the records at once) wait for a single load instead of each loading it."""
+    with _area_locks_guard:
+        lock = _area_locks.setdefault(aoi_id, threading.Lock())
+    with lock:
+        return _load_area(aoi_id)
+
+
+def _opt(fn, *args):
+    """fn(*args), or None when the file does not exist (optional layers, older areas)."""
+    try:
+        return fn(*args)
+    except NotFound:
+        return None
+
+
+def _network(aoi_id: str, mode: str):
+    e = _opt(storage.load_gdf, aoi_id, f"edges_{mode}.parquet")
+    return None if e is None else evac.load_network(e, storage.load_gdf(aoi_id, f"nodes_{mode}.parquet"))
+
+
+@lru_cache(maxsize=4)
+def _load_area(aoi_id: str) -> Area:
+    # ~25 independent reads: in parallel (one after another took 6-11 s for the first run of an area on an instance)
+    jobs = {
+        "reaches": (storage.get_json, "reaches.json"), "h30": (storage.load_layers, "hydro30"),
+        "sus": (storage.load_layers, "susceptibility"), "grid": (storage.load_grid,), "terr": (storage.load_layers, "terrain"),
+        "hgrid": (storage.get_json, "hydro_grid.json"), "hz": (storage.load_layers, "hazard_hist"),
+        "lc": (storage.load_layers, "landcover"), "native": (storage.load_layers, "hydro_native"),
+        "hotspots": (storage.get_json, "hotspots.json"), "bld": (_load_buildings,), "pop": (storage.load_layers, "population"),
+        "derived": (storage.load_layers, "derived"), "shelters": (storage.get_json, "shelters.json"),
+        "medical": (storage.get_json, "medical.json"), "places": (storage.get_json, "places.json"),
+        "pluvial": (storage.load_layers, "pluvial"),  # waterlogging layers (all areas prepared since 17 Oct; backfilled)
+        "drains": (storage.get_json, "drain_candidates.json"), "bridges": (storage.get_json, "bridges.json"),
+        "walk": (_network, "walk"), "drive": (_network, "drive"),
+    }
+    with ThreadPoolExecutor(12) as ex:
+        doc_f = ex.submit(fs.get_aoi, aoi_id)
+        futs = {k: ex.submit(_opt, fn, aoi_id, *rest) for k, (fn, *rest) in jobs.items()}
+        got = {k: f.result() for k, f in futs.items()}
+        doc = doc_f.result() or {}
+    if got["reaches"] is None:
         raise AreaNotReady(f"AOI {aoi_id} is not prepared yet")
-    h30 = storage.load_layers(aoi_id, "hydro30")
-    sus = storage.load_layers(aoi_id, "susceptibility") if storage.exists(aoi_id, "susceptibility.npz") else {}
-    doc = fs.get_aoi(aoi_id) or {}
-    grid = storage.load_grid(aoi_id)
-    urban = storage.exists(aoi_id, "pluvial.npz")  # waterlogging layers (all areas prepared since 17 Oct; backfilled)
-    terr = storage.load_layers(aoi_id, "terrain")
+    h30, terr, grid, sus = got["h30"], got["terr"], got["grid"], got["sus"] or {}
+    from app.services import places as pl
     area = Area(
         aoi_id=aoi_id,
         grid=grid,
-        hgrid=hy.HydroGrid(**storage.get_json(aoi_id, "hydro_grid.json")),
+        hgrid=hy.HydroGrid(**got["hgrid"]),
         hand=h30["hand"],
-        perm=flood.permanent_water(storage.load_layers(aoi_id, "hazard_hist")["gsw_occ"]),
+        perm=flood.permanent_water(got["hz"]["gsw_occ"]),
         reach_id_30=h30["reach_id"],
-        lc_class=storage.load_layers(aoi_id, "landcover")["lc_class"],
-        reaches=storage.get_json(aoi_id, "reaches.json"),
-        native=storage.load_layers(aoi_id, "hydro_native"),
-        hotspots=storage.get_json(aoi_id, "hotspots.json"),
+        lc_class=got["lc"]["lc_class"],
+        reaches=got["reaches"],
+        native=got["native"],
+        hotspots=got["hotspots"],
         slope_deg=terr["slope_deg"],
         dist_stream_m=h30["dist_stream_m"],
-        bld=_load_buildings(aoi_id),
-        pop_unattr=storage.load_layers(aoi_id, "population").get("pop_unattributed"),
-        dist_road_m=storage.load_layers(aoi_id, "derived")["dist_road_m"],
-        shelters=storage.get_json(aoi_id, "shelters.json") if storage.exists(aoi_id, "shelters.json") else [],
-        networks={m: evac.load_network(storage.load_gdf(aoi_id, f"edges_{m}.parquet"),
-                                       storage.load_gdf(aoi_id, f"nodes_{m}.parquet"))
-                  for m in ("walk", "drive") if storage.exists(aoi_id, f"edges_{m}.parquet")},
+        bld=got["bld"],
+        pop_unattr=got["pop"].get("pop_unattributed"),
+        dist_road_m=got["derived"]["dist_road_m"],
+        shelters=got["shelters"] or [],
+        networks={m: got[m] for m in ("walk", "drive") if got[m] is not None},
         mode=doc.get("mode", "auto"),
-        pluvial=storage.load_layers(aoi_id, "pluvial") if urban else None,
+        pluvial=got["pluvial"],
         dem=None,
-        drain_cands=storage.get_json(aoi_id, "drain_candidates.json") if urban and storage.exists(aoi_id, "drain_candidates.json") else [],
+        drain_cands=(got["drains"] or []) if got["pluvial"] is not None else [],
         fsi=sus.get("fsi"),
         aoi_mask=_bbox_mask(grid, doc.get("bbox")),
-        bridges=storage.get_json(aoi_id, "bridges.json") if storage.exists(aoi_id, "bridges.json") else None,
+        bridges=got["bridges"],
+        places=got["places"],
+        landmarks=pl.landmarks_from((got["shelters"] or []) + (got["medical"] or [])),
     ).with_urban_dem(terr["dem"])
     area.reach_ok = prof.reliable_reaches(area.reaches, _reach_built_share(area))
     if area.pluvial is not None:
@@ -154,9 +198,9 @@ def _bbox_mask(grid: GridSpec, bbox) -> np.ndarray:
 
 
 def _load_buildings(aoi_id: str) -> dict[str, np.ndarray] | None:
-    if not storage.exists(aoi_id, "buildings_proxy.parquet"):
+    b = _opt(storage.load_gdf, aoi_id, "buildings_proxy.parquet")
+    if b is None:
         return None
-    b = storage.load_gdf(aoi_id, "buildings_proxy.parquet")
     cols = ["bid", "lon", "lat", "row", "col", "structure_class", "fragility", "confidence", "pop_base"]
     return {c: b[c].to_numpy() for c in cols}
 
@@ -180,7 +224,15 @@ def reach_params(area: Area, c_table: list[float]) -> tuple[np.ndarray, np.ndarr
     """C_reach (mean C over hydro cells upstream of the reach end), tc_h and A_loc per reach.
 
     NOTE(spec-drift): tc uses Kirpich on the DEM longest flow path inside the grid with S = relief / L (Kirpich's own
-    definition) instead of Hack's length with the 2 km reach slope; Hack is the fallback for one-cell paths."""
+    definition) instead of Hack's length with the 2 km reach slope; Hack is the fallback for one-cell paths.
+    Cached with the area per C table (the inputs never change between runs)."""
+    key = ("reach_params", tuple(c_table))
+    if key not in area.src_cache:
+        area.src_cache[key] = _reach_params(area, c_table)
+    return tuple(x.copy() for x in area.src_cache[key])
+
+
+def _reach_params(area: Area, c_table: list[float]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     hg = area.hgrid
     rows, cols = np.indices((hg.height, hg.width))
     lon = hg.lon0 + (cols.ravel() + 0.5) * hg.cell_deg
@@ -375,6 +427,7 @@ def screening(area: Area, daily: list[dict], hourly: list[dict], duration_h: int
         r = int(np.argmax(np.where(ok, A_loc, -1)))
         src = [get_src(area, get_settings().manning_n)[r]]
     rank = {"low": 0, "elevated": 1, "high": 2}
+    dc = drain_mm_h(area.aoi_id) if pond else 0.0  # one Firestore read, not one per forecast day
     out = []
     for d in daily:
         win, _ = rainfall.wettest_window(rainfall.day_hours(hourly, d["date"]), duration_h)
@@ -385,7 +438,6 @@ def screening(area: Area, daily: list[dict], hourly: list[dict], duration_h: int
             stage = float(h.max())
             badge = "high" if stage >= 3 else "elevated" if stage >= 1 else "low"
         if pond:
-            dc = drain_mm_h(area.aoi_id)
             b2 = "high" if peak >= 2 * dc else "elevated" if peak >= dc else "low"
             badge = max(badge, b2, key=rank.get)
         out.append({"date": d["date"], "precip_mm": d["precip_mm"], "max_stage_m": round(stage, 2), "peak_mm_h": round(peak, 1), "badge": badge})
@@ -485,11 +537,11 @@ def run_pipeline(p: ScenarioParams, flow_model: bool = True) -> RunResult:
     exposure, triage_rows, queue, ctx = _exposure(area, p, depth, warnings)
     timings["exposure"] = round(time.time() - t2, 2)
 
-    drains_out, pond_png = [], None
+    drains_out, pond_img = [], None
     if pond_fill is not None:
         drains_out = _drains(area, depth, pond_fill, ctx)
         lab = area.pluvial["dep_label"]
-        pond_png = to_png_binned(np.where(lab > 0, pond_fill[-1][lab], np.nan), [0.01, 0.3, 0.7], ["#9ecae1", "#3182bd", "#08306b"])
+        pond_img = np.where(lab > 0, pond_fill[-1][lab], np.nan)  # drawn with the hourly maps below
         methods["urban"] = (f"Priority-Flood depressions (Barnes et al. 2014) filled to level by rain above the "
                             f"{drain:g} mm/h drain capacity, in hollows whose catchment is at least "
                             f"{int(prof.BUILT_HOLLOW * 100)}% built-up; screening, not hydrodynamics")
@@ -508,19 +560,23 @@ def run_pipeline(p: ScenarioParams, flow_model: bool = True) -> RunResult:
     timings["routing"] = round(time.time() - t3, 2)
 
     t1 = time.time()
-    pngs = {f"depth_h{t + 1}": to_png_binned(depth[t], DEPTH_EDGES, DEPTH_COLORS, nan_color=WATER_COLOR)
-            for t in range(depth.shape[0])}
-    if pond_png is not None:
-        pngs["ponding"] = pond_png
-    buf = io.BytesIO()
-    np.savez_compressed(buf, depth=depth.astype(np.float16))
+    pngs = [f"depth_h{t + 1}" for t in range(depth.shape[0])] + (["ponding"] if pond_img is not None else [])
+
+    def png(name: str) -> None:  # drawn and uploaded in the pool: drawing releases the GIL (24 maps in turn took seconds)
+        img = to_png_binned(pond_img, [0.01, 0.3, 0.7], ["#9ecae1", "#3182bd", "#08306b"]) if name == "ponding" else \
+            to_png_binned(depth[int(name[7:]) - 1], DEPTH_EDGES, DEPTH_COLORS, nan_color=WATER_COLOR)
+        storage.put_run(run_id, f"png/{name}.png", img, "image/png")
+
+    def npz(name: str, d: np.ndarray) -> None:
+        buf = io.BytesIO()
+        np.savez_compressed(buf, depth=d.astype(np.float16))
+        storage.put_run(run_id, name, buf.getvalue())
+
     with ThreadPoolExecutor(8) as ex:
-        jobs = [ex.submit(storage.put_run, run_id, f"png/{k}.png", v, "image/png") for k, v in pngs.items()]
-        jobs.append(ex.submit(storage.put_run, run_id, "depth.npz", buf.getvalue()))
+        jobs = [ex.submit(png, k) for k in pngs]
+        jobs.append(ex.submit(npz, "depth.npz", depth))
         if sim is not None:  # river + hollows alone, for the 3D comparison and the flow agreement check
-            sbuf = io.BytesIO()
-            np.savez_compressed(sbuf, depth=static_depth.astype(np.float16))
-            jobs.append(ex.submit(storage.put_run, run_id, "static_depth.npz", sbuf.getvalue()))
+            jobs.append(ex.submit(npz, "static_depth.npz", static_depth))
         jobs.append(ex.submit(storage.put_run, run_id, "verification.json", json.dumps(queue).encode(), "application/json"))
         if ctx:  # per-building risk (0 critical .. 3 low) for the 3D view
             rb = io.BytesIO()
@@ -562,7 +618,7 @@ def run_pipeline(p: ScenarioParams, flow_model: bool = True) -> RunResult:
         staging_points=ev.get("staging_points", []), routes=ev.get("routes_summary", []),
         people_to_evacuate=ev.get("people_to_evacuate", 0),
         roads_geojson_url=f"/api/runs/{run_id}/files/roads.geojson" if ev else "",
-        drains=drains_out, ponding_png_url=f"/api/runs/{run_id}/layers/ponding.png" if pond_png is not None else "",
+        drains=drains_out, ponding_png_url=f"/api/runs/{run_id}/layers/ponding.png" if pond_img is not None else "",
         routes_geojson_url=f"/api/runs/{run_id}/files/routes.geojson" if ev else "",
         start_local=start_local, evac_window_h=_evac_window(ev),
         demand_breakdown=ev.get("demand_breakdown", {}), demand_range=ev.get("demand_range", []),
@@ -590,8 +646,9 @@ def _label_places(area: Area, result: RunResult) -> None:
     """Nearest OSM settlement for clusters, staging and assembly points, bridges and routes (best effort)."""
     try:
         from app.services import places
-        pl = places.area_places(area.aoi_id, area.grid)
-        lm = places.area_landmarks(area.aoi_id)
+        # loaded with the area (6 storage reads per run before); older areas without places.json fetch them meanwhile
+        pl = area.places if area.places is not None else places.area_places(area.aoi_id, area.grid)
+        lm = area.landmarks
     except Exception as e:
         log.info("place labels unavailable: %s", e)
         return
