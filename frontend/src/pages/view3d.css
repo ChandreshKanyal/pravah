@@ -1,0 +1,65 @@
+/* 3D water view (pages/View3D.tsx). Daylight scene in both themes; panels follow the theme tokens. */
+.v3d { overflow: hidden; background: linear-gradient(180deg, #a9c7ec 0%, #d6e3f2 48%, #e4ecf5 100%); }
+.v3d-canvas { position: absolute; inset: 0; touch-action: none; cursor: grab; }
+.v3d-canvas:active { cursor: grabbing; }
+
+.v3d-panel { display: flex; flex-direction: column; gap: 10px; width: 312px; max-height: calc(100% - 128px); overflow-y: auto; overscroll-behavior: contain; }
+.v3d-panel > * { flex-shrink: 0; }  /* a scrolling flex column must not squash its controls */
+.v3d-panel .seg.block .sl { min-width: 0; }
+.v3d-status { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: var(--r-md); background: var(--surface-container); }
+.v3d-status .lin i { transition: width 600ms var(--ease); }
+
+.v3d-legend .ramp { width: 40px; height: 10px; border-radius: 3px; display: inline-block; flex: none; border: 1px solid #0002; }
+.v3d-legend .ramp.short { width: 12px; height: 12px; }
+.v3d-legend .sw { flex: none; }
+.v3d-legend .bx { flex: none; width: 16px; height: 12px; border: 2px dashed #fff; border-radius: 2px; outline: 2px solid #202124a0; outline-offset: -4px; background: #20212440; }
+.v3d-legend .streak { flex: none; width: 16px; height: 3px; border-radius: 2px; background: linear-gradient(90deg, #fff0, #fff); box-shadow: 0 0 0 1px #20212455; }
+
+.v3d-stats { margin: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; }
+.v3d-stats div { display: flex; flex-direction: column; }
+.v3d-stats dt { font: 500 11px/14px var(--font); color: var(--on-surface-variant); }
+.v3d-stats dd { margin: 0; font: 500 16px/22px var(--font); color: var(--on-surface); }
+.v3d-more summary { cursor: pointer; padding: 4px 0; color: var(--primary); }
+.v3d-more .stack-s { margin-top: 8px; }
+.v3d-facts { margin: 0; padding-left: 16px; display: grid; gap: 4px; }
+.v3d-credit { margin: 0; }
+
+.v3d-probe { position: absolute; z-index: 6; top: 12px; right: 12px; width: 268px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
+.v3d-probe p { margin: 0; }
+.v3d-spark { display: block; overflow: visible; }
+.v3d-spark .area { fill: color-mix(in srgb, #3182bd 22%, transparent); stroke: none; }
+.v3d-spark .line { fill: none; stroke: #3182bd; stroke-width: 2; stroke-linejoin: round; }
+.v3d-spark .now { stroke: var(--on-surface); stroke-width: 1.5; stroke-dasharray: 3 3; }
+
+.v3d-time { position: absolute; z-index: 5; left: 16px; right: 16px; bottom: 20px; display: flex; justify-content: center; pointer-events: none; }
+.ftl { pointer-events: auto; display: flex; align-items: center; gap: 12px; width: 100%; max-width: 920px; padding: 6px 10px 6px 6px; border-radius: var(--r-full);
+  background: var(--surface-container-lowest); box-shadow: var(--e2); min-width: 0; }
+.ftl .track { position: relative; flex: 1; min-width: 120px; height: 46px; }
+.ftl .bars { position: absolute; left: 0; right: 0; top: 0; bottom: 14px; display: flex; gap: 2px; }
+.ftl .bars span { flex: 1; display: flex; align-items: flex-end; border-radius: 4px; background: var(--surface-container-high); overflow: hidden; }
+.ftl .bars i { display: block; width: 100%; background: var(--secondary-container); border-radius: 3px 3px 0 0; }
+.ftl .bars span.past i { background: color-mix(in srgb, var(--primary) 55%, var(--secondary-container)); }
+.ftl .fill { position: absolute; left: 0; top: 0; bottom: 14px; border-radius: 4px; background: color-mix(in srgb, var(--primary) 16%, transparent); pointer-events: none; }
+.ftl .cut { position: absolute; top: -2px; bottom: 12px; width: 0; border-left: 2px dashed var(--error); pointer-events: none; }
+.ftl input[type="range"] { position: absolute; left: 0; right: 0; top: 0; bottom: 14px; width: 100%; height: 32px; margin: 0; background: transparent; -webkit-appearance: none; appearance: none; cursor: pointer; }
+.ftl input[type="range"]::-webkit-slider-runnable-track { height: 32px; background: transparent; }
+.ftl input[type="range"]::-moz-range-track { height: 32px; background: transparent; }
+.ftl input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 4px; height: 36px; margin-top: -2px; border-radius: 2px; background: var(--primary); box-shadow: 0 0 0 2px var(--surface-container-lowest); }
+.ftl input[type="range"]::-moz-range-thumb { width: 4px; height: 36px; border: 0; border-radius: 2px; background: var(--primary); box-shadow: 0 0 0 2px var(--surface-container-lowest); }
+.ftl input[type="range"]:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 4px; }
+.ftl .ticks { position: absolute; left: 0; right: 0; bottom: 0; height: 12px; pointer-events: none; }
+.ftl .ticks span { position: absolute; transform: translateX(-50%); font: 500 10px/12px var(--font); color: var(--on-surface-variant); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ftl .ticks span:first-child { transform: none; }
+.ftl .ticks span:last-child { transform: translateX(-100%); }
+.ftl .now { display: flex; flex-direction: column; align-items: flex-end; min-width: 132px; }
+.ftl .now .t { font: 500 16px/22px var(--font); color: var(--on-surface); }
+.ftl .now .s { font: 400 11px/14px var(--font); color: var(--on-surface-variant); white-space: nowrap; }
+
+@media (max-width: 720px) {
+  .v3d-panel { left: 8px; right: 8px; top: 8px; width: auto; max-height: 38%; }
+  .v3d-probe { top: auto; bottom: 132px; left: 8px; right: 8px; width: auto; }
+  .v3d-time { left: 8px; right: 8px; bottom: 10px; }
+  .ftl { flex-wrap: wrap; border-radius: var(--r-xl); padding: 8px; gap: 8px; }
+  .ftl .track { order: 3; flex-basis: 100%; }
+  .ftl .now { flex: 1; align-items: flex-start; min-width: 0; }
+}
