@@ -15,6 +15,7 @@ from google.genai import types
 
 import app.agents  # noqa: F401  (Vertex env)
 from app.config import get_settings
+from app.services import gemini
 
 log = logging.getLogger(__name__)
 
@@ -25,7 +26,7 @@ At most 12 events, most significant first."""
 
 
 def _agent() -> LlmAgent:
-    return LlmAgent(name="historian", model=get_settings().gemini_model_fast, tools=[google_search],
+    return LlmAgent(name="historian", model=gemini.adk_model(get_settings().gemini_model_fast), tools=[google_search],
                     instruction="You find documented natural-hazard incidents with web sources. Answer only in JSON.",
                     generate_content_config=types.GenerateContentConfig(temperature=0.1))
 

@@ -17,6 +17,7 @@ from google.genai import types
 import app.agents  # noqa: F401  (Vertex env)
 from app.agents import tools as T
 from app.config import get_settings
+from app.services import gemini
 
 log = logging.getLogger(__name__)
 APP = "pravah_assistant"
@@ -162,7 +163,7 @@ def _get_runner() -> Runner:
     if _runner is None:
         s = get_settings()
         kinds = "\n".join(f"  - {k}: {v}" for k, v in ACTION_KINDS.items())
-        agent = LlmAgent(name="assistant", model=s.gemini_model_fast, instruction=INSTRUCTION + "\nAction kinds:\n" + kinds,
+        agent = LlmAgent(name="assistant", model=gemini.adk_model(s.gemini_model_fast), instruction=INSTRUCTION + "\nAction kinds:\n" + kinds,
                          tools=[search_web, find_place, list_my_areas, propose_action, *AREA_TOOLS],
                          planner=BuiltInPlanner(thinking_config=types.ThinkingConfig(thinking_level=s.gemini_thinking_fast,
                                                                                      include_thoughts=True)),

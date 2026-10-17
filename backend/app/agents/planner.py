@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 import app.agents  # noqa: F401  (Vertex env)
 from app.config import get_settings
+from app.services import gemini
 from app.models.scenario import ScenarioParams, apply_rain_change
 
 
@@ -52,7 +53,7 @@ RANGES = {"upstream_inflow_m3s": (0, 20000), "manual_intensity_mm_h": (0, 300), 
 
 def _agent() -> LlmAgent:
     s = get_settings()
-    return LlmAgent(name="scenario_planner", model=s.gemini_model_fast, instruction=INSTRUCTION,
+    return LlmAgent(name="scenario_planner", model=gemini.adk_model(s.gemini_model_fast), instruction=INSTRUCTION,
                     output_schema=PlanOverrides, output_key="plan",
                     planner=BuiltInPlanner(thinking_config=types.ThinkingConfig(thinking_level=s.gemini_thinking_fast)),
                     generate_content_config=types.GenerateContentConfig(temperature=0.1))

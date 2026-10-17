@@ -11,6 +11,7 @@ from google.genai import types
 import app.agents  # noqa: F401  (Vertex env)
 from app.agents.tools import TOOLS
 from app.config import get_settings
+from app.services import gemini
 
 log = logging.getLogger(__name__)
 APP = "pravah"
@@ -32,7 +33,7 @@ def _get_runner() -> Runner:
     global _runner
     if _runner is None:
         s = get_settings()
-        agent = LlmAgent(name="analyst", model=s.gemini_model_fast, instruction=INSTRUCTION, tools=TOOLS,
+        agent = LlmAgent(name="analyst", model=gemini.adk_model(s.gemini_model_fast), instruction=INSTRUCTION, tools=TOOLS,
                          planner=BuiltInPlanner(thinking_config=types.ThinkingConfig(thinking_level=s.gemini_thinking_fast)),
                          generate_content_config=types.GenerateContentConfig(temperature=0.2))
         _runner = Runner(app_name=APP, agent=agent, session_service=_sessions)

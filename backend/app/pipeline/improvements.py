@@ -13,6 +13,7 @@ import io
 import json
 import logging
 import re
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
 from typing import Literal
@@ -105,10 +106,10 @@ def _channels(aoi_id: str, grid, bg) -> tuple[np.ndarray, np.ndarray]:
     return mask, names
 
 
-def step_clogged(aoi_id: str) -> None:
+def step_clogged(aoi_id: str, x: dict | None = None) -> None:
     """Drains, culverts and road low spots (model) plus channels, new construction and bare ground (imagery)."""
     from app.services import earth_engine as ees
-    x = _ctx(aoi_id)
+    x = x or _ctx(aoi_id)
     grid, bbox, urban = x["grid"], x["bbox"], x["urban"]
     wtype: dict = {}
     if storage.exists(aoi_id, "waterways.parquet"):
@@ -143,8 +144,8 @@ def step_clogged(aoi_id: str) -> None:
     storage.put_json(aoi_id, "improvements/_clogged.json", {"items": items, "notes": notes, "imagery": imagery})
 
 
-def step_congested(aoi_id: str) -> None:
-    x = _ctx(aoi_id)
+def step_congested(aoi_id: str, x: dict | None = None) -> None:
+    x = x or _ctx(aoi_id)
     items: list[dict] = []
     if storage.exists(aoi_id, "G_drive.graphml"):
         G = storage.load_graph(aoi_id, "G_drive.graphml")
@@ -235,13 +236,16 @@ def reported(x: dict, aoi_id: str) -> tuple[list[dict], list[dict], str]:
         return [u for u in cand if grounded(u) or opens(u, str(it.get("place", "")))][:3]
 
     raw = raw if isinstance(raw, list) else []
+
+    def check(it: dict) -> tuple[list[str], dict | None]:
+        urls, place = links(it), str(it.get("place", ""))[:80]
+        return urls, (_geocode(f"{place}, {x['name']}", x["bbox"]) if urls and place else None)
     with ThreadPoolExecutor(max_workers=6) as ex:
-        checked = list(ex.map(links, raw))
-    for it, urls in zip(raw, checked):
+        checked = list(ex.map(check, raw))
+    for it, (urls, g) in zip(raw, checked):
         place = str(it.get("place", ""))[:80]
         if not urls or not place:
             continue
-        g = _geocode(f"{place}, {x['name']}", x["bbox"])
         if not g or not imp.in_box(g["lng"], g["lat"], x["bbox"]):
             continue
         r, c = x["ll2rc"](g["lng"], g["lat"])
@@ -305,22 +309,28 @@ def _clips(aoi_id: str, it: dict, imagery: dict) -> list[tuple[str, str, bytes]]
     # tree-lined road or field edge look like a green channel, to Gemini and to people
     if it["category"] == "choked_channel":
         win = tuple(imagery["recent"][:2])
-        out.append((f"{base}_wide", f"Wider view, about 2 km across, {win[0]} to {win[1]}", ees.s2_chip(lon, lat, win, half_m=1000, px=500)))
-        out.append((f"{base}_rgb", "Close-up, about 600 m across, true colour", ees.s2_chip(lon, lat, win)))
-        out.append((f"{base}_fcc", "Close-up, false colour (vegetation shows red)", ees.s2_chip(lon, lat, win, false_colour=True)))
+        out.append((f"{base}_wide", f"Wider view, about 2 km across, {win[0]} to {win[1]}", dict(window=win, half_m=1000, px=500)))
+        out.append((f"{base}_rgb", "Close-up, about 600 m across, true colour", dict(window=win)))
+        out.append((f"{base}_fcc", "Close-up, false colour (vegetation shows red)", dict(window=win, false_colour=True)))
     else:
         before = ("2016-11-01", "2017-05-31")
         y = date.today().year if date.today().month >= 6 else date.today().year - 1
         after = (f"{y - 1}-11-01", f"{y}-05-31")
-        out.append((f"{base}_wide", f"Wider view, about 2 km across, dry season {after[0][:4]}–{after[1][:4]}", ees.s2_chip(lon, lat, after, half_m=1000, px=500, l1c=True)))
-        out.append((f"{base}_before", f"Before: dry season {before[0][:4]}–{before[1][:4]}, about 600 m across", ees.s2_chip(lon, lat, before, l1c=True)))
-        out.append((f"{base}_after", f"After: dry season {after[0][:4]}–{after[1][:4]}, about 600 m across", ees.s2_chip(lon, lat, after, l1c=True)))
-    res = []
-    for key, cap, png in out:
-        png = _ring(png)
+        out.append((f"{base}_wide", f"Wider view, about 2 km across, dry season {after[0][:4]}–{after[1][:4]}", dict(window=after, half_m=1000, px=500, l1c=True)))
+        out.append((f"{base}_before", f"Before: dry season {before[0][:4]}–{before[1][:4]}, about 600 m across", dict(window=before, l1c=True)))
+        out.append((f"{base}_after", f"After: dry season {after[0][:4]}–{after[1][:4]}, about 600 m across", dict(window=after, l1c=True)))
+    out = [(key, cap, lambda kw=kw: ees.s2_chip(lon, lat, **kw)) for key, cap, kw in out]  # fetched in parallel below
+
+    def save(c) -> tuple[str, str, bytes]:
+        key, cap, fetch = c
+        png = _ring(fetch())
         storage.put_bytes(aoi_id, f"improvements/{key}.png", png, "image/png")
-        res.append((key, cap, png))
-    return res
+        return key, cap, png
+    with ThreadPoolExecutor(3) as ex:
+        return list(ex.map(save, out))
+
+
+_REVIEWS = threading.BoundedSemaphore(4)  # Gemini reviews at a time: 8 together met 429 RESOURCE_EXHAUSTED (18 Oct)
 
 
 def _review(it: dict, clips: list[tuple[str, str, bytes]]) -> Review | None:
@@ -338,15 +348,16 @@ def _review(it: dict, clips: list[tuple[str, str, bytes]]) -> Review | None:
     parts = [types.Part.from_bytes(data=png, mime_type="image/png") for _, _, png in clips]
     parts.append(types.Part(text=REVIEW_PROMPT.format(captions=caps, claim=claim)))
     try:
-        return gemini.generate_json(parts, Review, tier="fast", temperature=0.0)
+        with _REVIEWS:
+            return gemini.generate_json(parts, Review, tier="fast", temperature=0.0)
     except Exception as e:
         log.info("gemini review failed: %s", e)
         return None
 
 
-def step_finish(aoi_id: str) -> dict:
+def step_finish(aoi_id: str, x: dict | None = None) -> dict:
     from app.services import gemini
-    x = _ctx(aoi_id)
+    x = x or _ctx(aoi_id)
     cl = storage.get_json(aoi_id, "improvements/_clogged.json") if storage.exists(aoi_id, "improvements/_clogged.json") else {"items": [], "notes": [], "imagery": {}}
     co = storage.get_json(aoi_id, "improvements/_congested.json") if storage.exists(aoi_id, "improvements/_congested.json") else {"items": []}
     items, notes, imagery = cl["items"] + co["items"], list(cl.get("notes", [])), cl.get("imagery", {})
@@ -426,14 +437,23 @@ def start(aoi_id: str) -> bool:
 
 
 def build(aoi_id: str) -> dict:
-    """All three steps (for areas prepared before this feature, or a refresh), with status updates."""
-    for name, fn in (("clogged", step_clogged), ("congested", step_congested), ("improvements", step_finish)):
+    """All three steps (for areas prepared before this feature, or a refresh), with status updates. The area's layers
+    load once for all three, and the satellite checks (mostly waiting on Earth Engine) run alongside the road-graph
+    analysis; the last step needs both."""
+    x = _ctx(aoi_id)
+
+    def step(name: str, fn):
         _status(aoi_id, name, "running")
         try:
-            res = fn(aoi_id)
+            res = fn(aoi_id, x)
             _status(aoi_id, name, "ready")
+            return res
         except Exception:
             log.exception("improvements %s failed", name)
             _status(aoi_id, name, "error")
             raise
-    return res
+    with ThreadPoolExecutor(2) as ex:
+        jobs = [ex.submit(step, "clogged", step_clogged), ex.submit(step, "congested", step_congested)]
+        for j in jobs:
+            j.result()
+    return step("improvements", step_finish)
