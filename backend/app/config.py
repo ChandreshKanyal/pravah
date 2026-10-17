@@ -44,7 +44,10 @@ class Settings(BaseSettings):
     lsi_threshold: str = "auto"
     # "class_shift": +-1 class by threshold exceedance (17 Oct); "graded_g": score x g (16 Oct); spec: score x clip(R)
     lsi_modulation: str = "class_shift"
-    flow_max_cell_hours: int = 1_200_000  # 2D flow model: 30 m cells x storm hours above this run on 60 m cells
+    # 2D flow model: 30 m cells x storm hours above this run on 60 m cells. 1.0 M (17 Oct, was 1.2 M): Rudraprayag 4 h
+    # (1.15 M) took 142 s on Cloud Run at 30 m; at 60 m flooded area and people stayed within 4% (1.93 -> 2.00 km2,
+    # 1,605 -> 1,608). Cities stay at 30 m: at 60 m Kalyan's people moved 2,525 -> 1,636 and Mumbai's 17,195 -> 21,172
+    flow_max_cell_hours: int = 1_000_000
     apply_arf: bool = True  # TP-29 areal reduction of point rain in the rational method (spec: none)
     # S13 urban: rain up to this intensity is carried by storm drains (Mumbai's historical design standard is 25 mm/h;
     # BRIMSTOWAD upgrades target 50 mm/h). Only the excess ponds.

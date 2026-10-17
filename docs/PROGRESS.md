@@ -11,7 +11,11 @@ All work is **committed** on `main` (no git remote is configured, so nothing is 
 **Deployed tonight (by the agent, at the human's request):**
 - Backend revision **00004 (8 CPU / 8 GiB)** is live (23:05). Rudraprayag record rain, 4 h: 176 s on a fresh instance,
   155 s warm (flow model 159 / 142 s); 2 CPU was 263 s, the Mac 57 s. 4x the CPUs gave <2x, so more CPU will not help.
-  Option B (lower `flow_max_cell_hours` so large areas use 60 m cells, ~8x less work, then re-validate) is still open.
+  **Option B done (23:55, committed, needs a backend deploy):** `flow_max_cell_hours` 1.2 M -> 1.0 M, so Rudraprayag-sized
+  work (1.15 M cell-hours) uses 60 m cells. Validation (all four forced to 60 m, Mac, flow model s / flooded km2 / people):
+  Rudraprayag 45->12 s, 1.93->2.00, 1,605->1,608; Amingaon 12->4, 0.14->0.12, 7->7; Kalyan 38->11, 1.61->1.51,
+  2,525->1,636; Mumbai 19->7, 3.29->3.24, 17,195->21,172. Cities change too much at 60 m, so they stay at 30 m (0.39-0.69 M).
+  The cost is cells x time steps, and Rudraprayag's fast river forces ~1 s steps. Rudraprayag default is now `39d115c1bd7b` (60 m).
 - **Runs are now jobs (23:20; deployed 23:40, backend revision 00005 + hosting):** a 155 s warm run finished on the server ("200 OK" in the
   log) but the reply never reached the client: a connection silent for minutes was dropped on the way (phone hotspot).
   The website now calls `POST /api/run-jobs` (answers at once with a job id, the run continues in a thread) and polls
@@ -45,7 +49,7 @@ Behaviour the human asked for (keep it):
   only off river corridors), Ask Pravah answers only platform/disaster questions, delete runs/areas.
 
 Current default runs: Mumbai d277268c1783 -> bc64e91a5d67 (IMD very heavy, 17,195 to move: likely high, drains are a flat
-25 mm/h sink), Amingaon 734b0b1c8987 -> 955fd414a7b3, Rudraprayag 56f044f26351 -> 7ae4e101e63b (made by the live backend,
+25 mm/h sink), Amingaon 734b0b1c8987 -> 955fd414a7b3, Rudraprayag 56f044f26351 -> 39d115c1bd7b (60 m flow cells; before: 7ae4e101e63b, made by the live backend,
 same result as 935b9f923382), Kalyan d72416dfcfe0 -> ab9f8b47f91d (hand-edited 2150 mm / 9 h). Dera Ghazi Khan
 b48178d77d97, Houston de6b9b9e28bf (prepared tonight as a speed test) also exist.
 
