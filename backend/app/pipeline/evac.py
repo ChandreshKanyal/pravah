@@ -23,12 +23,30 @@ class Network:
     nodes: gpd.GeoDataFrame
     tree: cKDTree
     node_ids: np.ndarray
+    csr: tuple | None = None  # (flat cells, starts) of edges["cells"] (routing.cells_csr)
+    static: dict | None = None  # per-edge values that never change between runs (see _static)
 
 
 def load_network(edges: gpd.GeoDataFrame, nodes: gpd.GeoDataFrame) -> Network:
     edges = edges.reset_index(drop=True)
     edges["cells"] = edges["cells"].apply(lambda c: [int(x) for x in c])
-    return Network(edges, edges.to_crs("EPSG:4326"), nodes, cKDTree(nodes[["x", "y"]].to_numpy()), nodes["node"].to_numpy())
+    return Network(edges, edges.to_crs("EPSG:4326"), nodes, cKDTree(nodes[["x", "y"]].to_numpy()), nodes["node"].to_numpy(),
+                   csr=routing.cells_csr(edges["cells"].tolist()))
+
+
+def _static(net: Network) -> dict:
+    """Per-edge columns as plain lists, WGS84 geometry and its GeoJSON, and node positions, built once per network
+    (the network is cached with the area): reading them row by row from the GeoDataFrame took ~3 s per run."""
+    if net.static is None:
+        E, ll = net.edges, net.edges_ll.geometry.values
+        net.static = {
+            "geoms_ll": list(ll),
+            "geojson": [mapping(g) for g in shapely.set_precision(ll, 1e-6)],
+            "bridge": [bool(x) for x in E["bridge"]], "name": E["name"].tolist(), "highway": E["highway"].tolist(),
+            "length_m": E["length_m"].tolist(), "length_r": [round(float(x), 1) for x in E["length_m"]],
+            "node_ll": dict(zip(net.nodes["node"].tolist(), zip(net.nodes["lon"].tolist(), net.nodes["lat"].tolist()))),
+        }
+    return net.static
 
 
 def _cell_xy(grid, r, c):
@@ -43,13 +61,13 @@ def plan(area, p: ScenarioParams, depth: np.ndarray, stage: np.ndarray,
         return {}
     grid, H = area.grid, depth.shape[0]
     E = net.edges
+    S = _static(net)
 
     # S8.1 closures
     blocked = np.zeros(len(E), bool)
     if p.blocked_polygons:
         polys = [shape(g.get("geometry", g)) for g in p.blocked_polygons]
-        blk = gpd.GeoSeries(polys, crs="EPSG:4326")
-        blocked = np.array([any(geom.intersects(b) for b in blk) for geom in net.edges_ll.geometry])
+        blocked[shapely.STRtree(S["geoms_ll"]).query(polys, predicate="intersects")[1]] = True
     limit = p.walk_depth_limit_m if p.travel_mode == "walk" else p.vehicle_depth_limit_m
     # bridges: real OSM spans; closed by OSM status (construction etc.) or when the river reaches the deck
     spans = (area.bridges or {}).get("spans", [])
@@ -64,11 +82,12 @@ def plan(area, p: ScenarioParams, depth: np.ndarray, stage: np.ndarray,
         if e < len(E):
             bridge_first[e] = min(int(s_first[k]) for k in ks)
             bridge_cells[e] = set().union(*(spans[k]["cells"] for k in ks))
-    first, reason = routing.edge_states(E["cells"].tolist(), blocked, depth, limit, bridge_first, bridge_cells)
+    first, reason = routing.edge_states(E["cells"], blocked, depth, limit, bridge_first, bridge_cells,
+                                        csr=net.csr or routing.cells_csr(E["cells"].tolist()))
     # S8.2 adjusted network at the evaluation hour
     t_eval = min(H, p.evac_start_hour + 1)
     w = routing.edge_weight(E["t0_s"].to_numpy(), E["crowd_e"].to_numpy(), E["slope_adjacent"].to_numpy())
-    G = routing.build_graph(E["u"].to_numpy(), E["v"].to_numpy(), w, first > t_eval)
+    G = routing.RouteGraph(E["u"].to_numpy(), E["v"].to_numpy(), w, first > t_eval)
 
     def nearest_node(x, y):
         return net.node_ids[net.tree.query([x, y])[1]]
@@ -144,7 +163,8 @@ def plan(area, p: ScenarioParams, depth: np.ndarray, stage: np.ndarray,
             caps[s["id"]], nodes_of[s["id"]] = int(s["capacity"]), s["node"]
 
     # S8.5-S8.7 travel times, assignment, routes
-    times = routing.travel_times(G, nodes_of, p.max_travel_min * 60)
+    cutoff = p.max_travel_min * 60
+    times = G.travel_times(nodes_of, cutoff, demand.keys())
     alloc, gap, _ = routing.transport_solve(demand, caps, times)
     total = int(sum(demand.values()))
     ratio = total / why["central"] if why["central"] > 0 else 0.0
@@ -152,21 +172,23 @@ def plan(area, p: ScenarioParams, depth: np.ndarray, stage: np.ndarray,
     placed = total - int(gap) if gap > 0 else sum(caps.values())  # reachable capacity (lower bound when gap > 0)
     assigned = {sid: 0 for sid in caps}
     routes = []
-    import networkx as nx
+    by_shelter: dict[str, list] = {}
+    for node, sid in alloc:
+        by_shelter.setdefault(sid, []).append(node)
+    paths = {sid: G.paths_to(nodes_of[sid], nodes, cutoff) for sid, nodes in by_shelter.items()}  # one search per shelter
     for (node, sid), people in alloc.items():
         assigned[sid] += people
-        path = nx.shortest_path(G, node, nodes_of[sid], weight="w")
-        eidx = [G[a][b]["e"] for a, b in zip(path[:-1], path[1:])]
+        eidx = paths[sid][node]
         fc = int(min((first[e] for e in eidx), default=routing.NEVER))
         until = None if fc >= routing.NEVER else fc
         geom = _path_geom(net, eidx, node)
         travel_s = float(sum(tt[e] for e in eidx))
-        nrow = net.nodes.loc[net.nodes["node"] == node].iloc[0]
-        routes.append({"from_node": int(node), "from_lon": round(float(nrow["lon"]), 6),
-                       "from_lat": round(float(nrow["lat"]), 6), "to_shelter": sid, "people": int(people),
+        lon_, lat_ = S["node_ll"][node]
+        routes.append({"from_node": int(node), "from_lon": round(float(lon_), 6),
+                       "from_lat": round(float(lat_), 6), "to_shelter": sid, "people": int(people),
                        "eta_min": round((travel_s + access_s.get(node, 0.0)) / 60, 1),
                        "access_min": round(access_s.get(node, 0.0) / 60, 1),
-                       "length_km": round(float(sum(E.at[e, "length_m"] for e in eidx)) / 1000, 2),
+                       "length_km": round(float(sum(S["length_m"][e] for e in eidx)) / 1000, 2),
                        "passable_until_h": until,
                        "use_now_gone_soon": until is not None and until <= p.evac_start_hour + 2, "geometry": geom})
     routes.sort(key=lambda r: -r["people"])
@@ -207,17 +229,17 @@ def plan(area, p: ScenarioParams, depth: np.ndarray, stage: np.ndarray,
     # from every hour the cause holds (roads do not reopen in a scenario)
     pieces: dict[int, list] = {}
     flood_any = (np.nan_to_num(depth) > limit).any(axis=0).ravel()
+    geoms = E.geometry.values
     for i in np.flatnonzero(first < routing.NEVER):
         if reason[i] == "flood":
-            pieces[int(i)] = routing.hazard_pieces(E.geometry.iloc[i], grid, flood_any, skip=bridge_cells[i] or None)
+            pieces[int(i)] = routing.hazard_pieces(geoms[i], grid, flood_any, skip=bridge_cells[i] or None)
     roads_fc = {"type": "FeatureCollection", "features": [
-        {"type": "Feature", "geometry": mapping(shapely.set_precision(g, 1e-6)), "properties": {
+        {"type": "Feature", "geometry": S["geojson"][i], "properties": {
             "first_closed_hour": None if first[i] >= routing.NEVER else int(first[i]), "reason": reason[i] or None,
-            "bridge": bool(E.at[i, "bridge"]), "name": E.at[i, "name"], "highway": E.at[i, "highway"],
-            "length_m": round(float(E.at[i, "length_m"]), 1),
+            "bridge": S["bridge"][i], "name": S["name"][i], "highway": S["highway"][i], "length_m": S["length_r"][i],
             # flat [a0, b0, a1, b1, ...]: Firestore stores no nested arrays
             **({"hazard": [f for ab in pieces[i] for f in ab]} if pieces.get(i) else {})}}
-        for i, g in enumerate(net.edges_ll.geometry)]}
+        for i in range(len(E))]}
     routes_fc = {"type": "FeatureCollection", "features": [
         {"type": "Feature", "geometry": r.pop("geometry"), "properties": r} for r in routes]}
     return {"shelters": shelters_out, "bridges": bridges, "capacity_gap_people": int(gap),
@@ -261,13 +283,14 @@ def _lonlat_rc(grid, lon, lat):
 
 
 def _path_geom(net: Network, eidx: list[int], start_node) -> dict:
+    S = _static(net)
     coords = []
     for e in eidx:
-        cs = list(net.edges_ll.geometry.iloc[e].coords)
+        cs = list(S["geoms_ll"][e].coords)
         coords.extend(cs if not coords else cs[1:])
     if len(coords) < 2:
-        n = net.nodes[net.nodes["node"] == start_node].iloc[0]
-        coords = [(n["lon"], n["lat"]), (n["lon"], n["lat"])]
+        lon, lat = S["node_ll"][start_node]
+        coords = [(lon, lat), (lon, lat)]
     return mapping(LineString(coords))
 
 
