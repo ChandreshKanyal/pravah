@@ -1,0 +1,10 @@
+# what `gcloud run deploy --source .` uploads (it does not read .dockerignore): not the local venv, caches or tests
+.gcloudignore
+.venv/
+__pycache__/
+.pytest_cache/
+cache/
+tests/
+.env*
+!.env.example
+*.pyc
