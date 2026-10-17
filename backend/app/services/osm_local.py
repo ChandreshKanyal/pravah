@@ -41,6 +41,20 @@ def covers(bbox) -> bool:
     return india().contains(box(*bbox))
 
 
+_ready: dict = {}
+
+
+def ready() -> bool:
+    """The tile set is complete: `_meta.json` is uploaded after every tile (until then, prep uses Overpass)."""
+    import time
+    if not _ready.get("ok") and time.time() - _ready.get("at", 0) > 60:  # once found, it stays found
+        try:
+            _ready.update(ok=storage._bucket().blob(f"{PREFIX}/_meta.json").exists(), at=time.time())
+        except Exception:  # noqa: BLE001
+            _ready.update(ok=False, at=time.time())
+    return _ready["ok"]
+
+
 def _tile(x: int, y: int) -> list[dict]:
     from google.api_core.exceptions import NotFound
     try:

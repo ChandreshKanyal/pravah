@@ -25,6 +25,14 @@ from app.services.osm import PLACE_TAGS, POI_TAGS, WATERWAY_TAGS  # noqa: E402
 TILE = 0.1
 KEYS = ["highway", "waterway", "tunnel", "amenity", "shop", "tourism", "public_transport", "railway", "building", "place"]
 FEATURE_TAGS = {**POI_TAGS, **WATERWAY_TAGS, **PLACE_TAGS}
+# tags nothing in Pravah reads (editing metadata, addresses, links): dropped to keep India's tiles small
+DROP = ("source", "created_by", "note", "fixme", "FIXME", "is_in", "addr:", "check_date", "wikipedia", "wikidata",
+        "brand", "contact:", "survey", "description", "image", "mapillary", "old_name", "alt_name", "website", "phone",
+        "opening_hours", "email", "start_date", "tiger:", "ref:", "gnis:")
+
+
+def slim(tags) -> dict:
+    return {k: v for k, v in tags if not k.startswith(DROP) and not (k.startswith("name:") and k not in ("name:hi", "name:en"))}
 
 
 def wanted(tags: dict, way: bool) -> bool:
@@ -45,11 +53,11 @@ def main(pbf: str, out: str) -> None:
     buf: dict[tuple[int, int], list[str]] = defaultdict(list)
     n_buf = 0
 
-    def flush() -> None:
+    def flush() -> None:  # each flush appends one gzip member per tile (a multi-member gzip reads as one file)
         nonlocal n_buf
         for (x, y), lines in buf.items():
-            with open(os.path.join(out, f"{x}_{y}.jsonl"), "a") as f:
-                f.write("".join(lines))
+            with open(os.path.join(out, f"{x}_{y}.jsonl.gz"), "ab") as f:
+                f.write(gzip.compress("".join(lines).encode(), compresslevel=6))
         buf.clear()
         n_buf = 0
 
@@ -62,36 +70,30 @@ def main(pbf: str, out: str) -> None:
             if not wanted(tags, False) or not o.location.valid():
                 continue
             lat, lon = o.location.lat, o.location.lon
-            buf[tile_of(lat, lon)].append(json.dumps({"n": o.id, "t": tags, "l": [round(lat, 7), round(lon, 7)]}, separators=(",", ":")) + "\n")
+            buf[tile_of(lat, lon)].append(json.dumps({"n": o.id, "t": slim(tags.items()), "l": [round(lat, 6), round(lon, 6)]}, separators=(",", ":")) + "\n")
             nodes += 1
             n_buf += 1
         elif o.is_way():
             tags = dict(o.tags)
             if not wanted(tags, True):
                 continue
-            pts = [[n.ref, round(n.lat, 7), round(n.lon, 7)] for n in o.nodes if n.location.valid()]
+            pts = [[n.ref, round(n.lat, 6), round(n.lon, 6)] for n in o.nodes if n.location.valid()]
             if len(pts) < 2:
                 bad += 1
                 continue
-            line = json.dumps({"w": o.id, "t": tags, "n": pts}, separators=(",", ":")) + "\n"
+            line = json.dumps({"w": o.id, "t": slim(tags.items()), "n": pts}, separators=(",", ":")) + "\n"
             for t in {tile_of(p[1], p[2]) for p in pts}:
                 buf[t].append(line)
                 n_buf += 1
             ways += 1
             if ways % 500_000 == 0:
                 print(f"{ways:,} ways, {nodes:,} nodes, {bad} without locations, {time.time() - t0:.0f} s", flush=True)
-        if n_buf > 400_000:
+        if n_buf > 1_500_000:
             flush()
     flush()
     print(f"done: {ways:,} ways, {nodes:,} tagged nodes, {bad} ways without locations, {time.time() - t0:.0f} s", flush=True)
-    files = [f for f in os.listdir(out) if f.endswith(".jsonl")]
-    for f in files:  # gzip every tile
-        p = os.path.join(out, f)
-        with open(p, "rb") as src, gzip.open(p + ".gz", "wb", compresslevel=6) as dst:
-            dst.write(src.read())
-        os.remove(p)
-    print(f"{len(files)} tiles, {sum(os.path.getsize(os.path.join(out, f + '.gz')) for f in files) / 1e6:.0f} MB gzipped", flush=True)
-
+    files = [f for f in os.listdir(out) if f.endswith(".jsonl.gz")]
+    print(f"{len(files)} tiles, {sum(os.path.getsize(os.path.join(out, f)) for f in files) / 1e6:.0f} MB gzipped", flush=True)
 
 if __name__ == "__main__":
     main(sys.argv[1], sys.argv[2])

@@ -219,7 +219,7 @@ def bundle(bbox: tuple[float, float, float, float]) -> dict:
     q = f"[out:json][timeout:{BUNDLE_TIMEOUT_S}];(" + "".join(f"{x}{bb};" for x in sel) + ");(._;>;);out;"
     t0, els = time.time(), None
     from app.services import osm_local
-    if osm_local.covers(bbox):  # India: our own copy of OpenStreetMap, no public server in the way
+    if osm_local.covers(bbox) and osm_local.ready():  # India: our own copy of OpenStreetMap, no public server
         try:
             els = osm_local.elements((w, s, e, n))
         except Exception as ex:  # noqa: BLE001
