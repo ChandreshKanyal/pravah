@@ -45,6 +45,97 @@ Open items:
   model's frames would show rise and recession (not done).
 - 3D overlays have no click tooltips yet (click shows the water at the spot).
 - Takaoka (786e4120442d, Japan): OSM buildings only; fixes rerun when its map opens. The Mac swaps heavily.
+- Fixes lists of other areas still hold the old (looser) satellite leads until rebuilt (`improvements.build(aoi_id)`);
+  only Dera Ghazi Khan (b48178d77d97) was rebuilt.
+- OSM: a South Asia extract in Cloud Storage (no public servers at all) is the next step if Overpass gets worse.
+
+## 17 Oct, evening: the flow model drives the 2D map, people and roads
+Bug (Kalyan d72416dfcfe0, 2150 mm in 9 h): the 2D map showed 0.026 km2 at every hour while 3D flooded the city. The
+HAND + hollow models only hold water in reliable river corridors and closed hollows; Kalyan's channels are tidal or
+urban drains (river physics off) and its box has 29 hollow cells, so rain beyond the drains on flat streets was counted
+nowhere: 8 people to move vs ~15,000 in water in the flow model.
+Now every run runs the 2D shallow-water flow model (`flow.simulate`) and each hour's depth is the deepest of river
+(HAND), hollow and flow-model water, worst so far (`flow.hourly_depth`). Flow-model water counts as flooding when >= 15 cm,
+or >= 5 cm on slopes < 5 deg (thinner films on slopes are hillside runoff: Rudraprayag 3.06 -> 1.93 km2; flat cities
+within 1 %). Water off river corridors uses the still-water evacuation thresholds. The same simulation is uploaded in the
+background as the run's 3D water (`flow.store_later`), so 3D does not simulate again. If the flow model fails, the run
+falls back to HAND + hollows with a warning. NOTE(spec-drift): SPEC's run is HAND/rational-method screening; the
+hydrodynamic model was 3D-only.
+Validation (same scenarios as the area defaults; new runs kept; Kalyan's default switched to ab9f8b47f91d, the others NOT yet):
+
+| Area | default run -> new run | flooded km2 (end) | people to move | run time |
+|---|---|---|---|---|
+| Kalyan, hand-edited 2150 mm / 9 h | 7fd8325be34b -> ab9f8b47f91d | 0.026 -> 1.61 | 8 -> 2,525 | 33 -> 91 s |
+| Amingaon, cloudburst | 4812175de1bf -> 955fd414a7b3 | 0.019 -> 0.14 | 7 -> 7 | 7 -> 31 s |
+| Rudraprayag, record rain | d143334b8b1b -> 935b9f923382 | 0.23 -> 1.93 | 1,145 -> 1,605 | 15 -> 74 s |
+| Mumbai Kurla, IMD very heavy | 46b7490e56ce -> bc64e91a5d67 | 1.55 -> 3.29 | 5,682 -> 17,195 | 18 -> 37 s |
+
+Caveat: the flow model's drains are a uniform sink on built-up cells (25 mm/h default) with no pipe network or Mithi
+channel conveyance beyond the 30 m terrain, so Kurla's 17,195 is likely high; it is a planning estimate for review.
+
+## 17 Oct, late evening: cloud review fixes (10 findings, all fixed)
+1. Standing-water evacuation thresholds only off river corridors (corridor = reliable reach and river-wet or HAND < 3 m);
+   flow-model water beside a fast river keeps the moving-water threshold (~0.28 m, not 0.5 m).
+2. `static_depth.npz` (river + hollows alone) saved per run; the 3D "Map (hourly)" comparison and the flow agreement
+   check read it (depth.npz now includes the flow model).
+3. `models/scenario.apply_rain_change` (and the same rules in Workspace's assistant command): Gemini's plan and the
+   assistant's tools reset strength/shape/record rarity on a new source and map an explicit hyetograph to rain_shape.
+4. Rain hours: replies for older settings are ignored; "Custom" only offered when the loaded hours match the settings.
+5. One flow simulation at a time per instance (`flow._model_lock`), in runs and 3D jobs alike.
+6. A source that fell back to default rain hides the strength slider; the run warns "Strength not applied"; the run name
+   shows "x k" only when the strength was applied.
+7. OSMnx timeouts back to 240 s; the bundle request 300 s; an Overpass "runtime error" (timeout/memory) is not retried
+   on every mirror, it falls back to the separate requests.
+8. `POST /api/runs?flow=false` skips the in-run flow model (labelled quick preview).
+9. A newer run of the same area replaces a 3D upload still waiting (frames are not piled up in memory).
+10. Bundle selectors generated from POI_TAGS/WATERWAY_TAGS (waterways now also as relations, like the separate path).
+Re-validated: flooded areas unchanged; Rudraprayag people 1,589 -> 1,605 (fix 1). Tests: 101 pass; build clean.
+
+## 17 Oct, ~17:30-18:15: OSM download in one request
+The "Analysing the road network" step took 2-6 min per new area. Measured: not the network (200+ Mbps); every
+Overpass request waits ~30 s in the public queue (overpass-api.de "at capacity"), mirrors mail.ru (504), kumi (500),
+osm.jp, openstreetmap.ru/.fr were down; private.coffee worked at 16:00 (8 s, data ~3 months old) and returned 500 by
+18:00; OSMnx itself retries a 429/504 server every 55 s forever; and `_osm` sent 5 requests in a row. Sending them in
+parallel made it worse (overpass-api.de refused connections; bridges and places failed).
+Now `osm.bundle` sends ONE request (all highways, waterways, places, culverts; 500 m buffer) and cuts the walk and
+drive networks locally with OSMnx's own filters and steps (`_create_graph`, truncate, largest component, simplify,
+street counts; OSMnx 2.1.1 internals, pinned). Dera Ghazi Khan: 40 s, and identical to the old five requests (drive
+10,516 nodes / 27,701 edges, walk 10,651 / 28,960, 36 bridges, 112 places, 12 waterways). If it fails, the old
+separate requests run one after another. Mirrors: overpass-api.de, private.coffee, z.overpass-api.de; timeout 120 s.
+Houston (de6b9b9e28bf, 10 km, US: OSM buildings fallback) took 868 s in all; its OSM step 406 s, of which ~350 s was
+OSMnx building shapes for every road before keeping bridges/places. Fixed (`_subset`: hand OSMnx only the matching
+elements): OSM step 114 s incl. two server retries (download 78 s, drive 8 s, walk 26 s, places 1 s), identical output
+(drive 50,435 edges, walk 243,306, 1,626 bridges, 12,874 places, 512 waterways). Next biggest: `network` 265 s
+(dense city: 75,748 buildings, shelters, route tables). Screen estimate changed to "about 3-5 minutes" (landslide and buildings steps still take 1-4 min). Tests: 99 pass.
+
+## 17 Oct, ~16:30-17:30: rain choices for every source, record rarity, stricter satellite leads
+Human review of the Dera Ghazi Khan area (8 points). Done:
+- Rain: "Design" renamed **Custom**. Every source now has the same three controls: **Average rain over the storm**
+  (starts at the source's own value; any other strength shows "Not the actual forecast/record/IMD category" and the run
+  label says so, e.g. "x1.50 the IMD category (not the actual IMD category)"), **Duration**, and **Shape** (As
+  forecast/As measured for real rain, Steady, Early peak, Custom = hand-edited bars). New params `rain_shape`,
+  `rain_scale` (0.1-5), `return_period_y`; old runs load unchanged (None = the old defaults; "worse than forecast"
+  runs show as forecast x multiplier). Cloudburst can now be spread steady; its label then says it is below the IMD
+  definition. "Worse than forecast" case removed from the panel (the strength slider replaces it).
+- Record: choices "Most years" (2-yr), 1 in 10, 1 in 25, 1 in 100 (estimate) and "Wettest since 2001" with its date,
+  from a Gumbel (EV1, method of moments) fit to the area's CHIRPS yearly maxima 2001-2024
+  (`earth_engine.chirps_annual_max`, cached `chirps_annual.json`, `GET /api/aoi/{id}/rain-records`).
+  NOTE(spec-drift): SPEC S10.5 has only the record maximum. CHIRPS is a 5 km satellite product and reads low against
+  gauges (Dera Ghazi Khan record day 47 mm, 17 Aug 2022); the panel says so.
+- Map hour band opens at hour 1 when a run loads (was the last hour); back from 3D still restores the hour left.
+- Fixes: choked-channel leads need open water seen on the channel from space (JRC occurrence >= 5 % within 150 m):
+  all 5 Manka Canal leads in Dera Ghazi Khan had 0 % (tree rows and fields beside a canal too narrow for 10 m), the
+  Mithi River hyacinth patches have ~34 %. Each imagery lead gets a 2 km wider view plus the 600 m close-ups; Gemini
+  reports what is at the centre now and whether a channel is visible, and only confirmed leads whose centre matches the
+  claim are kept (the "Gemini unsure" leads are dropped). NOTE(spec-drift): stricter than S-fixes (unclear was kept).
+- Fixes panel: images open in a full-screen viewer (arrows, Esc, "Open full size"); sources are numbered name chips.
+  The Google Search suggestion chip stays as Google sends it: Vertex AI grounding terms require it to be shown
+  unmodified whenever grounded results are shown (checked 17 Oct).
+- Tests: `tests/test_rain_choices.py` (98 pass); `npm run build` clean.
+- What-if banner contradicted itself ("50 mm/h ... for 4 h (edited by hand), 2150 mm in 9 h"): hand edits froze the
+  source's numbers into the name, and the backend ran every edited hour even past the duration. Now a hand-edited run is
+  named "<source>, edited by hand" (totals come from the series), runs exactly `duration_h` hours, old runs' names are
+  cleaned on display, and the hour editor warns above the world-record envelope (Jennings 1950, 422 D^0.475 mm).
 
 ## 17 Oct, ~15:30-16:30: one model for every area (river / urban mode removed)
 Human request: "no mode selection ... uses all the best possible logic ... perhaps use some AI". Physics is chosen per
