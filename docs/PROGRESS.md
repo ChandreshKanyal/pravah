@@ -16,6 +16,11 @@ All work is **committed** on `main` (no git remote is configured, so nothing is 
   Rudraprayag 45->12 s, 1.93->2.00, 1,605->1,608; Amingaon 12->4, 0.14->0.12, 7->7; Kalyan 38->11, 1.61->1.51,
   2,525->1,636; Mumbai 19->7, 3.29->3.24, 17,195->21,172. Cities change too much at 60 m, so they stay at 30 m (0.39-0.69 M).
   The cost is cells x time steps, and Rudraprayag's fast river forces ~1 s steps. Rudraprayag default is now `39d115c1bd7b` (60 m).
+- **Flow model compiled at instance start (00:10, committed, needs the same backend deploy):** `app/main.py` startup thread
+  compiles the numba solver and `_breach` on a tiny grid (Mac, empty cache: 5.4 s), so the first Run on a new instance
+  no longer pays ~20 s of compiling. The cache is not baked into the image (Cloud Build's CPU may differ from Cloud Run's).
+  Why steps are ~1 s: the explicit solver's stability limit (CFL 0.45) set by the fastest water (the river), not detail
+  wanted; future options: local-inertial solver, river left to HAND, local time stepping (not for the deadline).
 - **Runs are now jobs (23:20; deployed 23:40, backend revision 00005 + hosting):** a 155 s warm run finished on the server ("200 OK" in the
   log) but the reply never reached the client: a connection silent for minutes was dropped on the way (phone hotspot).
   The website now calls `POST /api/run-jobs` (answers at once with a job id, the run continues in a thread) and polls
