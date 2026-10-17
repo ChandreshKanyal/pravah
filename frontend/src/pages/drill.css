@@ -1,0 +1,24 @@
+/* Tabletop drill (pages/Drill.tsx) */
+.drill { max-width: 1100px; }
+.dr-input, .dr-text { width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid var(--outline); border-radius: 4px; background: transparent;
+  color: var(--on-surface); font: 400 14px/20px var(--font); }
+.dr-text { resize: vertical; }
+.dr-grid { display: grid; grid-template-columns: 300px 1fr; gap: 20px; align-items: start; }
+.dr-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.dr-step { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border: 0; border-radius: var(--r-md); background: transparent;
+  text-align: left; cursor: pointer; color: var(--on-surface); font: inherit; }
+.dr-step:hover { background: var(--surface-container); }
+.dr-step.on { background: var(--secondary-container); color: var(--on-secondary-container); }
+.dr-step .txt { display: flex; flex-direction: column; min-width: 0; }
+.dr-step .t { font: 500 13px/18px var(--font); } .dr-step .s { font: 400 11px/14px var(--font); color: var(--on-surface-variant); }
+.drill .dot { flex: none; display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; font: 500 12px/1 var(--font);
+  background: var(--surface-container-highest); color: var(--on-surface); }
+.drill .dot.s0 { background: var(--error); color: var(--on-error); } .drill .dot.s1 { background: var(--warning-container); color: var(--on-warning-container); }
+.drill .dot.s2 { background: var(--tertiary-container); color: var(--on-tertiary-container); } .drill .dot.s3 { background: var(--tertiary); color: var(--on-tertiary); }
+.dr-msg { margin: 0; }
+.dr-eval ul { margin: 0; padding-left: 20px; }
+.dr-eval ul.good li::marker { content: "✓  "; color: var(--tertiary); } .dr-eval ul.missed li::marker { content: "✗  "; color: var(--error); }
+.dr-report ul { margin: 4px 0 0; padding-left: 20px; }
+.dr-past { width: 100%; }
+@media (max-width: 860px) { .dr-grid { grid-template-columns: 1fr; } .dr-steps { flex-direction: row; overflow-x: auto; } .dr-step { flex: none; width: auto; } }
+@media print { .dr-steps, .dr-inject { display: none; } .dr-grid { display: block; } }

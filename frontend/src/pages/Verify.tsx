@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import { useMap } from "@vis.gl/react-google-maps";
 import { getStaticLayers, listPhotos, photoUrl, uploadPhoto, verificationQueue } from "../api/client";
 import { Button, Icon, Segmented, nf, useSnackbar } from "../components/m3";
@@ -29,6 +29,8 @@ function Fly({ to }: { to: { lon: number; lat: number; z: number; t: number } | 
 
 export default function Verify() {
   const { aoiId = "" } = useParams();
+  const [qs] = useSearchParams();
+  const ref = qs.get("ref");  // arriving from "Check in the field" on an improvement: its place and kind are preset
   const snack = useSnackbar();
   const [queue, setQueue] = useState<VerificationItem[] | null>(null);
   const [photos, setPhotos] = useState<PhotoDoc[]>([]);
@@ -44,6 +46,11 @@ export default function Verify() {
   const [waiting, setWaiting] = useState<Queued[]>([]);
   const [online, setOnline] = useState(navigator.onLine);
   const [locating, setLocating] = useState(false);
+  useEffect(() => {
+    const lat = Number(qs.get("lat")), lon = Number(qs.get("lon"));
+    if (qs.get("kind") === "drain") setKind("drain");
+    if (Number.isFinite(lat) && Number.isFinite(lon) && lat && lon) { setPin({ lng: lon, lat }); setFly({ lon, lat, z: 18, t: Date.now() }); }
+  }, [qs]);
 
   async function flush() {
     const qs = await listQueued(aoiId);
@@ -131,6 +138,7 @@ export default function Verify() {
         <div className="doc-head"><div className="grow stack-s">
           <span className="label-l muted">Field check</span>
           <h1>Check buildings and drains with your own photos</h1>
+          {ref && <div className="notice info" style={{ marginBottom: 8 }}><Icon name="build" />Checking {ref}. The location is set; take a photo of the drain, culvert or channel there.</div>}
           <p className="body-m muted">Upload field or drone photos taken by your teams. Gemini classifies the structure or drain; a confident result replaces the proxy class from the next run. Only your photos are used, never Google Maps imagery.</p>
         </div></div>
 

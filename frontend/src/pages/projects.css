@@ -1,0 +1,46 @@
+/* Projects page (pages/Projects.tsx) */
+.projects { max-width: 1200px; }
+.pj-grid { display: grid; grid-template-columns: 320px 1fr; gap: 24px; align-items: start; }
+.pj-areas { display: flex; flex-direction: column; gap: 6px; position: sticky; top: 0; }
+.pj-area { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 0; border-radius: var(--r-md); background: transparent;
+  text-align: left; cursor: pointer; color: var(--on-surface); font: inherit; }
+.pj-area:hover { background: var(--surface-container); }
+.pj-area.on { background: var(--secondary-container); color: var(--on-secondary-container); }
+.pj-area.dim { opacity: .6; }
+.pj-area .txt { display: flex; flex-direction: column; min-width: 0; }
+.pj-area .t { font: 500 14px/20px var(--font); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pj-area .s { font: 400 12px/16px var(--font); color: var(--on-surface-variant); }
+.pj-runs { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.pj-area-head { gap: 12px; }
+.pj-run { display: flex; flex-direction: column; gap: 8px; padding: 12px 12px 6px; }
+.pj-run.current { border-color: var(--primary); }
+.pj-run-top { gap: 6px; align-items: flex-start; }
+.pj-run-top input[type="checkbox"] { margin: 11px 2px 0 4px; width: 16px; height: 16px; accent-color: var(--primary); }
+.pj-title { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 2px 0; border: 0; background: none; cursor: text;
+  font: 500 15px/22px var(--font); color: var(--on-surface); text-align: left; }
+.pj-title span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pj-title .ms { opacity: 0; color: var(--on-surface-variant); }
+.pj-title:hover .ms, .pj-title:focus-visible .ms { opacity: 1; }
+.pj-input { flex: 1; min-width: 0; height: 36px; padding: 0 10px; border: 1px solid var(--outline); border-radius: 4px; background: transparent;
+  color: var(--on-surface); font: 400 14px/20px var(--font); }
+.pj-metrics { display: flex; flex-wrap: wrap; gap: 6px 16px; padding-left: 64px; font: 400 13px/18px var(--font); color: var(--on-surface-variant); }
+.pj-metrics b { color: var(--on-surface); font-weight: 500; font-variant-numeric: tabular-nums; }
+.pj-metrics .bad b, .pj-compare td.bad { color: var(--error); }
+.pj-notes { margin-left: 64px; padding: 8px 10px; border: 1px solid var(--outline); border-radius: 4px; background: transparent; color: var(--on-surface);
+  font: 400 13px/18px var(--font); resize: vertical; }
+.pj-note { margin: 0 0 0 64px; padding: 6px 10px; border-left: 3px solid var(--outline-variant); white-space: pre-wrap; cursor: text; }
+.pj-actions { gap: 2px; padding-left: 56px; }
+.pj-compare { display: flex; flex-direction: column; gap: 8px; }
+.pj-table-wrap { overflow-x: auto; }
+.pj-compare th { white-space: nowrap; }
+.projects .empty { display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; padding: 32px; }
+.projects .empty p { margin: 0; }
+@media (max-width: 860px) {
+  .pj-grid { grid-template-columns: 1fr; }
+  .pj-areas { position: static; flex-direction: row; overflow-x: auto; }
+  .pj-area { flex: none; max-width: 260px; }
+  .pj-metrics, .pj-actions { padding-left: 0; } .pj-notes, .pj-note { margin-left: 0; }
+}
+.pj-compare table { width: 100%; table-layout: fixed; }
+.pj-compare thead th { white-space: normal; vertical-align: bottom; font: 500 12px/16px var(--font); overflow-wrap: anywhere; }
+.pj-compare thead th:first-child, .pj-compare tbody th { width: 34%; }

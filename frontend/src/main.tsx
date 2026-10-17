@@ -11,6 +11,8 @@ const Advisory = lazy(() => import("./pages/Advisory"));
 const Verify = lazy(() => import("./pages/Verify"));
 const Methods = lazy(() => import("./pages/Methods"));
 const View3D = lazy(() => import("./pages/View3D"));
+const Projects = lazy(() => import("./pages/Projects"));
+const Drill = lazy(() => import("./pages/Drill"));
 const S = (el: ReactNode) => <Suspense fallback={<div className="lin indet" style={{ position: "absolute", top: 0, left: 0, right: 0 }}><i /></div>}>{el}</Suspense>;
 
 const router = createBrowserRouter([
@@ -22,7 +24,9 @@ const router = createBrowserRouter([
       { path: "area/:aoiId/run/:runId/advisory", element: S(<Advisory />) },
       { path: "area/:aoiId/verify", element: S(<Verify />) },
       { path: "area/:aoiId/3d", element: S(<View3D />) },
+      { path: "area/:aoiId/drill", element: S(<Drill />) },
       { path: "methods", element: S(<Methods />) },
+      { path: "projects", element: S(<Projects />) },
     ],
   },
 ]);

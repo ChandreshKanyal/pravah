@@ -1,34 +1,36 @@
 import { useEffect, useRef, useState } from "react";
-import { useMode } from "../mode";
 import type { MapType } from "./MapCanvas";
 import { Icon, IconButton, Switch } from "./m3";
+import { Sym, type SymKey } from "./MapLegend";
 
 export type LayerKey =
-  | "depth" | "lsi" | "fsi" | "lsi_static" | "hand" | "streams" | "crowd"
-  | "roads" | "bridges" | "routes" | "shelters" | "all_shelters" | "assembly" | "medical" | "hotspots" | "traffic" | "history" | "ponding" | "drains";
-// technical layers shown only in Analyst view
-const ANALYST_ONLY: LayerKey[] = ["fsi", "lsi_static", "hand", "crowd", "streams", "lsi"];
+  | "depth" | "lsi" | "fsi" | "lsi_static" | "hand" | "streams" | "crowd" | "roads" | "bridges" | "routes" | "shelters"
+  | "all_shelters" | "assembly" | "staging" | "medical" | "hotspots" | "traffic" | "history" | "ponding" | "drains";
+/** Shaded layers that share a colour ramp replace each other, so a colour on the map has one meaning at a time. */
+export const SHADE_FAMILY: Partial<Record<LayerKey, "blue" | "warm">> = {
+  depth: "blue", ponding: "blue", hand: "blue", lsi: "warm", fsi: "warm", lsi_static: "warm", crowd: "warm",
+};
 
-const SUS = ["var(--sus-1)", "var(--sus-2)", "var(--sus-3)", "var(--sus-4)", "var(--sus-5)"];
-export const LAYERS: { key: LayerKey; label: string; icon: string; group: "scenario" | "area"; legend?: string[]; note?: string; needsRun?: boolean }[] = [
-  { key: "depth", label: "Flood depth", icon: "water", group: "scenario", legend: ["var(--depth-1)", "var(--depth-2)", "var(--depth-3)", "var(--depth-4)", "var(--depth-5)"], note: "0.05 · 0.5 · 1 · 1.5 · 3+ m at the selected hour", needsRun: true },
-  { key: "ponding", label: "Ponding likelihood (urban)", icon: "water_drop", group: "scenario", legend: ["#9ecae1", "#3182bd", "#08306b"], note: "low · medium (fill ≥ 30%) · high (≥ 70%)", needsRun: true },
-  { key: "drains", label: "Drains to inspect (urban)", icon: "plumbing", group: "scenario", legend: ["#8d6e63"], note: "D1 = highest priority", needsRun: true },
-  { key: "lsi", label: "Landslide susceptibility", icon: "landslide", group: "scenario", legend: SUS, note: "very low → very high at the selected hour", needsRun: true },
-  { key: "roads", label: "Road status", icon: "road", group: "scenario", legend: ["#9aa0a6", "#f29900", "#d93025"], note: "open · closes later · closed now (thicker)", needsRun: true },
-  { key: "routes", label: "Evacuation routes", icon: "directions_walk", group: "scenario", legend: ["#00897b"], note: "line width = people", needsRun: true },
-  { key: "bridges", label: "Bridges", icon: "pin_drop", group: "scenario", legend: ["#d93025", "#f29900", "#9aa0a6"], note: "closed now · closes later · stays open", needsRun: true },
-  { key: "shelters", label: "Shelters in use", icon: "night_shelter", group: "scenario", legend: ["#1a73e8"], note: "dot size = places filled" },
-  { key: "all_shelters", label: "All candidate shelters", icon: "holiday_village", group: "scenario", legend: ["#9aa0a6"], note: "schools, halls, temples found in OpenStreetMap" },
-  { key: "assembly", label: "Assembly points", icon: "groups", group: "scenario", legend: ["#34a853"], needsRun: true },
-  { key: "medical", label: "Medical & staging", icon: "local_hospital", group: "scenario", legend: ["#c2185b", "#9334e6"], note: "hospitals and clinics · staging points" },
-  { key: "fsi", label: "Flood susceptibility", icon: "flood", group: "area", legend: SUS, note: "static index (AHP)" },
-  { key: "lsi_static", label: "Landslide susceptibility (static)", icon: "terrain", group: "area", legend: SUS },
-  { key: "hand", label: "Height above drainage", icon: "height", group: "area", legend: ["#08306b", "#4292c6", "#c6dbef"], note: "0 → 20 m above the nearest stream" },
-  { key: "streams", label: "Streams & confluences", icon: "waves", group: "area" },
-  { key: "crowd", label: "Crowding (open data)", icon: "groups_3", group: "area", legend: ["#fff3b0", "#f03b20"] },
-  { key: "history", label: "Past incidents", icon: "history", group: "area", legend: ["#bd0026"], note: "reported landslides & web leads (not predictions)" },
-  { key: "traffic", label: "Live traffic", icon: "traffic", group: "area", note: "display only, never used by the models" },
+export const LAYERS: { key: LayerKey; label: string; icon: string; group: "scenario" | "area"; syms?: SymKey[]; note?: string; needsRun?: boolean }[] = [
+  { key: "depth", label: "Flood depth", icon: "water", group: "scenario", syms: ["depth", "water"], note: "5 cm → 3 m+ · normal river level", needsRun: true },
+  { key: "ponding", label: "Ponding likelihood (urban)", icon: "water_drop", group: "scenario", syms: ["ponding"], note: "low → high (fill ≥ 30 / 70 %)", needsRun: true },
+  { key: "drains", label: "Drains to inspect (urban)", icon: "plumbing", group: "scenario", syms: ["drain"], note: "D1 = highest priority", needsRun: true },
+  { key: "lsi", label: "Landslide susceptibility", icon: "landslide", group: "scenario", syms: ["lsi"], note: "very low → very high, this hour", needsRun: true },
+  { key: "roads", label: "Road status", icon: "road", group: "scenario", syms: ["roadOpen", "roadLater", "roadClosed"], note: "open · closes later · closed", needsRun: true },
+  { key: "routes", label: "Evacuation routes", icon: "directions_walk", group: "scenario", syms: ["route", "routeClosed"], note: "width = people · dashed = closed", needsRun: true },
+  { key: "bridges", label: "Bridges that close", icon: "do_not_disturb_on", group: "scenario", syms: ["bridgeLater", "bridgeClosed"], note: "the rest stay open (see Results)", needsRun: true },
+  { key: "shelters", label: "Shelters in use", icon: "night_shelter", group: "scenario", syms: ["shelter"], note: "bigger = more places filled" },
+  { key: "all_shelters", label: "All candidate shelters", icon: "holiday_village", group: "scenario", syms: ["candidate"], note: "schools, halls, temples (OSM)" },
+  { key: "assembly", label: "Assembly points", icon: "groups", group: "scenario", syms: ["assembly"], needsRun: true },
+  { key: "staging", label: "Staging points", icon: "local_shipping", group: "scenario", syms: ["staging"], note: "for response teams", needsRun: true },
+  { key: "medical", label: "Hospitals & clinics", icon: "local_hospital", group: "scenario", syms: ["medical"], note: "from OpenStreetMap" },
+  { key: "fsi", label: "Flood susceptibility", icon: "flood", group: "area", syms: ["fsi"], note: "static index (AHP)" },
+  { key: "lsi_static", label: "Landslide susceptibility (static)", icon: "terrain", group: "area", syms: ["lsiStatic"] },
+  { key: "hand", label: "Height above drainage", icon: "height", group: "area", syms: ["hand"], note: "0 → 20 m above nearest stream" },
+  { key: "streams", label: "Streams & confluences", icon: "waves", group: "area", syms: ["stream", "hotspot"], note: "dots = flow hotspots" },
+  { key: "crowd", label: "Crowding (open data)", icon: "groups_3", group: "area", syms: ["crowdShade", "crowd"] },
+  { key: "history", label: "Past incidents", icon: "history", group: "area", syms: ["landslide", "webReport"], note: "records, not predictions", needsRun: true },
+  { key: "traffic", label: "Live traffic", icon: "traffic", group: "area", syms: ["traffic"], note: "display only, not used by models" },
 ];
 
 const TYPES: { t: MapType; label: string; bg: string }[] = [
@@ -42,8 +44,6 @@ export default function LayerPanel({ on, toggle, hasRun, mapType, setMapType, ur
   on: Set<LayerKey>; toggle: (k: LayerKey) => void; hasRun: boolean; mapType: MapType; setMapType: (t: MapType) => void; urban?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const mode = useMode();
-  const visible = (l: (typeof LAYERS)[number]) => mode === "analyst" || !ANALYST_ONLY.includes(l.key);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
@@ -57,7 +57,7 @@ export default function LayerPanel({ on, toggle, hasRun, mapType, setMapType, ur
       <div key={l.key} className={`layer-row ${dis ? "dim" : ""}`}>
         <span className="ico"><Icon name={l.icon} /></span>
         <span className="txt"><span className="t">{l.label}</span>
-          {l.legend && <span className="swatches">{l.legend.map((c, i) => <i key={i} style={{ background: c }} />)}</span>}
+          {l.syms && <span className="swatches">{l.syms.map((k) => <Sym key={k} k={k} small />)}</span>}
           {l.note && <span className="s" style={{ display: "block" }}>{dis ? "Run a scenario first" : l.note}</span>}</span>
         <Switch checked={on.has(l.key)} onChange={() => toggle(l.key)} label={l.label} disabled={dis} />
       </div>
@@ -73,11 +73,11 @@ export default function LayerPanel({ on, toggle, hasRun, mapType, setMapType, ur
           </div>
           <hr className="divider" style={{ margin: "16px 0 8px" }} />
           <div className="title-s muted" style={{ margin: "4px 0" }}>Scenario</div>
-          {LAYERS.filter((l) => l.group === "scenario" && visible(l) && (urban || !["ponding", "drains"].includes(l.key))).map(row)}
+          {LAYERS.filter((l) => l.group === "scenario" && (urban || !["ponding", "drains"].includes(l.key))).map(row)}
           <hr className="divider" style={{ margin: "8px 0" }} />
           <div className="title-s muted" style={{ margin: "4px 0" }}>Area</div>
-          {LAYERS.filter((l) => l.group === "area" && visible(l)).map(row)}
-          {mode === "decision" && <p className="body-s muted" style={{ marginTop: 8 }}>Technical layers (susceptibility, height above drainage, crowding) are in Analyst view.</p>}
+          {LAYERS.filter((l) => l.group === "area").map(row)}
+          <p className="body-s muted" style={{ marginTop: 8 }}>Shaded layers with the same colours replace each other.</p>
         </div>
       )}
       <button className="layers-btn" onClick={() => setOpen(!open)} aria-expanded={open} aria-label="Layers">

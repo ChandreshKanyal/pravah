@@ -6,6 +6,7 @@ import {
   translateAdvisory,
 } from "../api/client";
 import { authConfigured, useUser } from "../auth";
+import AlertDialog from "../components/AlertDialog";
 import Disclaimer from "../components/Disclaimer";
 import { Button, Chip, Dialog, Field, Icon, Segmented, Tabs, nf, useSnackbar } from "../components/m3";
 import { MapCanvas } from "../components/MapCanvas";
@@ -95,6 +96,7 @@ export default function Advisory() {
   const [trBusy, setTrBusy] = useState(false);
   const [rev, setRev] = useState<{ state: Review["state"]; name: string; designation: string; note: string } | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
+  const [alertOpen, setAlertOpen] = useState(false);
   const adv = old ?? cur;
 
   useEffect(() => {
@@ -197,6 +199,7 @@ export default function Advisory() {
             <Segmented label="Language" value={lang} onChange={setLang} options={[{ value: "en", label: "English" }, { value: "hi", label: "हिन्दी" }]} />
             <div className="row" style={{ gap: 4 }}>
               <Button variant="tonal" icon="share" onClick={() => setShareOpen(true)} disabled={!cur}>Share</Button>
+              <Button variant="tonal" icon="campaign" onClick={() => setAlertOpen(true)} disabled={!runId}>Public alert</Button>
               <Button variant="text" icon="print" onClick={() => window.print()} disabled={!adv}>Print</Button>
             </div>
           </div>
@@ -346,6 +349,8 @@ export default function Advisory() {
           </div>
         )}
       </Dialog>
+
+      <AlertDialog runId={runId} open={alertOpen} onClose={() => setAlertOpen(false)} />
 
       <Dialog open={shareOpen} title="Share the brief" icon="share" onClose={() => setShareOpen(false)} actions={<Button variant="text" onClick={() => setShareOpen(false)}>Close</Button>}>
         <div className="stack">

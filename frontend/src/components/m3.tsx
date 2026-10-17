@@ -207,7 +207,8 @@ export function SnackbarProvider({ children }: { children: ReactNode }) {
   const n = useRef(0);
   const show = useCallback((text: string, action?: Snack["action"]) => {
     const id = ++n.current;
-    setItems((x) => [...x.slice(-2), { id, text, action }]);
+    // the same message again replaces the old one instead of stacking (repeated clicks)
+    setItems((x) => [...x.filter((s) => s.text !== text).slice(-2), { id, text, action }]);
     setTimeout(() => setItems((x) => x.filter((s) => s.id !== id)), action ? 8000 : 4500);
   }, []);
   return (

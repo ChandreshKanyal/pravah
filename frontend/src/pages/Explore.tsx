@@ -1,16 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useMap } from "@vis.gl/react-google-maps";
-import { HeatmapLayer } from "@deck.gl/aggregation-layers";
-import { ScatterplotLayer } from "@deck.gl/layers";
 import type { Layer } from "@deck.gl/core";
-import { archiveAoi, createAoi, geocode, historyIndia, listAois } from "../api/client";
-import { useMode } from "../mode";
+import { archiveAoi, createAoi, geocode, listAois } from "../api/client";
 import DrawControl, { bboxKm, bboxOf, type DrawMode } from "../components/DrawControl";
-import { Button, Chip, Dialog, Field, Icon, IconButton, Segmented, nf, useSnackbar } from "../components/m3";
+import { Button, Chip, Dialog, Field, Icon, IconButton, Segmented, useSnackbar } from "../components/m3";
 import { areaLayers } from "../layers/factories";
 import { AreaOutline, MapCanvas, type MapType } from "../components/MapCanvas";
-import type { AoiListItem, GeocodeResult, HistoryIndia } from "../types/api";
+import type { AoiListItem, GeocodeResult } from "../types/api";
 
 const LIMIT_KM = { river: 15, urban: 4 } as const;
 type BBox = [number, number, number, number];
@@ -29,25 +26,6 @@ function Fly({ to }: { to: { bbox?: BBox | null; lat?: number; lng?: number; zoo
   return null;
 }
 
-/** Global Flood Database flood-count tiles (Earth Engine) as a Google Maps overlay map type. */
-function GfdTiles({ url, on }: { url: string | null; on: boolean }) {
-  const map = useMap();
-  useEffect(() => {
-    if (!map || !url || !on) return;
-    const t = new google.maps.ImageMapType({
-      getTileUrl: (c, z) => url.replace("{x}", String(c.x)).replace("{y}", String(c.y)).replace("{z}", String(z)),
-      tileSize: new google.maps.Size(256, 256), opacity: 0.5, name: "GFD",
-    });
-    map.overlayMapTypes.push(t);
-    return () => {
-      const arr = map.overlayMapTypes.getArray();
-      const i = arr.indexOf(t);
-      if (i >= 0) map.overlayMapTypes.removeAt(i);
-    };
-  }, [map, url, on]);
-  return null;
-}
-
 export default function Explore() {
   const nav = useNavigate();
   const snack = useSnackbar();
@@ -57,15 +35,18 @@ export default function Explore() {
   const [q, setQ] = useState("");
   const [results, setResults] = useState<GeocodeResult[]>([]);
   const [fly, setFly] = useState<{ bbox?: BBox | null; lat?: number; lng?: number; zoom?: number } | null>(null);
+  const [sp] = useSearchParams();
+  useEffect(() => {  // ?lat=&lng=&zoom=&label= (from the assistant's "go to"): fly there and fill the search box
+    const lat = Number(sp.get("lat")), lng = Number(sp.get("lng"));
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || (!lat && !lng)) return;
+    setFly({ lat, lng, zoom: Number(sp.get("zoom")) || 14 });
+    if (sp.get("label")) setQ(sp.get("label")!);
+  }, [sp]);
   const [areas, setAreas] = useState<AoiListItem[] | null>(null);
-  const [hist, setHist] = useState<HistoryIndia | null>(null);
-  const [showFloods, setShowFloods] = useState(true);
-  const [showSlides, setShowSlides] = useState(true);
   const [mapType, setMapType] = useState<MapType>("terrain");
   const timer = useRef<number>();
-  const view = useMode();
-  // Decision view opens a prepared area on its brief; Analyst view on the map
-  const open = (a: AoiListItem) => nav(view === "decision" && a.latest_run_id ? `/area/${a.aoi_id}/advisory` : `/area/${a.aoi_id}`);
+  // a prepared area opens on its brief (the bottom line first); a new one on the map
+  const open = (a: AoiListItem) => nav(a.latest_run_id ? `/area/${a.aoi_id}/advisory` : `/area/${a.aoi_id}`);
   async function hide(a: AoiListItem) {
     try {
       await archiveAoi(a.aoi_id);
@@ -75,7 +56,6 @@ export default function Explore() {
   }
 
   useEffect(() => { listAois().then(setAreas).catch(() => setAreas([])); }, []);
-  useEffect(() => { historyIndia().then(setHist).catch(() => snack("Historical layers are unavailable right now")); }, [snack]);
 
   useEffect(() => {
     window.clearTimeout(timer.current);
@@ -85,15 +65,9 @@ export default function Explore() {
 
   const layers = useMemo(() => {
     const L: Layer[] = [];
-    if (hist && showSlides) {
-      L.push(new HeatmapLayer({ id: "glc-heat", data: hist.landslides, getPosition: (d: any) => [d.lon, d.lat], getWeight: (d: any) => 1 + Math.min(d.fatalities || 0, 20) / 5,
-        radiusPixels: 40, intensity: 1, threshold: 0.05, colorRange: [[255, 237, 160], [254, 217, 118], [254, 178, 76], [253, 141, 60], [240, 59, 32], [189, 0, 38]] }) as unknown as Layer);
-      L.push(new ScatterplotLayer({ id: "glc-pts", data: hist.landslides, getPosition: (d: any) => [d.lon, d.lat], radiusUnits: "pixels", getRadius: 3,
-        getFillColor: [189, 0, 38, 220], getLineColor: [255, 255, 255, 255], stroked: true, lineWidthUnits: "pixels", getLineWidth: 1, minZoom: 8 } as any));
-    }
     if (draft) { const a = areaLayers(draft.bbox); L.push(a.mask, ...a.border); }
     return L;
-  }, [hist, showSlides, draft?.bbox]);
+  }, [draft?.bbox]);
 
   const size = draft ? bboxKm(draft.bbox) : null;
   const tooBig = !!(draft && size && (size[0] > LIMIT_KM[draft.mode] || size[1] > LIMIT_KM[draft.mode]));
@@ -130,7 +104,6 @@ export default function Explore() {
       <MapCanvas center={{ lat: 22.5, lng: 82 }} zoom={5} layers={layers} mapTypeId={mapType} streetView={false}>
         <Fly to={fly} />
         <AreaOutline bbox={draft?.bbox} padding={{ top: 80, right: 80, bottom: 80, left: 440 }} />
-        <GfdTiles url={hist?.gfd_tiles ?? null} on={showFloods} />
         <DrawControl mode={mode} onFinish={(p) => { setMode(null); setDraft({ bbox: bboxOf(p), name: "", mode: "river" }); }} />
       </MapCanvas>
 
@@ -196,27 +169,19 @@ export default function Explore() {
               ))}
             </div>
           )}
+          {(areas?.length ?? 0) > 0 && (
+            <button className="row-item sl" onClick={() => nav("/projects")}>
+              <span className="avatar plain"><Icon name="folder_open" /></span>
+              <span className="txt"><span className="t">All projects</span><span className="s">Every area and every saved run</span></span>
+            </button>
+          )}
           <div className="credits">Built on Google Cloud: Gemini on Vertex AI, Earth Engine, Google Maps Platform, Firebase. Open data: Copernicus DEM, WorldPop, Open Buildings, OpenStreetMap, CHIRPS, NASA GLC.</div>
         </div>
       </aside>
 
       <div className="top-chips chips">
-        <Chip variant="elevated" label="Past floods" icon="flood" selected={showFloods} onClick={() => setShowFloods(!showFloods)} title="Global Flood Database, MODIS 2000–2018" />
-        <Chip variant="elevated" label="Landslides" icon="landslide" selected={showSlides} onClick={() => setShowSlides(!showSlides)} title="NASA Global Landslide Catalog 1970–2019" />
         <Chip variant="elevated" label="Satellite" icon="satellite_alt" selected={mapType === "hybrid"} onClick={() => setMapType(mapType === "hybrid" ? "terrain" : "hybrid")} />
       </div>
-
-      {(showFloods || showSlides) && (
-        <div className="legend-card">
-          {showFloods && <div className="lg-row" title={hist?.labels.gfd}>
-            <span className="lg-name">Past floods</span>
-            <span className="ramp">{["#fee5d9", "#fcae91", "#fb6a4a", "#de2d26", "#a50f15"].map((c) => <i key={c} style={{ background: c }} />)}</span>
-            <span className="lg-end">1–10+ events</span></div>}
-          {showSlides && <div className="lg-row" title={hist?.labels.glc}>
-            <span className="lg-name">Landslides</span><span className="dot" /><span className="lg-end">{hist ? `${nf(hist.landslides.length)} reported` : "…"}</span></div>}
-          <div className="lg-note">Historical records, not predictions</div>
-        </div>
-      )}
 
       {drawing && (
         <div className="draw-hint" role="status">

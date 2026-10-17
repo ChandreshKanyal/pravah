@@ -1,6 +1,6 @@
 import type {
   AOI, AoiListItem, AoiStatus, Advisory, AdvisoryVersion, ChatResponse, Forecast, GeocodeResult, HistoryAoi, HistoryIndia, Official,
-  PhotoDoc, PlanResponse, Review, RunResult, RunSummary, ScenarioParams, StaticLayers, Translation, VerificationItem,
+  AlertDraft, Drill, Improvements, DrillEval, DrillReport, DrillSummary, EmulatorStats, EmulatorStatus, PhotoDoc, PlanResponse, ProjectArea, Review, Triggers, RunResult, RunSummary, ScenarioParams, StaticLayers, Translation, VerificationItem,
 } from "../types/api";
 import { idToken } from "../auth";
 
@@ -34,8 +34,11 @@ export const createAoi = (bbox: AOI["bbox"], name: string, mode: AOI["mode"]) =>
   call<{ aoi: AOI; state: string }>("/api/aoi", { method: "POST", body: JSON.stringify({ bbox, name, mode }) });
 export const getAoiStatus = (id: string) => call<AoiStatus>(`/api/aoi/${id}/status`);
 export const getStaticLayers = (id: string) => call<StaticLayers>(`/api/aoi/${id}/static-layers`);
+export const getImprovements = (id: string) => call<Improvements>(`/api/aoi/${id}/improvements`);
+export const refreshImprovements = (id: string) => call<{ state: string }>(`/api/aoi/${id}/improvements`, { method: "POST" });
 export const getForecast = (id: string, duration_h: number) => call<Forecast>(`/api/forecast?aoi_id=${id}&duration_h=${duration_h}`);
-export const createRun = (p: ScenarioParams) => call<RunResult>("/api/runs", { method: "POST", body: JSON.stringify(p) });
+export const createRun = (p: ScenarioParams, opts?: { flow?: boolean }) =>
+  call<RunResult>(`/api/runs${opts?.flow === false ? "?flow=false" : ""}`, { method: "POST", body: JSON.stringify(p) });
 export const getRun = (id: string) => call<RunResult>(`/api/runs/${id}`);
 export const getGeoJson = (url: string) => call<GeoJSON.FeatureCollection>(url);
 export const listAois = () => call<AoiListItem[]>("/api/aois");
@@ -65,7 +68,38 @@ export async function uploadPhoto(aoi_id: string, kind: "building" | "drain", fi
 export const photoUrl = (aoi_id: string, photo_id: string) => apiUrl(`/api/photos/${photo_id}.jpg?aoi_id=${aoi_id}`);
 export const archiveAoi = (id: string, archived = true) =>
   call<{ archived: boolean }>(`/api/aoi/${id}/archive`, { method: "POST", body: JSON.stringify({ archived }) });
-export const getAoiRuns = (id: string) => call<RunSummary[]>(`/api/aoi/${id}/runs`);
+export const getAoiRuns = (id: string, limit = 10, archived = false) =>
+  call<RunSummary[]>(`/api/aoi/${id}/runs?limit=${limit}${archived ? "&archived=true" : ""}`);
+export const getProjects = () => call<ProjectArea[]>("/api/projects");
+export type AssistantAction = { kind: "go_to_place" | "open_area" | "prepare_area" | "run_scenario" | "set_layers" | "open_page"; label: string; args: Record<string, any> };
+export type AssistantReply = { reply: string; proposals: AssistantAction[]; sources: { title: string; uri: string }[]; search_entry_point: string; tools_called: string[] };
+export const askAssistant = (body: { session_id: string; message: string; page: string; aoi_id?: string | null; run_id?: string | null }) =>
+  call<AssistantReply>("/api/assistant", { method: "POST", body: JSON.stringify(body) });
+export type AssistantEvent =
+  | { type: "step"; label: string } | { type: "thought"; text: string } | { type: "delta"; text: string }
+  | ({ type: "final" } & AssistantReply) | { type: "error"; message: string };
+/** Streams the assistant's steps, thinking and answer text (server-sent events over a POST). */
+export async function askAssistantStream(body: { session_id: string; message: string; page: string; aoi_id?: string | null; run_id?: string | null },
+  onEvent: (e: AssistantEvent) => void): Promise<void> {
+  const r = await fetch(apiUrl("/api/assistant/stream"), { method: "POST", headers: { "content-type": "application/json", ...(await authHeaders()) }, body: JSON.stringify(body) });
+  if (!r.ok || !r.body) throw new Error(String(r.status));
+  const reader = r.body.getReader(), dec = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let i;
+    while ((i = buf.indexOf("\n\n")) >= 0) {
+      const chunk = buf.slice(0, i); buf = buf.slice(i + 2);
+      for (const line of chunk.split("\n")) if (line.startsWith("data: ")) { try { onEvent(JSON.parse(line.slice(6))); } catch { /* partial */ } }
+    }
+  }
+}
+export const deleteRun = (runId: string) => call<{ run_id: string; aoi_id?: string }>(`/api/runs/${runId}`, { method: "DELETE" });
+export const deleteAoi = (aoiId: string) => call<{ aoi_id: string; runs: number }>(`/api/aoi/${aoiId}`, { method: "DELETE" });
+export const setRunMeta = (runId: string, meta: { title?: string; notes?: string; starred?: boolean; archived?: boolean; make_current?: boolean }) =>
+  call<{ run_id: string }>(`/api/runs/${runId}/meta`, { method: "PATCH", body: JSON.stringify(meta) });
 export const setOfficial = (id: string, o: Partial<Official>) => call<Official>(`/api/aoi/${id}/official`, { method: "PUT", body: JSON.stringify(o) });
 export const reviewAdvisory = (runId: string, body: { state: Review["state"]; name?: string; designation?: string; note?: string; version?: number }) =>
   call<Advisory>(`/api/runs/${runId}/advisory/review`, { method: "POST", body: JSON.stringify(body) });
@@ -79,3 +113,29 @@ export async function shareText(runId: string, lang = "en"): Promise<string> {
   return r.text();
 }
 export const runAudit = (runId: string) => call<{ at: string; action: string; by: string; verified: boolean; version?: number; note?: string }[]>(`/api/runs/${runId}/audit`);
+
+// AI emulator of the 2D flow model (per area) and the rain triggers derived from it
+export type WhatIf = { total_mm: number; hours: number; shape: "constant" | "triangular_front"; river_offset_m: number };
+const wq = (q: WhatIf) => `total_mm=${q.total_mm}&hours=${q.hours}&shape=${q.shape}&river_offset_m=${q.river_offset_m}`;
+export const getEmulator = (aoi: string) => call<EmulatorStatus>(`/api/aoi/${aoi}/emulator`);
+export const trainEmulator = (aoi: string, force = false) => call<{ state: string }>(`/api/aoi/${aoi}/emulator${force ? "?force=true" : ""}`, { method: "POST" });
+export const predictEmulator = (aoi: string, q: WhatIf) => call<EmulatorStats>(`/api/aoi/${aoi}/emulator/predict?${wq(q)}`);
+export const emulatorPng = (aoi: string, q: WhatIf) => `/api/aoi/${aoi}/emulator/predict.png?${wq(q)}`;
+export const getTriggers = (aoi: string) => call<Triggers>(`/api/aoi/${aoi}/triggers`);
+
+// Tabletop drills (Gemini exercise controller) on a stored run
+export const startDrill = (runId: string, participant: string) => call<Drill>(`/api/runs/${runId}/drill`, { method: "POST", body: JSON.stringify({ participant }) });
+export const listDrills = (runId: string) => call<DrillSummary[]>(`/api/runs/${runId}/drills`);
+export const getDrill = (id: string) => call<Drill>(`/api/drills/${id}`);
+export const answerDrill = (id: string, index: number, response: string) => call<DrillEval>(`/api/drills/${id}/answer`, { method: "POST", body: JSON.stringify({ index, response }) });
+export const drillReport = (id: string) => call<DrillReport>(`/api/drills/${id}/report`, { method: "POST" });
+
+// Public alert drafts (CAP 1.2, status Draft) for SACHET
+export const getAlert = (runId: string) => call<AlertDraft>(`/api/runs/${runId}/alert`);
+export const draftAlert = (runId: string) => call<AlertDraft>(`/api/runs/${runId}/alert`, { method: "POST" });
+export const capUrl = (runId: string) => apiUrl(`/api/runs/${runId}/alert/cap.xml`);
+
+export type RainHours = { series: number[]; label: string; start_local: string | null; warnings: string[] };
+/** The exact hourly rain a scenario would use (the run's own rain builder), for the hour-by-hour editor. */
+export const rainHours = (aoi: string, p: ScenarioParams) =>
+  call<RainHours>(`/api/aoi/${aoi}/rain-hours`, { method: "POST", body: JSON.stringify({ ...p, rain_series_override: null }) });

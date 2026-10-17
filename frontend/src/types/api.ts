@@ -1,6 +1,6 @@
 // Mirrors backend pydantic models (backend/app/models). Keep in sync.
 export type LonLat = [number, number];
-export type RainSource = "forecast" | "worst" | "best" | "historical_extreme" | "manual";
+export type RainSource = "forecast" | "worst" | "best" | "historical_extreme" | "observed" | "manual";
 
 export interface AOI {
   aoi_id: string;
@@ -32,6 +32,12 @@ export interface RunSummary {
   demand_range: number[]; gap_range: number[]; evac_window_h: number | null; start_local: string | null;
   bridges_closing: number; bridges_total: number; flooded_km2: number; flood_peak: number; shelters_used: number;
   changes: Record<string, unknown>;
+  title?: string | null; notes?: string; starred?: boolean; archived?: boolean; is_current?: boolean;
+  duration_h?: number; rain_total_mm?: number; rain_source?: string; rain_preset?: string | null; river_offset_m?: number;
+}
+export interface ProjectArea {
+  aoi_id: string; name: string; bbox: [number, number, number, number]; mode: string; state: string; prepared_at?: string;
+  latest_run_id: string | null; archived?: boolean; runs: number; starred: number; last_run_at: string | null;
 }
 
 export interface AoiListItem { aoi_id: string; name: string; bbox: [number, number, number, number]; mode: string; state: string; latest_run_id: string | null }
@@ -77,10 +83,13 @@ export interface ScenarioParams {
   evac_start_hour: number;
   vehicle_depth_limit_m: number;
   walk_depth_limit_m: number;
-  bridge_cut_stage_m: number;
+  bridge_cut_stage_m: number;  // deprecated
+  bridge_margin_m: number;
   max_travel_min: number;
   sqm_per_person: number;
+  rain_preset?: "imd_heavy" | "imd_very_heavy" | "imd_extreme" | "cloudburst" | null;
   preset_label?: string | null;
+  rain_series_override?: number[] | null; override_start_local?: string | null; observed_date?: string | null;
   visitors?: number;
 }
 
@@ -89,7 +98,7 @@ export const defaultParams = (aoi_id: string): ScenarioParams => ({
   hyetograph: "constant", worst_multiplier: 1.5, best_multiplier: 0.5, river_offset_m: 0, upstream_inflow_m3s: 0, manning_n: 0.04,
   pop_multiplier: 1, pop_total_override: null, disabled_shelter_ids: [], extra_shelters: [], blocked_polygons: [],
   travel_mode: "walk", evac_start_hour: 1, vehicle_depth_limit_m: 0.3, walk_depth_limit_m: 0.5,
-  bridge_cut_stage_m: 3, max_travel_min: 60, sqm_per_person: 3.5, preset_label: null, visitors: 0,
+  bridge_cut_stage_m: 3, bridge_margin_m: 0, max_travel_min: 60, sqm_per_person: 3.5, rain_preset: null, preset_label: null, visitors: 0,
 });
 
 export interface ExposureSummary {
@@ -103,7 +112,8 @@ export interface ExposureSummary {
 
 export interface TriageRow { structure_class: string; risk_class: string; buildings: number; people: number }
 export interface ShelterResult { id: string; name: string; kind: string; lon: number; lat: number; capacity: number; assigned: number; spare: number; status: string; note: string; capacity_confidence: string; place?: string }
-export interface BridgeStatus { id: string; name: string; lon: number; lat: number; first_closed_hour: number | null; reason: string | null; place?: string }
+export interface BridgeStatus { id: string; name: string; lon: number; lat: number; first_closed_hour: number | null; reason: string | null; place?: string;
+  status?: "open" | "construction" | "closed" | "disused"; deck_m?: number; deck_source?: "terrain" | "minimum"; length_m?: number; peak_vs_deck_m?: number | null }
 export interface RouteSummary {
   from_node: number; from_lon?: number; from_lat?: number; to_shelter: string; people: number; eta_min: number;
   access_min?: number; length_km?: number; passable_until_h: number | null; use_now_gone_soon: boolean; place?: string;
@@ -111,7 +121,7 @@ export interface RouteSummary {
 
 export interface RunResult {
   run_id: string; aoi_id: string; params: ScenarioParams; created_at: string;
-  rain_series_mm_h: number[]; rain_label: string;
+  rain_series_mm_h: number[]; rain_label: string; title?: string | null; notes?: string; starred?: boolean;
   stage_by_reach_m: Record<string, number[]>;
   flooded_area_km2_by_hour: number[];
   depth_png_urls: string[]; lsi_png_url: string;
@@ -192,3 +202,52 @@ export interface PhotoDoc {
   link_distance_m?: number | null; model?: string;
 }
 export interface VerificationItem { bid: string; lon: number; lat: number; current_class: string; score: number; people: number }
+
+export interface EmulatorStatus {
+  state: "none" | "queued" | "running" | "ready" | "failed"; progress?: number; error?: string; n_train?: number; modes?: number;
+  method?: string; range?: Record<string, [number, number]>; finished_at?: string; train_s?: number;
+  validation?: { csi_median: number | null; csi_p10: number | null; mae_m_median: number | null; runs_inside_range: number };
+  overlay?: { corners: [number, number][] };
+}
+export interface EmulatorStats {
+  flooded_km2: number; max_depth_m: number; people_in_water: number; outside_trained_range: string[]; ms: number; imd_category: string;
+}
+export interface TriggerPlace {
+  name: string; name_hi: string; kind: string; lon: number; lat: number; residents: number;
+  thresholds_mm: Record<string, number | null>; imd: Record<string, string | null>;
+}
+export interface Triggers {
+  depth_m: number; min_people: number; share: number; durations: number[]; storm: string; max_trained_mm: Record<string, number>;
+  places: TriggerPlace[]; note: string;
+}
+
+export interface DrillInject { hour: number; source: string; message: string; kind: "model" | "fictional"; evidence_ids: string[]; expected_actions: string[]; decide_within_min: number }
+export interface DrillEval { response: string; at: string; score: number; verdict: string; good: string[]; missed: string[]; risk: string; better: string; by: string }
+export interface DrillReport { summary: string; strengths: string[]; gaps: string[]; sop_changes: string[]; training_needs: string[]; score: number; answered: number; by: string }
+export interface Drill {
+  drill_id: string; run_id: string; aoi_id: string; participant: string; created_at: string; source: "gemini" | "rules"; model: string | null;
+  start_local: string | null; plan: { title: string; briefing: string; injects: DrillInject[] }; responses: Record<string, DrillEval>; report: DrillReport | null;
+}
+export interface DrillSummary { drill_id: string; created_at: string; participant: string; source: string; answered: number; injects: number; score: number | null }
+
+export interface AlertText { headline: string; description: string; instruction: string; sms: string }
+export interface AlertDraft {
+  run_id: string; created_at: string; by: "gemini" | "template"; model: string | null; texts: { en: AlertText; hi: AlertText };
+  polygons: [number, number][][]; area_desc: string; severity: string; urgency: string; certainty: string; identifier: string;
+}
+
+// ---------- pre-monsoon improvements (backend/app/pipeline/improvements.py) ----------
+export type ImprovementCategory = "reported" | "culvert" | "low_spot" | "choked_channel" | "single_exit" | "encroachment" | "bare_ground";
+export type Improvement = {
+  id: string; category: ImprovementCategory; title: string; place: string; lon: number; lat: number; score: number; rank_score: number;
+  why: string[]; action: string; department: string; basis: "model" | "imagery" | "web";
+  numbers: Record<string, number | boolean | string>; confidence: "high" | "medium" | "check";
+  images: { key: string; caption: string; url: string }[]; sources: { title: string; uri: string }[];
+  ai: { verdict: "visible" | "unclear" | "not_visible"; seen: string; model: string } | null;
+};
+export type Improvements = {
+  state: "none" | "running" | "ready" | "error"; steps?: Record<string, string | null>;
+  items?: Improvement[]; counts?: Record<string, number>; notes?: string[]; attribution?: string; generated_at?: string;
+  imagery?: { recent?: (string | number)[]; early?: string[]; now?: string[] };
+  sources?: { title: string; uri: string }[]; search_entry_point?: string; categories?: Record<string, string>;
+};

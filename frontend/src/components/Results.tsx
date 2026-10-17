@@ -1,6 +1,9 @@
+import { Link } from "react-router-dom";
 import { useState } from "react";
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import type { RunResult } from "../types/api";
+import { REASON, deckLine, markerUrl, routeClosed } from "../layers/factories";
+import ModelCheck from "./ModelCheck";
 import { before, clockAt, roundPeople } from "../time";
 import { HelpTip, Icon, Tabs, nf } from "./m3";
 
@@ -52,7 +55,9 @@ export default function Results({ run, hour, onFly, previous }: { run: RunResult
   const H = run.rain_series_mm_h.length;
   const peak = Math.max(0, ...e.exposed_pop_by_hour);
   const lsPeak = Math.max(0, ...e.landslide_exposed_pop_by_hour);
-  const closing = run.bridges.filter((b) => b.first_closed_hour != null);
+  const NOT_OPEN = ["construction", "closed", "disused"];
+  const closing = run.bridges.filter((b) => b.first_closed_hour != null && !NOT_OPEN.includes(b.reason ?? ""));  // closed by the storm
+  const notOpen = run.bridges.filter((b) => NOT_OPEN.includes(b.reason ?? "")).length;
   const first = closing[0];
   const crit = (e.buildings_by_risk.critical ?? 0) + (e.buildings_by_risk.high ?? 0);
   const usable = run.shelters.filter((s) => s.status === "usable").length;
@@ -62,6 +67,8 @@ export default function Results({ run, hour, onFly, previous }: { run: RunResult
   const rng = (r?: number[]) => (r && r.length === 2 && r[0] !== r[1] ? `range ${nf(roundPeople(r[0]))}–${nf(roundPeople(r[1]))}` : "");
   const bd = run.demand_breakdown ?? {};
   const shName = (id: string) => { const s = run.shelters.find((x) => x.id === id); return s ? niceName(s) : id; };
+  const atH = (h: number) => clockAt(run.start_local, h) ?? `hour ${h}`;
+  const why = (r: string | null) => (r ? ` · ${REASON[r] ?? r}` : "");
 
   return (
     <section className="stack" aria-label="Results">
@@ -87,13 +94,22 @@ export default function Results({ run, hour, onFly, previous }: { run: RunResult
           sub={[rng(run.gap_range), previous ? delta(previous.capacity_gap_people, run.capacity_gap_people) : ""].filter(Boolean).join(" · ")}
           alert={run.capacity_gap_people > 0} tip="People who need to move but have no reachable shelter place within the travel limit." />
         <Metric icon="home_work" label="High-risk buildings" value={nf(crit)} tip="Buildings whose estimated risk (water depth damage curve, structure proxy, stream proximity, landslide) is high or critical." />
-        <Metric icon="pin_drop" label="Bridges closing" value={`${closing.length} / ${run.bridges.length}`}
-          tip={first ? `First: ${first.name} at hour ${first.first_closed_hour} (${first.reason}).` : "No bridge closes in this scenario."} />
+        <Metric icon="pin_drop" label="Bridges closing" value={`${closing.length} / ${run.bridges.length}`} sub={notOpen ? `+ ${notOpen} not open (OSM)` : undefined}
+          tip={first ? `First: ${first.name} at hour ${first.first_closed_hour} (${REASON[first.reason ?? ""] ?? first.reason}).` : "No bridge closes in this scenario."} />
       </div>
+
+      <nav className="next-steps" aria-label="Next steps">
+        <Link className="btn btn-tonal small sl" to={`/area/${run.aoi_id}/run/${run.run_id}/advisory`}><Icon name="assignment" /> Read the brief</Link>
+        <Link className="btn btn-text small sl" to={`/area/${run.aoi_id}/3d?run=${run.run_id}`}><Icon name="view_in_ar" /> Watch in 3D</Link>
+        <Link className="btn btn-text small sl" to={`/area/${run.aoi_id}/drill?run=${run.run_id}`}><Icon name="sports_score" /> Rehearse (drill)</Link>
+        <Link className="btn btn-text small sl" to={`/projects?area=${run.aoi_id}`}><Icon name="folder_open" /> Save &amp; compare</Link>
+      </nav>
+
+      <ModelCheck run={run} />
 
       <div className="stack-s">
         <Chart title="Flooded area" unit="km²" color="#1a73e8" start={run.start_local} data={run.flooded_area_km2_by_hour.map((v, i) => ({ h: i + 1, v }))} />
-        <Chart title="People in flood water" unit="people" color="#d93025" start={run.start_local} data={e.exposed_pop_by_hour.map((v, i) => ({ h: i + 1, v }))} />
+        <Chart title="People in flood water" unit="people" color="#08519c" start={run.start_local} data={e.exposed_pop_by_hour.map((v, i) => ({ h: i + 1, v }))} />
         <p className="body-s muted">Showing {clockAt(run.start_local, hour) ? `${clockAt(run.start_local, hour)} (hour ${hour} of ${H})` : `hour ${hour} of ${H}`}. Ranges show the effect of flood depth ±30% and population ±20%. Water never recedes within a scenario (worst-case envelope), which over-estimates on purpose.</p>
       </div>
 
@@ -125,13 +141,15 @@ export default function Results({ run, hour, onFly, previous }: { run: RunResult
           )}
           {tab === "routes" && (run.routes.length ? (
             <table className="tbl">
-              <thead><tr><th>To</th><th className="r">People</th><th className="r">ETA</th><th>Passable until</th></tr></thead>
+              <thead><tr><th>To</th><th className="r">People</th><th className="r">ETA</th><th>Open until</th></tr></thead>
               <tbody>{run.routes.slice(0, 15).map((r, i) => (
                 <tr key={i} className={r.from_lon != null ? "clickable" : ""} onClick={() => r.from_lon != null && onFly(r.from_lon, r.from_lat!)}>
                   <td><b>{shName(r.to_shelter)}</b>{r.place && <span className="body-s muted" style={{ display: "block" }}>from {r.place}</span>}{r.length_km != null && <span className="body-s muted"> · {r.length_km} km</span>}</td>
                   <td className="r">{nf(r.people)}</td>
                   <td className="r" title={r.access_min ? `includes ${r.access_min} min walk to the road network` : undefined}>{r.eta_min} min</td>
-                  <td>{r.passable_until_h == null ? <span className="body-s muted">whole scenario</span> : <>hour {r.passable_until_h} {r.use_now_gone_soon && <span className="tag crit">use now</span>}</>}</td>
+                  <td>{r.passable_until_h == null ? <span className="body-s muted">all scenario</span>
+                    : routeClosed(r.passable_until_h, hour) ? <span className="tag crit" title="A road on this route is closed at the selected hour">closed since {atH(r.passable_until_h)}</span>
+                      : <>{atH(r.passable_until_h)} {r.use_now_gone_soon && <span className="tag high" title="Closes soon after the evacuation starts">use now</span>}</>}</td>
                 </tr>
               ))}</tbody>
             </table>
@@ -141,9 +159,11 @@ export default function Results({ run, hour, onFly, previous }: { run: RunResult
               {run.bridges.slice(0, 20).map((b) => (
                 <div key={b.id} className="li dense clickable sl" onClick={() => onFly(b.lon, b.lat)} role="button" tabIndex={0}>
                   <span className="label-l" style={{ width: 28, color: "var(--primary)" }}>{b.id}</span>
-                  <span className="txt"><span className="t" style={{ fontSize: 14 }}>{b.name}</span></span>
-                  {b.first_closed_hour == null ? <span className="tag ok">stays open</span>
-                    : <span className={`tag ${b.first_closed_hour <= hour ? "crit" : "high"}`}>closes hour {b.first_closed_hour} · {b.reason}</span>}
+                  <span className="txt"><span className="t" style={{ fontSize: 14 }}>{b.name}</span>{deckLine(b) && <span className="s">{deckLine(b)}</span>}</span>
+                  {b.first_closed_hour == null ? <span className="tag">stays open</span>
+                    : b.first_closed_hour <= hour
+                      ? <span className="tag crit"><img className="mk" src={markerUrl("bridgeClosed")} alt="" width={14} height={14} />closed since {atH(b.first_closed_hour)}{why(b.reason)}</span>
+                      : <span className="tag high"><img className="mk" src={markerUrl("bridgeLater")} alt="" width={14} height={14} />closes at {atH(b.first_closed_hour)}{why(b.reason)}</span>}
                 </div>
               ))}
               {!run.bridges.length && <p className="body-m muted" style={{ padding: 16 }}>No bridges mapped in OpenStreetMap here.</p>}

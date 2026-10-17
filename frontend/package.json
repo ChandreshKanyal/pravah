@@ -15,7 +15,6 @@
     "@deck.gl/geo-layers": "9.4.0",
     "@deck.gl/google-maps": "9.4.0",
     "@deck.gl/layers": "9.4.0",
-    "@deck.gl/mesh-layers": "9.4.0",
     "@loaders.gl/core": "4.5.4",
     "@luma.gl/core": "9.4.0",
     "@luma.gl/engine": "9.4.0",
@@ -28,13 +27,15 @@
     "react-router-dom": "7.18.4",
     "recharts": "3.10.1",
     "terra-draw": "1.37.0",
-    "terra-draw-google-maps-adapter": "1.7.0"
+    "terra-draw-google-maps-adapter": "1.7.0",
+    "three": "0.186.0"
   },
   "devDependencies": {
     "@types/geojson": "^7946.0.16",
     "@types/google.maps": "^3.66.6",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
+    "@types/three": "0.186.0",
     "@vitejs/plugin-react": "^4.3.4",
     "typescript": "^5.6.3",
     "vite": "^6.0.0"
