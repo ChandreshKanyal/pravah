@@ -21,6 +21,21 @@ All work is **committed** on `main` (no git remote is configured, so nothing is 
   no longer pays ~20 s of compiling. The cache is not baked into the image (Cloud Build's CPU may differ from Cloud Run's).
   Why steps are ~1 s: the explicit solver's stability limit (CFL 0.45) set by the fastest water (the river), not detail
   wanted; future options: local-inertial solver, river left to HAND, local time stepping (not for the deadline).
+- **Scope change (human decision, 01:00 IST 18 Oct; SPEC deviation): floods only, India only.**
+  - Landslides removed completely (`635649d`): no landslide index at prep (it was 30-160 s of every prep, and in
+    Rudraprayag, the one area where it mattered, it rested on expert ratings with AUC 0.60), no landslide closures,
+    evacuation demand, shelter exclusions or building-risk raises, no layers/history markers/brief items/Methods
+    sections; `engines/landslide.py`, `engines/fr.py`, `scripts/event_replay.py` deleted. Shelter candidates now need
+    slope <= 20 deg (was LSI <= 3). New defaults (flooded areas identical): Rudraprayag `013b5a31b921` 1,608 -> 570
+    people to move (gap 1,004 -> 349), Kalyan `53e042d1fe2a` 2,525 (same), Mumbai `8cebf76040ec` 17,195 (gap 53 -> 0),
+    Amingaon `baa0cec8d701` 7 -> 6. Tests 91/91 (landslide tests removed).
+  - India only (`292811e`): `models/aoi.build_aoi` refuses boxes outside the Geofabrik India boundary
+    (`backend/app/data/india.poly`). Japan Trial, Pak, Dera Ghazi Khan and Houston areas archived (reversible).
+  - India's OpenStreetMap kept with us: `scripts/build_osm_tiles.py` cuts the Geofabrik India extract (16 Oct, 1.7 GB)
+    into 0.1 deg gzipped tiles (roads, waterways, places, POIs) -> `gs://<bucket>/osm_tiles/india/`;
+    `services/osm_local.py` serves them to `osm.bundle` in Overpass element form once `_meta.json` (uploaded last)
+    exists, else Overpass as before. Multipolygon relations are not in the tiles.
+
 - **Runs never call Overpass (00:45 IST 18 Oct, committed, needs a backend deploy):** a new area's first run (Japan
   Trial, a4e2ac685379) took 416 s, of which the model ~18 s: `places.area_places` fetched place names from Overpass
   inside the run and connections hung. Now: place names come with the roads in the prep bundle (`places.json`); a run
