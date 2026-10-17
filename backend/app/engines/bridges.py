@@ -11,6 +11,7 @@ A span closes when the reach stage reaches its deck (minus an optional safety ma
 import math
 
 import numpy as np
+import shapely
 from shapely.geometry import LineString
 from shapely.ops import linemerge, unary_union
 from shapely.strtree import STRtree
@@ -57,7 +58,8 @@ def spans(ways, grid: GridSpec, hand: np.ndarray, reach_id: np.ndarray, dist_str
     """ways: GeoDataFrame of OSM bridge ways in the grid CRS (osm.bridge_ways). Returns one dict per physical bridge.
     A span crosses a river only if it passes over a modelled stream cell (dist_stream_m <= one cell) or an OSM
     waterway (grid CRS geometries); flyovers over roads and railways never close on river stage."""
-    wtree = STRtree(list(waterways)) if waterways is not None and len(waterways) else None
+    wl = list(waterways) if waterways is not None else []  # built once (it was rebuilt for every candidate checked)
+    wtree = STRtree(wl) if wl else None
     if ways is None or not len(ways):
         return []
     rows = ways.reset_index(drop=True)
@@ -80,7 +82,7 @@ def spans(ways, grid: GridSpec, hand: np.ndarray, reach_id: np.ndarray, dist_str
         low = int(np.argmin(np.where(finite, h, np.inf))) if finite.any() else -1
         rid = int(reach_id.ravel()[cells[low]]) if low >= 0 else -1
         over_stream = dist_stream_m is not None and len(cells) and float(np.nanmin(dist_stream_m.ravel()[cells])) <= grid.cell
-        over_water = wtree is not None and any(ln.intersects(list(waterways)[int(i)]) for i in wtree.query(ln))
+        over_water = wtree is not None and any(ln.intersects(wl[int(i)]) for i in wtree.query(ln))
         if dist_stream_m is None and waterways is None:
             over_stream = True  # no evidence either way: trust HAND
         crosses = low >= 0 and h[low] <= CROSSES_RIVER_HAND_M and rid >= 0 and (over_stream or over_water)
@@ -108,14 +110,21 @@ def link_edges(span_list: list[dict], edge_geoms) -> dict[int, list[int]]:
     """{edge row: [span index, ...]} for graph edges that run along a span (>= half the span's length within 5 m)."""
     if not span_list:
         return {}
-    bufs = [s["geometry"].buffer(5.0) for s in span_list]
-    tree = STRtree(bufs)
+    bufs = np.empty(len(span_list), object)
+    bufs[:] = [s["geometry"].buffer(5.0) for s in span_list]
+    geoms = np.empty(len(edge_geoms), object)
+    geoms[:] = list(edge_geoms)
     links: dict[int, list[int]] = {}
-    for e, g in enumerate(edge_geoms):
-        for k in tree.query(g):
-            k = int(k)
-            if g.intersection(bufs[k]).length >= 0.5 * span_list[k]["length_m"]:
-                links.setdefault(e, []).append(k)
+    if not len(geoms):
+        return links
+    # every edge against the span tree in one query, then the overlap lengths in one call (was a query per edge)
+    pe, pk = STRtree(list(bufs)).query(geoms)
+    order = np.argsort(pe, kind="stable")  # per edge in the tree's own order, as the per-edge query gave them
+    pe, pk = pe[order], pk[order]
+    over = shapely.length(shapely.intersection(geoms[pe], bufs[pk]))
+    need = np.array([0.5 * s["length_m"] for s in span_list])[pk]
+    for e, k in zip(pe[over >= need], pk[over >= need]):
+        links.setdefault(int(e), []).append(int(k))
     return links
 
 

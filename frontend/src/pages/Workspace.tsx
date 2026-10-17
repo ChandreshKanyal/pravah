@@ -25,9 +25,11 @@ import { defaultParams, type AoiStatus, type Forecast, type HistoryAoi, type Imp
 // staging points, drains and stream hotspots are one switch away in Layers (and listed in Results).
 /** What the background "fix before the rain" job is doing (its steps run after the area opens). */
 function impStep(steps?: Record<string, string | null>): string {
-  if (steps?.congested === "ready") return "Running analytics…";
+  // the satellite checks (clogged) and the road graph (congested) run side by side, then the analytics step
+  if (steps?.clogged === "ready" && steps?.congested === "ready") return "Running analytics…";
+  if (steps?.congested === "ready") return "Finding clogged drains…";
   if (steps?.clogged === "ready") return "Finding congested roads…";
-  return "Finding clogged drains…";
+  return "Finding clogged drains and congested roads…";
 }
 
 /** Order-independent key of scenario settings (the panel vs the run on the map). */

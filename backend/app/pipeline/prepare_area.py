@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import geopandas as gpd
 import numpy as np
 import osmnx as ox
+from google.api_core.exceptions import NotFound
 from rasterio.features import rasterize
 from rasterio.transform import Affine
 from scipy.ndimage import distance_transform_edt
@@ -127,11 +128,16 @@ def src_name(n: float) -> str:
     return f"src_n{n:.3f}.json"
 
 
-def _hydrology(aoi_id: str, grid: GridSpec, warnings: list[str], meta: dict) -> None:
-    """S2: native-grid D8 hydrology, reaches, SRC tables, hotspots; mapped to the 30 m grid (S2.12)."""
+def _merit(grid: GridSpec) -> dict[str, np.ndarray]:
+    return ees.fetch_merit_native(hy.make_hydro_grid(lonlat_bounds(grid)))
+
+
+def _hydrology(aoi_id: str, grid: GridSpec, warnings: list[str], meta: dict, merit=None) -> None:
+    """S2: native-grid D8 hydrology, reaches, SRC tables, hotspots; mapped to the 30 m grid (S2.12). `merit`: the
+    MERIT download already started (a Future), else it is fetched here."""
     cfg = get_settings()
     hg = hy.make_hydro_grid(lonlat_bounds(grid))
-    m = ees.fetch_merit_native(hg)
+    m = merit.result() if merit is not None else ees.fetch_merit_native(hg)
     down = hy.downstream_index(m["d8"])
     a_loc = hy.local_accumulation_km2(down, hg.cell_area)
     stream = np.nan_to_num(m["upa"]) >= cfg.stream_upa_km2
@@ -207,24 +213,36 @@ def _building_proxy(aoi_id: str, grid: GridSpec, meta: dict) -> None:
                          "pop_in_buildings": round(float(pop_b.sum())), "pop_unattributed": round(float(unattr.sum()))}
 
 
-def _network(aoi: AOI, grid: GridSpec, warnings: list[str], meta: dict) -> None:
-    """S7.1-S7.6 + S9: routable edge tables, crowding grid and edge crowding, shelters and medical facilities."""
-    aoi_id = aoi.aoi_id
+def _road_tables(aoi_id: str, grid: GridSpec) -> tuple[dict, list[str], np.ndarray]:
+    """(routable edge tables per travel mode (S7.1-S7.4), warnings, slope): the slow part of the network step. It needs
+    only the OSM roads and the terrain, so preparation runs it while the buildings download."""
     t = storage.load_layers(aoi_id, "terrain")
-    hand = storage.load_layers(aoi_id, "hydro30")["hand"]
-    b = storage.load_gdf(aoi_id, "buildings_proxy.parquet")
-    pois = storage.load_gdf(aoi_id, "pois.parquet").to_crs(grid.crs)
 
-    tables = {}
-    for mode in ("walk", "drive"):
-        name = f"G_{mode}.graphml"
-        if not storage.exists(aoi_id, name):
-            warnings.append(f"No OSM {mode} network; {mode} routing unavailable")
-            continue
-        G = storage.load_graph(aoi_id, name)
+    def one(mode: str):
+        try:
+            G = storage.load_graph(aoi_id, f"G_{mode}.graphml")
+        except NotFound:
+            return None
         if mode == "drive":
             G = ox.add_edge_travel_times(ox.add_edge_speeds(G))
-        tables[mode] = roads.edge_table(ox.project_graph(G, to_crs=grid.crs), grid, mode, t["dem"], t["slope_deg"])
+        return roads.edge_table(ox.project_graph(G, to_crs=grid.crs), grid, mode, t["dem"], t["slope_deg"])
+    with ThreadPoolExecutor(2) as ex:
+        got = dict(zip(("walk", "drive"), ex.map(one, ("walk", "drive"))))
+    warnings = [f"No OSM {m} network; {m} routing unavailable" for m, tab in got.items() if tab is None]
+    return {m: tab for m, tab in got.items() if tab is not None}, warnings, t["slope_deg"]
+
+
+def _network(aoi: AOI, grid: GridSpec, warnings: list[str], meta: dict, road_tables=None) -> None:
+    """S7.1-S7.6 + S9: routable edge tables, crowding grid and edge crowding, shelters and medical facilities.
+    `road_tables`: a Future of _road_tables started ahead, else they are built here."""
+    aoi_id = aoi.aoi_id
+    with ThreadPoolExecutor(4) as ex:
+        f_hand = ex.submit(lambda: storage.load_layers(aoi_id, "hydro30")["hand"])
+        f_b = ex.submit(storage.load_gdf, aoi_id, "buildings_proxy.parquet")
+        f_pois = ex.submit(storage.load_gdf, aoi_id, "pois.parquet")
+        tables, tw, slope_deg = road_tables.result() if road_tables is not None else _road_tables(aoi_id, grid)
+        hand, b, pois = f_hand.result(), f_b.result(), f_pois.result().to_crs(grid.crs)
+    warnings.extend(tw)
 
     # S9 crowding grid from POI attractors + building density
     poi_rc, attractors = [], []
@@ -236,9 +254,9 @@ def _network(aoi: AOI, grid: GridSpec, warnings: list[str], meta: dict) -> None:
             attractors.append((p.geometry.centroid.x, p.geometry.centroid.y, label, shel.clean(p.get("name"))))
     crowd, raw = crowding.crowd_grid((grid.height, grid.width), poi_rc, b["row"], b["col"], grid.cell, return_raw=True)
     raw_max = float(raw.max()) or 1.0
-    sus_c = {"crowd": crowd}
-    storage.save_layers(aoi_id, "crowding", sus_c, grid)
-    storage.save_png(aoi_id, "crowd", to_png(np.where(crowd > 0.05, crowd, np.nan), "risk", 0, 1))
+    saves = ThreadPoolExecutor(8)  # this step's uploads go out in parallel while it keeps computing
+    jobs = [saves.submit(storage.save_layers, aoi_id, "crowding", {"crowd": crowd}, grid),
+            saves.submit(lambda: storage.save_png(aoi_id, "crowd", to_png(np.where(crowd > 0.05, crowd, np.nan), "risk", 0, 1)))]
     order = np.argsort(-raw.ravel())
     hot: list[dict] = []
     for f in order[:5000]:
@@ -253,12 +271,12 @@ def _network(aoi: AOI, grid: GridSpec, warnings: list[str], meta: dict) -> None:
                     "top_attractors": sorted({f"{a[2]}{': ' + a[3] if a[3] else ''}" for a in near})[:3]})
         if len(hot) >= 10:
             break
-    storage.put_json(aoi_id, "crowd_hotspots.json", [{k: v for k, v in h.items() if k not in ("x", "y")} for h in hot])
+    jobs.append(saves.submit(storage.put_json, aoi_id, "crowd_hotspots.json", [{k: v for k, v in h.items() if k not in ("x", "y")} for h in hot]))
 
     for mode, (edges, nodes) in tables.items():
         edges["crowd_e"] = [crowding.edge_crowd(crowd, cells, n) for cells, n in zip(edges["cells"], edges["narrowness"])]
-        storage.save_gdf(aoi_id, f"edges_{mode}.parquet", edges)
-        storage.save_gdf(aoi_id, f"nodes_{mode}.parquet", nodes)
+        jobs += [saves.submit(storage.save_gdf, aoi_id, f"edges_{mode}.parquet", edges),
+                 saves.submit(storage.save_gdf, aoi_id, f"nodes_{mode}.parquet", nodes)]
 
     # S7.5-S7.6 shelters and medical
     w, s, e, n = aoi.bbox
@@ -269,7 +287,7 @@ def _network(aoi: AOI, grid: GridSpec, warnings: list[str], meta: dict) -> None:
     if n_proper < shel.MIN_OSM_SHELTERS:
         warnings.append(f"Only {n_proper} schools/community halls in OpenStreetMap here ({n_osm - n_proper} places of "
                         "worship); added unverified large-building candidates. Add or confirm shelters with local authorities.")
-        sh += shel.candidate_large_buildings(b, hand, t["slope_deg"], in_aoi, shel.MAX_CANDIDATES - n_proper)
+        sh += shel.candidate_large_buildings(b, hand, slope_deg, in_aoi, shel.MAX_CANDIDATES - n_proper)
     trees = {m: (cKDTree(nodes[["x", "y"]].to_numpy()), nodes["node"].to_numpy()) for m, (_, nodes) in tables.items()}
     out = []
     for prefix, lst in (("S", sh), ("M", med)):
@@ -283,34 +301,50 @@ def _network(aoi: AOI, grid: GridSpec, warnings: list[str], meta: dict) -> None:
                          "row": r, "col": c, "hand_m": round(float(hand[r, c]), 1),
                          "primary": bool(w <= lon <= e and s <= lat <= n), **nodes_})
         out.append(recs)
-    storage.put_json(aoi_id, "shelters.json", out[0])
-    storage.put_json(aoi_id, "medical.json", out[1])
     meta["network"] = {m: {"nodes": int(len(nd)), "edges": int(len(ed)), "bridges": int(ed["bridge"].sum())}
                        for m, (ed, nd) in tables.items()}
-    meta["bridges"] = build_bridges(aoi_id, grid, warnings)
+    meta["bridges"] = build_bridges(aoi_id, grid, warnings, {m: ed for m, (ed, _) in tables.items()})
     meta["shelters"] = {"osm": n_osm, "total": len(out[0]), "medical": len(out[1])}
+    # shelters.json last: it marks the step done (a resumed preparation skips the step when it exists)
+    for j in jobs + [saves.submit(storage.put_json, aoi_id, "medical.json", out[1])]:
+        j.result()
+    saves.shutdown()
+    storage.put_json(aoi_id, "shelters.json", out[0])
 
 
-def build_bridges(aoi_id: str, grid: GridSpec, warnings: list[str]) -> dict:
-    """Real bridge spans with deck heights and their links to the routable edges (engines/bridges.py) -> bridges.json."""
+def _opt_gdf(aoi_id: str, name: str):
+    try:
+        return storage.load_gdf(aoi_id, name)
+    except NotFound:
+        return None
+
+
+def build_bridges(aoi_id: str, grid: GridSpec, warnings: list[str], edges: dict | None = None) -> dict:
+    """Real bridge spans with deck heights and their links to the routable edges (engines/bridges.py) -> bridges.json.
+    `edges`: {mode: edge table} just built (else read from storage)."""
     from app.engines import bridges as brg
-    if not storage.exists(aoi_id, "bridge_ways.parquet"):
+    with ThreadPoolExecutor(4) as ex:
+        f_ways = ex.submit(_opt_gdf, aoi_id, "bridge_ways.parquet")
+        f_h30 = ex.submit(storage.load_layers, aoi_id, "hydro30")
+        f_water = ex.submit(_opt_gdf, aoi_id, "waterways.parquet")
+        f_edges = {m: ex.submit(_opt_gdf, aoi_id, f"edges_{m}.parquet") for m in ("walk", "drive") if edges is None}
+        ways, h30, water = f_ways.result(), f_h30.result(), f_water.result()
+        edges = edges if edges is not None else {m: f.result() for m, f in f_edges.items() if f.result() is not None}
+    if ways is None:
         try:
-            storage.save_gdf(aoi_id, "bridge_ways.parquet", osm.bridge_ways(lonlat_bounds(grid)))
+            ways = osm.bridge_ways(lonlat_bounds(grid))
+            storage.save_gdf(aoi_id, "bridge_ways.parquet", ways)
         except Exception as e:
             warnings.append(f"OSM bridges unavailable: {e}")
             return {"spans": 0}
-    ways = storage.load_gdf(aoi_id, "bridge_ways.parquet")
-    h30 = storage.load_layers(aoi_id, "hydro30")
-    water = storage.load_gdf(aoi_id, "waterways.parquet").to_crs(grid.crs) if storage.exists(aoi_id, "waterways.parquet") else None
+    water = water.to_crs(grid.crs) if water is not None else None
     water_lines = [g for g in water.geometry if g is not None and g.geom_type in ("LineString", "MultiLineString")] if water is not None else None
     spans = brg.spans(ways.to_crs(grid.crs) if len(ways) else None, grid, h30["hand"], h30["reach_id"],
                       h30.get("dist_stream_m"), water_lines)
     links = {}
     for m in ("walk", "drive"):
-        if storage.exists(aoi_id, f"edges_{m}.parquet"):
-            edges = storage.load_gdf(aoi_id, f"edges_{m}.parquet").reset_index(drop=True)
-            links[m] = {str(e): ks for e, ks in brg.link_edges(spans, edges.geometry).items()}
+        if m in edges:
+            links[m] = {str(e): ks for e, ks in brg.link_edges(spans, edges[m].reset_index(drop=True).geometry).items()}
     out = []
     for s in spans:
         r, c = xy_to_rowcol(grid, s["x"], s["y"])
@@ -331,11 +365,12 @@ def _bare(aoi: AOI) -> bool:
     return aoi.mode != "river"
 
 
-def _urban(aoi: AOI, grid: GridSpec, warnings: list[str], meta: dict) -> None:
-    """S13 static part (urban mode): depression analysis on the filled DEM and drain/culvert candidates."""
+def _urban(aoi: AOI, grid: GridSpec, warnings: list[str], meta: dict, fab=None) -> None:
+    """S13 static part (urban mode): depression analysis on the filled DEM and drain/culvert candidates. `fab`: the
+    FABDEM download already started (a Future), else it is fetched here."""
     aoi_id = aoi.aoi_id
     try:
-        dem = ees.fetch_fabdem(grid)
+        dem = fab.result() if fab is not None else ees.fetch_fabdem(grid)
         dem_src = "FABDEM (bare earth)"
     except Exception as e:  # fall back to the surface model, with a warning
         dem = storage.load_layers(aoi_id, "terrain")["dem"]
@@ -378,6 +413,9 @@ def prepare_area(aoi: AOI, force: frozenset[str] = frozenset()) -> dict:
         ACTIVE.discard(aoi.aoi_id)
 
 
+STEP_ORDER = EE_GROUPS + ["buildings", "osm", "derived", "hydrology", "overlays", "fsi", "building_proxy", "network", "urban"]
+
+
 def _prepare(aoi: AOI, force: frozenset[str]) -> dict:
     t0 = time.time()
     aoi_id, grid = aoi.aoi_id, make_grid(aoi.bbox)
@@ -407,54 +445,80 @@ def _prepare(aoi: AOI, force: frozenset[str]) -> dict:
 
     storage.save_grid(aoi_id, grid)
     fs.update_aoi(aoi_id, {"grid": grid.to_dict(), "state": "preparing"})
-    if not storage.exists(aoi_id, "improvements.json") or "improvements" in force:
+    # a step whose output exists is skipped unless forced (resumed or re-prepared areas); checked in parallel up front
+    marks = {**{g: f"{g}.npz" for g in EE_GROUPS}, "buildings": "buildings.parquet", "derived": "derived.npz",
+             "hydrology": "reaches.json", "fsi": "png/fsi.png", "building_proxy": "buildings_proxy.parquet",
+             "network": "shelters.json", "urban": "pluvial.npz", "improvements": "improvements.json"}
+    with ThreadPoolExecutor(12) as ex:
+        have = dict(zip(marks, ex.map(lambda f: storage.exists(aoi_id, f), marks.values())))
+    todo = lambda step: step in force or not have[step]  # noqa: E731
+    if todo("improvements"):
         from app.pipeline import improvements as impv
         impv.prefetch_reported(aoi_id, aoi.name, aoi.bbox)  # the fixes list's web search runs alongside the downloads
     images = ees.layer_images(grid, bare_earth=_bare(aoi))
-    tasks = []
-    with ThreadPoolExecutor(max_workers=8) as ex:
+
+    # Each step starts as soon as the steps it reads are done (18 Oct; they ran one after another once every download
+    # had finished): hydrology, susceptibility and the road raster run while the buildings download, the MERIT and
+    # FABDEM downloads start with the others, and the road tables (the slow part of the network step) are built from
+    # the OSM roads and the terrain meanwhile. Every task fits in the pool at once, so waiting tasks cannot starve it.
+    ex = ThreadPoolExecutor(max_workers=24)
+    F: dict = {}
+
+    def after(deps: list[str], fn):
+        def go():
+            for d in deps:
+                if d in F:
+                    F[d].result()  # a step records its own error; waiting is all that matters here
+            return fn()
+        return ex.submit(go)
+
+    def skip_or(step: str, cond, fn):
+        """Run `fn` if the step is needed and `cond()` holds; a step not needed counts as ready."""
+        def go():
+            if not todo(step):
+                status[step] = "ready"
+            elif cond():
+                fn()
+        return go
+
+    try:
         for g in EE_GROUPS:
-            if storage.exists(aoi_id, f"{g}.npz") and g not in force:
-                status[g] = "ready"
+            if todo(g):
+                F[g] = ex.submit(run, g, _ee_group, aoi_id, grid, images, g, warnings, meta)
             else:
-                tasks.append(ex.submit(run, g, _ee_group, aoi_id, grid, images, g, warnings, meta))
-        if storage.exists(aoi_id, "buildings.parquet") and "buildings" not in force:
+                status[g] = "ready"
+        if todo("buildings"):
+            F["buildings"] = ex.submit(run, "buildings", _buildings, aoi, grid, warnings)
+        else:
             status["buildings"] = "ready"
-        else:
-            tasks.append(ex.submit(run, "buildings", _buildings, aoi, grid, warnings))
-        tasks.append(ex.submit(run, "osm", _osm, aoi_id, grid, warnings))
-        for t in tasks:
-            t.result()
-    if not storage.exists(aoi_id, "derived.npz") or "derived" in force:
-        run("derived", _derived, aoi_id, grid, warnings)
-    else:
-        status["derived"] = "ready"
-    if status.get("hydro30") == "ready":
-        if storage.exists(aoi_id, "reaches.json") and "hydrology" not in force:
-            status["hydrology"] = "ready"
-        else:
-            run("hydrology", _hydrology, aoi_id, grid, warnings, meta)
-        run("overlays", _overlays, aoi_id)
-        if storage.exists(aoi_id, "png/fsi.png") and "fsi" not in force:
-            status["fsi"] = "ready"
-        else:
-            run("fsi", _fsi, aoi_id, meta)
-    if storage.exists(aoi_id, "buildings_proxy.parquet") and "building_proxy" not in force:
-        status["building_proxy"] = "ready"
-    elif status.get("buildings") == "ready" and status.get("population") == "ready":
-        run("building_proxy", _building_proxy, aoi_id, grid, meta)
-    if storage.exists(aoi_id, "shelters.json") and "network" not in force:
-        status["network"] = "ready"
-    elif status.get("building_proxy") == "ready" and status.get("osm") == "ready":
-        run("network", _network, aoi, grid, warnings, meta)
-    # every area: street-waterlogging hollows and drain candidates (applied only where built-up, engines/profile.py)
-    if storage.exists(aoi_id, "pluvial.npz") and "urban" not in force:
-        status["urban"] = "ready"
-    elif status.get("network") == "ready":
-        run("urban", _urban, aoi, grid, warnings, meta)
+        F["osm"] = ex.submit(run, "osm", _osm, aoi_id, grid, warnings)
+        merit = ex.submit(_merit, grid) if todo("hydrology") else None
+        fab = ex.submit(ees.fetch_fabdem, grid) if todo("urban") else None
+        tables = after(["osm", "terrain"], lambda: _road_tables(aoi_id, grid)) if todo("network") else None
+        ready = lambda *steps: all(status.get(x) == "ready" for x in steps)  # noqa: E731
+
+        F["derived"] = after(["osm"], skip_or("derived", lambda: True, lambda: run("derived", _derived, aoi_id, grid, warnings)))
+        # the river steps need hydro30; without it they get no status at all (as before)
+        F["hydrology"] = after(["hydro30"], lambda: ready("hydro30") and skip_or(
+            "hydrology", lambda: True, lambda: run("hydrology", _hydrology, aoi_id, grid, warnings, meta, merit))())
+        F["overlays"] = after(["hydro30"], lambda: ready("hydro30") and run("overlays", _overlays, aoi_id))
+        F["fsi"] = after(["hydro30", "terrain", "landcover", "hazard_hist"], lambda: ready("hydro30") and skip_or(
+            "fsi", lambda: True, lambda: run("fsi", _fsi, aoi_id, meta))())
+        F["building_proxy"] = after(["buildings", "population"], skip_or(
+            "building_proxy", lambda: ready("buildings", "population"), lambda: run("building_proxy", _building_proxy, aoi_id, grid, meta)))
+        F["network"] = after(["building_proxy", "osm", "hydrology", "terrain"], skip_or(
+            "network", lambda: ready("building_proxy", "osm"), lambda: run("network", _network, aoi, grid, warnings, meta, tables)))
+        # every area: street-waterlogging hollows and drain candidates (applied only where built-up, engines/profile.py)
+        F["urban"] = after(["network", "landcover", "terrain"], skip_or(
+            "urban", lambda: ready("network"), lambda: run("urban", _urban, aoi, grid, warnings, meta, fab)))
+        for f in list(F.values()):
+            f.result()
+    finally:
+        ex.shutdown(wait=True)
 
     secs = round(time.time() - t0, 1)
-    warnings = list(dict.fromkeys(w for ws in step_warn.values() for w in ws))
+    rank = {k: i for i, k in enumerate(STEP_ORDER)}  # warnings in step order, whichever step finished first
+    warnings = list(dict.fromkeys(w for k in sorted(step_warn, key=lambda k: rank.get(k, len(rank))) for w in step_warn[k]))
     state = "ready" if all(v == "ready" for v in status.values()) else "partial"
     fs.update_aoi(aoi_id, {"status": status, "state": state, "warnings": warnings, "step_warnings": step_warn,
                            "meta": {**meta, "timings_s": timings},
