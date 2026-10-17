@@ -6,6 +6,7 @@ import { MapControls } from "three/addons/controls/MapControls.js";
 import { Line2 } from "three/addons/lines/Line2.js";
 import { LineGeometry } from "three/addons/lines/LineGeometry.js";
 import { LineMaterial } from "three/addons/lines/LineMaterial.js";
+import { OverlayLayer, type OverlayIcons, type OverlayShow, type Overlays } from "./overlays";
 import { waterFragment, waterVertex } from "./shaders";
 
 export type Dem = { w: number; h: number; cell: number; z: Float32Array };
@@ -22,6 +23,7 @@ export const decVel = (c: number) => { const s = (c - 128) / 127; return Math.si
 export const hazard = (h: number, v: number) => h * (v + 0.5) + (h > 0.25 ? 0.5 : 0);
 
 export const RISK: [number, number, number][] = [[217, 48, 37], [242, 153, 0], [251, 188, 4], [232, 234, 237]];
+export const DRY: [number, number, number] = [196, 199, 204];  // dry building (water colouring): grey, not glare-white
 export const SHALLOW = "#9ecae1", DEEP = "#08519c";
 export const HAZARD = ["#d7aefb", "#a142f4", "#681da8"];  // danger for some / most / all (purples: no clash with risk)
 const SKY = "#bcd4f0", HORIZON = "#e4ecf5";
@@ -58,6 +60,30 @@ export class Scene3D {
   /** Per building: first vertex, grid cells under it (cells[off[i]..off[i+1]]), per-vertex wall/roof shade, last colour class. */
   private bv: { start: Int32Array; cells: Int32Array; off: Int32Array; shade: Float32Array; cls: Int8Array } | null = null;
   private bWaterK = -1;
+  private aoiRing: [number, number][] | null = null;
+  private ovl: OverlayLayer | null = null;
+  private inside: Uint8Array | null = null;  // 1 for grid cells inside the simulated area
+
+  /** Cells whose centre lies inside the simulated area (x east, y north, as aoi_m). */
+  private insideMask(): Uint8Array | null {
+    const d = this.dem, ring = this.aoiRing;
+    if (!d || !ring || ring.length < 4) return null;
+    if (this.inside) return this.inside;
+    const m = new Uint8Array(d.w * d.h);
+    for (let r = 0; r < d.h; r++) {
+      const y = -((r + 0.5) * d.cell - (d.h * d.cell) / 2);
+      for (let c = 0; c < d.w; c++) {
+        const x = (c + 0.5) * d.cell - (d.w * d.cell) / 2;
+        let inn = false;
+        for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+          const [xi, yi] = ring[i], [xj, yj] = ring[j];
+          if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inn = !inn;
+        }
+        m[r * d.w + c] = inn ? 1 : 0;
+      }
+    }
+    return (this.inside = m);
+  }
   /** Colour buildings by the water against them at the current time (true) or by the brief's risk (false). */
   bldByWater = true;
   private cells: THREE.InstancedMesh | null = null;
@@ -139,6 +165,7 @@ export class Scene3D {
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.outline?.children.forEach((l) => ((l as Line2).material as LineMaterial).resolution.set(w, h));
+    this.ovl?.setResolution(w, h);
   }
 
   /** Terrain mesh from the ground grid; the water mesh shares its vertices. */
@@ -206,6 +233,7 @@ export class Scene3D {
 
   /** The simulated area outline draped on the ground: white dashes on a dark halo (as on the 2D map). */
   setOutline(ring: [number, number][] | null) {
+    this.aoiRing = ring; this.inside = null;
     if (this.outline) { this.scene.remove(this.outline); this.outline.children.forEach((l) => { (l as Line2).geometry.dispose(); ((l as Line2).material as LineMaterial).dispose(); }); }
     this.outline = null;
     if (!ring || !this.dem) return;
@@ -287,9 +315,32 @@ export class Scene3D {
     this.update();  // water colours for the current time, if frames are loaded
   }
 
+  /** The run's roads, exit routes, shelters and bridges draped on the ground (null removes them). */
+  setOverlays(data: Overlays | null, icons: OverlayIcons, show: OverlayShow, hour: number) {
+    if (this.ovl) { this.scene.remove(this.ovl.group); this.ovl.dispose(); this.ovl = null; }
+    if (!data || !this.dem) return;
+    this.ovl = new OverlayLayer(data, this.dem, this.k, new THREE.Vector2(this.host.clientWidth, this.host.clientHeight), icons);
+    this.ovl.setShow(show);
+    this.ovl.setHour(hour);
+    this.scene.add(this.ovl.group);
+  }
+  setOverlayHour(h: number) { this.ovl?.setHour(h); }
+  setOverlayShow(s: OverlayShow) { this.ovl?.setShow(s); }
+
   setBuildingsVisible(v: boolean) { if (this.bld) this.bld.visible = v; }
 
   setFrames(f: Frames | null) {
+    // water only inside the simulated area, as on the 2D map: outside it the ground is padding for the models, and the
+    // hourly map there has no rivers traced to its edge (it drew false lakes across the Brahmaputra)
+    const inside = f && this.dem && f.w === this.dem.w && f.h === this.dem.h ? this.insideMask() : null;
+    if (f && inside) {
+      const n = f.w * f.h, data = f.data.slice();
+      for (let k = 0; k < f.n; k++) {
+        const b = k * 3 * n;
+        for (let i = 0; i < n; i++) if (!inside[i]) { data[b + i] = 0; data[b + n + i] = 128; data[b + 2 * n + i] = 128; }
+      }
+      f = { ...f, data };
+    }
     this.frames = f;
     this.fA = this.fB = -1;
     this.cellsDirty = true;
@@ -360,7 +411,7 @@ export class Scene3D {
       const dm = decDepth(h), cls = dm >= 1 ? 0 : dm >= 0.5 ? 1 : dm >= 0.15 ? 2 : 3;
       if (cls === bv.cls[i]) continue;
       bv.cls[i] = cls; dirty = true;
-      const [r, g, b] = RISK[cls];
+      const [r, g, b] = cls === 3 ? DRY : RISK[cls];
       for (let v = bv.start[i]; v < bv.start[i + 1]; v++) { const s = bv.shade[v] / 255; arr[3 * v] = r * s; arr[3 * v + 1] = g * s; arr[3 * v + 2] = b * s; }
     }
     if (dirty) col.needsUpdate = true;
@@ -566,6 +617,7 @@ export class Scene3D {
 
   dispose() {
     this.isDisposed = true;
+    this.ovl?.dispose();
     cancelAnimationFrame(this.raf);
     this.ro.disconnect();
     this.controls.dispose();

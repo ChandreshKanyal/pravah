@@ -63,3 +63,6 @@
   .ftl .track { order: 3; flex-basis: 100%; }
   .ftl .now { flex: 1; align-items: flex-start; min-width: 0; }
 }
+.v3d-legend .ln { flex: none; width: 10px; height: 3px; border-radius: 2px; box-shadow: 0 0 0 1px #20212455; margin-right: -4px; }
+.v3d-legend .ln.thick { width: 18px; height: 5px; margin-right: 0; }
+.v3d-legend .sw.round { border-radius: 50%; box-shadow: 0 0 0 2px #1a73e855; }

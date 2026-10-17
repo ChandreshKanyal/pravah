@@ -4,15 +4,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { apiUrl, getAoiStatus, getRun } from "../api/client";
-import { Button, Icon, IconButton, Segmented, Switch } from "../components/m3";
+import { Button, Chip, Icon, IconButton, Segmented, Switch } from "../components/m3";
+import { markerUrl } from "../layers/factories";
+import type { OverlayShow, Overlays } from "../three/overlays";
 import FlowTimeline, { RATES, clockOf, span, type Rate } from "../three/FlowTimeline";
-import { DEEP, HAZARD, RISK, SHALLOW, Scene3D, hazard, type Bld, type ColorMode, type Dem, type Frames, type Probe, type WaterStyle } from "../three/scene";
+import { DEEP, DRY, HAZARD, RISK, SHALLOW, Scene3D, hazard, type Bld, type ColorMode, type Dem, type Frames, type Probe, type WaterStyle } from "../three/scene";
 import type { RunResult } from "../types/api";
 import "./view3d.css";
 
 type Meta = {
   origin: [number, number]; bounds_m: [number, number, number, number]; aoi_m: [number, number][] | null; z_min: number; z_max: number;
-  cell: number; width: number; height: number; mode: string; ground: { source: string; conditioned: boolean }; imagery: boolean;
+  cell: number; width: number; height: number; mode: string; profile?: { flat: boolean; urban: boolean } | null; ground: { source: string; conditioned: boolean }; imagery: boolean;
 };
 type FlowMeta = {
   state: "none" | "queued" | "running" | "ready" | "failed" | "stale"; progress?: number; error?: string; model?: string;
@@ -76,6 +78,8 @@ export default function View3D() {
   const [style, setStyle] = useState<WaterStyle>("real");
   const [lines, setLines] = useState(true);
   const [showB, setShowB] = useState(true);
+  const [ovl, setOvl] = useState<Overlays | null>(null);
+  const [show, setShow] = useState<OverlayShow>({ roads: true, routes: true, shelters: true, bridges: true });
   const [time, setTimeS] = useState(0);
   const [playing, setPlayingS] = useState(false);
   const [rate, setRateS] = useState<Rate>("normal");
@@ -84,7 +88,8 @@ export default function View3D() {
   const played = useRef(new Set<string>());  // models already played from the start once
   const picked = useRef(false);               // the person chose a model: do not switch it for them
   const flown = useRef(false);
-  const k = meta?.mode === "urban" ? 2 : 1.5;  // heights drawn k x so gentle slopes and water depth show (display only)
+  const flat = meta?.profile ? meta.profile.flat : meta?.mode === "urban";
+  const k = flat ? 2 : 1.5;  // heights drawn k x so gentle slopes and water depth show (display only)
 
   // area, ground, latest run
   useEffect(() => {
@@ -108,6 +113,12 @@ export default function View3D() {
   useEffect(() => {
     if (!run) return;
     fetch(apiUrl(`/api/runs/${run.run_id}/3d/risk.bin`)).then((r) => (r.ok ? r.arrayBuffer() : Promise.reject())).then((b) => setRisk(new Uint8Array(b))).catch(() => setRisk(null));
+  }, [run]);
+
+  useEffect(() => {  // the run's roads, exit routes, shelters and bridges, in the 3D frame
+    setOvl(null);
+    if (!run) return;
+    fetch(apiUrl(`/api/runs/${run.run_id}/3d/overlays.json`)).then((r) => (r.ok ? r.json() : Promise.reject())).then(setOvl).catch(() => setOvl(null));
   }, [run]);
 
   // scene
@@ -149,7 +160,7 @@ export default function View3D() {
   useEffect(() => {
     if (!town || flown.current || !sc.current) return;
     flown.current = true;
-    sc.current.flyTo(town[0], -town[1], meta?.mode === "urban" ? 2600 : 3200, 46);
+    sc.current.flyTo(town[0], -town[1], flat ? 2600 : 3200, 46);
   }, [town, meta, dem]);
 
   // flow model: start it if this run has none, follow progress, then show it
@@ -201,6 +212,15 @@ export default function View3D() {
     }
   }, [frames, duration]);  // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { sc.current?.setStyle(style, color, lines); }, [style, color, lines, frames]);
+  // model hour for roads, routes and bridges: closed from their first closed hour on, as on the 2D map
+  const H = run?.rain_series_mm_h.length ?? 1;
+  const hour = Math.min(H, Math.max(1, Math.ceil(time / 3600)));
+  useEffect(() => {
+    sc.current?.setOverlays(ovl, { shelter: markerUrl("shelter"), bridgeClosed: markerUrl("bridgeClosed"), bridgeLater: markerUrl("bridgeLater") }, show, hour);
+  }, [ovl, meta, dem]);  // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { sc.current?.setOverlayHour(hour); }, [hour]);
+  useEffect(() => { sc.current?.setOverlayShow(show); }, [show]);
+  const nClosed = ovl ? ovl.roads.filter((r) => r.c != null && r.c <= hour).length : 0;
 
   const setTime = (t: number) => { sc.current?.setTime(t); setTimeS(t); };
   const setPlaying = (p: boolean) => { if (sc.current) sc.current.playing = p; setPlayingS(p); };
@@ -247,8 +267,8 @@ export default function View3D() {
 
         {frames && (
           <>
-            <Segmented label="Water model" block value={model ?? "hand"} onChange={(m) => { picked.current = true; setModel(m); }}
-              options={[{ value: "flow", label: "Water flow" }, { value: "hand", label: "Map (hourly)" }]} />
+            <Segmented label="Water model" block value={frames.velocity ? "flow" : "hand"} onChange={(m) => { if (m === "flow" && !ready) return; picked.current = true; setModel(m); }}
+              options={[{ value: "flow", label: ready ? "Water flow" : running ? `Water flow · ${Math.round(100 * (flow!.progress ?? 0))}%` : "Water flow" }, { value: "hand", label: "Map (hourly)" }]} />
             <Segmented label="Colour water by" block value={color} onChange={setColor}
               options={[{ value: "depth", label: "Depth" }, { value: "hazard", label: "Danger" }]} />
             <Segmented label="Water drawn as" block value={style} onChange={setStyle}
@@ -264,10 +284,21 @@ export default function View3D() {
           ))}
           {frames?.velocity && lines && <li><span className="streak" /> Flow direction and speed</li>}
           <li><span className="bx" /> Simulated area</li>
+          {ovl && show.roads && <li><span className="ln" style={{ background: "#e8eaed" }} /><span className="ln" style={{ background: "#f29900" }} /><span className="ln" style={{ background: "#d93025" }} /> Roads: open, closes later, closed now{nClosed ? ` (${nClosed})` : ""}</li>}
+          {ovl && show.routes && ovl.routes.length > 0 && <li><span className="ln thick" style={{ background: "#00897b" }} /> Exit routes to shelters (dashed once cut)</li>}
+          {ovl && show.shelters && ovl.shelters.length > 0 && <li><span className="sw round" style={{ background: "#1a73e8" }} /> Shelters in use, with people sent there</li>}
+          {ovl && show.bridges && ovl.bridges.length > 0 && <li><img src={markerUrl("bridgeClosed")} alt="" width={14} height={14} /> Bridges: closed / closing later</li>}
           {showB && blds.length > 0 && (frames
-            ? <li>{[...RISK].reverse().map((c, i) => <span key={i} className="sw" style={{ background: `rgb(${c.join(",")})` }} />)} Buildings by water against them now: dry → 15 cm → 50 cm → 1 m+</li>
+            ? <li>{[DRY, ...RISK.slice(0, 3).reverse()].map((c, i) => <span key={i} className="sw" style={{ background: `rgb(${c.join(",")})` }} />)} Buildings by water against them now: dry → 15 cm → 50 cm → 1 m+</li>
             : <li>{RISK.map((c, i) => <span key={i} className="sw" style={{ background: `rgb(${c.join(",")})` }} />)} Building risk in the brief: critical → low</li>)}
         </ul>
+        {ovl && (
+          <div className="chips" role="group" aria-label="Show on the ground">
+            {([["roads", "Roads"], ["routes", "Exit routes"], ["shelters", "Shelters"], ["bridges", "Bridges"]] as [keyof OverlayShow, string][])
+              .filter(([k]) => k === "roads" || ovl[k].length > 0)
+              .map(([k, label]) => <Chip key={k} small label={label} selected={show[k]} onClick={() => setShow({ ...show, [k]: !show[k] })} />)}
+          </div>
+        )}
         {frames && color === "hazard" && <p className="body-s muted">Flood hazard rating (DEFRA/EA FD2321): depth × (speed + 0.5), plus 0.5 above 25 cm for debris.</p>}
 
         {ready && model === "flow" && flow && (

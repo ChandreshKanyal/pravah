@@ -54,7 +54,7 @@ def meta(aoi_id: str):
         cx, cy = grid.x0 + W / 2, grid.y0 - H / 2
         aoi_m = [[round(x - cx, 1), round(y - cy, 1)] for x, y in (t.transform(lo, la) for lo, la in [(w, s_), (e, s_), (e, n), (w, n), (w, s_)])]
     return {"origin": [float(lon), float(lat)], "bounds_m": [-W / 2, -H / 2, W / 2, H / 2], "aoi_m": aoi_m,
-            "bounds_ll": [float(x) for x in lonlat_bounds(grid)], "mode": doc.get("mode", "river"),
+            "bounds_ll": [float(x) for x in lonlat_bounds(grid)], "mode": doc.get("mode", "auto"), "profile": (doc.get("meta") or {}).get("profile"),
             "z_min": float(np.nanmin(dem)), "z_max": float(np.nanmax(dem)), "cell": grid.cell,
             "width": grid.width, "height": grid.height, "ground": ground,
             "imagery": storage.exists(aoi_id, S2_KEY)}
@@ -229,3 +229,76 @@ def building_risk(run_id: str, user: dict = Depends(require("viewer"))):
     except NotFound:
         raise HTTPException(404, "No building risk for this run")
     return Response(risk.tobytes(), media_type="application/octet-stream", headers={"Cache-Control": "public, max-age=86400"})
+
+
+MAJOR = {"motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary_link", "secondary", "secondary_link"}
+_ovl_mem: dict[str, bytes] = {}
+
+
+def _overlays(run_id: str) -> bytes:
+    """A run's roads, exit routes, used shelters and closing bridges in the 3D frame (metres from the grid centre)."""
+    if run_id in _ovl_mem:
+        return _ovl_mem[run_id]
+    run = fs.get_doc("runs", run_id)
+    if not run:
+        raise HTTPException(404, "Unknown run")
+    aoi_id = run.get("aoi_id") or (run.get("params") or {}).get("aoi_id")
+    grid = storage.load_grid(aoi_id)
+    from app.engines.grid import _to_utm
+    t = _to_utm(grid.crs)
+    W, H = grid.width * grid.cell, grid.height * grid.cell
+    cx, cy = grid.x0 + W / 2, grid.y0 - H / 2
+
+    def xy(lon, lat):
+        x, y = t.transform(np.asarray(lon, float), np.asarray(lat, float))
+        return np.round(np.asarray(x) - cx, 1), np.round(np.asarray(y) - cy, 1)
+
+    def lines(fc: dict) -> list[tuple[dict, list]]:
+        out = []
+        for f in fc.get("features", []):
+            g = f.get("geometry") or {}
+            parts = [g["coordinates"]] if g.get("type") == "LineString" else g.get("coordinates", []) if g.get("type") == "MultiLineString" else []
+            for c in parts:
+                if len(c) < 2:
+                    continue
+                a = np.asarray(c, float)
+                x, y = xy(a[:, 0], a[:, 1])
+                out.append((f.get("properties") or {}, np.stack([x, y], 1).tolist()))
+        return out
+
+    def load(name: str) -> dict:
+        try:
+            return json.loads(storage.get_run(run_id, name))
+        except NotFound:
+            return {}
+
+    roads = []
+    for p, pts in lines(load("roads.geojson")):
+        k = 0 if p.get("highway") in MAJOR else 1 if str(p.get("highway", "")).startswith("tertiary") else 2
+        roads.append({"p": pts, "c": p.get("first_closed_hour"), "r": p.get("reason"), "h": p.get("hazard") or None,
+                      "k": k, "n": p.get("name") or ""})
+    routes = [{"p": pts, "until": p.get("passable_until_h"), "people": p.get("people", 0), "to": p.get("to_shelter"),
+               "eta": p.get("eta_min")} for p, pts in lines(load("routes.geojson"))]
+    shelters, bridges = [], []
+    for s in run.get("shelters") or []:
+        if (s.get("assigned") or 0) > 0:
+            x, y = xy(s["lon"], s["lat"])
+            shelters.append({"id": s["id"], "name": s.get("name", ""), "x": float(x), "y": float(y),
+                             "people": s.get("assigned", 0), "capacity": s.get("capacity", 0)})
+    for b in run.get("bridges") or []:
+        if b.get("first_closed_hour") is not None:
+            x, y = xy(b["lon"], b["lat"])
+            bridges.append({"id": b["id"], "name": b.get("name", ""), "x": float(x), "y": float(y),
+                            "c": b["first_closed_hour"], "r": b.get("reason")})
+    data = gzip.compress(json.dumps({"roads": roads, "routes": routes, "shelters": shelters, "bridges": bridges},
+                                    separators=(",", ":")).encode(), 6)
+    _ovl_mem[run_id] = data
+    return data
+
+
+@router.get("/api/runs/{run_id}/3d/overlays.json")
+def overlays(run_id: str, user: dict = Depends(require("viewer"))):
+    """Roads with closure hour and blocked pieces, exit routes, used shelters and closing bridges, in metres from the
+    3D grid centre (x east, y north), gzip-encoded. A run never changes, so it is cached."""
+    return Response(_overlays(run_id), media_type="application/json",
+                    headers={"Content-Encoding": "gzip", "Cache-Control": "public, max-age=86400"})
