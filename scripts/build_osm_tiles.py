@@ -2,8 +2,12 @@
 (roads, waterways, places, points of interest), so preparing an area reads 1-4 tiles from our bucket instead of waiting
 on the public Overpass server (30 s to 15 min, 17-18 Oct). Needs pyosmium (`uv pip install osmium`), local only.
 
-    backend/.venv/bin/python scripts/build_osm_tiles.py india.osm.pbf out_dir
-    gcloud storage cp -r out_dir/* gs://<bucket>/osm_tiles/india/
+    backend/.venv/bin/python scripts/build_osm_tiles.py india.osm.pbf out_dir [shards shard index]
+    gcloud storage rsync out_dir gs://<bucket>/osm_tiles/india
+
+On a laptop the node-location index (4 GB for India) lives on disk and lookups wait on it (~2,000 ways/s). On a
+high-memory machine run several shards at once (`shards` processes, `shard` = 0..shards-1, index "flex_mem"), each
+writing its own out_dir, then concatenate each tile's files (gzip members join cleanly).
 
 Each tile is gzipped JSON lines: {"w": id, "t": tags, "n": [[ref, lat, lon], ...]} for a way (in every tile one of its
 nodes falls in) and {"n": id, "t": tags, "l": [lat, lon]} for a tagged node. Multipolygon relations are not kept (the
@@ -19,8 +23,15 @@ from collections import defaultdict
 
 import osmium
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
-from app.services.osm import PLACE_TAGS, POI_TAGS, WATERWAY_TAGS  # noqa: E402
+# the tag sets of backend/app/services/osm.py, copied so this runs without the backend (tests/test_osm_filter.py
+# checks they still match)
+PLACE_TAGS = {"place": ["city", "town", "village", "suburb", "hamlet", "neighbourhood", "quarter", "locality", "isolated_dwelling"]}
+POI_TAGS = {
+    "amenity": True, "shop": True, "tourism": ["hotel", "guest_house", "hostel"],
+    "public_transport": ["station"], "railway": ["station"],
+    "building": ["school", "hospital", "temple", "public"],
+}
+WATERWAY_TAGS = {"waterway": ["river", "stream", "drain", "canal", "ditch"], "tunnel": ["culvert"]}
 
 TILE = 0.1
 KEYS = ["highway", "waterway", "tunnel", "amenity", "shop", "tourism", "public_transport", "railway", "building", "place"]
@@ -48,7 +59,7 @@ def tile_of(lat: float, lon: float) -> tuple[int, int]:
     return math.floor(lon / TILE), math.floor(lat / TILE)
 
 
-def main(pbf: str, out: str) -> None:
+def main(pbf: str, out: str, shards: int = 1, shard: int = 0, index: str = "") -> None:
     os.makedirs(out, exist_ok=True)
     buf: dict[tuple[int, int], list[str]] = defaultdict(list)
     n_buf = 0
@@ -62,10 +73,12 @@ def main(pbf: str, out: str) -> None:
         n_buf = 0
 
     t0, ways, nodes, bad = time.time(), 0, 0, 0
-    fp = osmium.FileProcessor(pbf).with_locations("sparse_file_array," + os.path.join(out, "..", "locations.idx"))
+    fp = osmium.FileProcessor(pbf).with_locations(index or "sparse_file_array," + os.path.join(out, "..", "locations.idx"))
     fp = fp.with_filter(osmium.filter.KeyFilter(*KEYS))
     for o in fp:
         if o.is_node():
+            if shard:  # tagged nodes are written by shard 0 only
+                continue
             tags = dict(o.tags)
             if not wanted(tags, False) or not o.location.valid():
                 continue
@@ -74,6 +87,8 @@ def main(pbf: str, out: str) -> None:
             nodes += 1
             n_buf += 1
         elif o.is_way():
+            if o.id % shards != shard:
+                continue
             tags = dict(o.tags)
             if not wanted(tags, True):
                 continue
@@ -96,4 +111,5 @@ def main(pbf: str, out: str) -> None:
     print(f"{len(files)} tiles, {sum(os.path.getsize(os.path.join(out, f)) for f in files) / 1e6:.0f} MB gzipped", flush=True)
 
 if __name__ == "__main__":
-    main(sys.argv[1], sys.argv[2])
+    a = sys.argv[1:]
+    main(a[0], a[1], int(a[2]) if len(a) > 2 else 1, int(a[3]) if len(a) > 3 else 0, a[4] if len(a) > 4 else "")

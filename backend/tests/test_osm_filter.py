@@ -16,3 +16,14 @@ def test_drive_and_walk_filters():
     assert not _passes({"highway": "residential", "access": "private"}, drive)
     assert not _passes({"highway": "service", "service": "driveway"}, drive)
     assert not _passes({"waterway": "canal"}, walk)  # no highway tag
+
+
+def test_tile_builder_tags_match_the_backend():
+    import importlib.util
+    from pathlib import Path
+    from app.services import osm
+    p = Path(__file__).resolve().parents[2] / "scripts" / "build_osm_tiles.py"
+    spec = importlib.util.spec_from_file_location("build_osm_tiles", p)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    assert (m.PLACE_TAGS, m.POI_TAGS, m.WATERWAY_TAGS) == (osm.PLACE_TAGS, osm.POI_TAGS, osm.WATERWAY_TAGS)
