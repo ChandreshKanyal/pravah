@@ -1,10 +1,13 @@
 """Earth Engine I/O (S1.3-S1.6, S1.8). Dataset IDs verified against the EE catalog on 2026-10-15."""
 import logging
+import math
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
 
 import ee
 import geopandas as gpd
 import numpy as np
+import pandas as pd
 
 from app.config import get_settings
 from app.models.grid import GridSpec
@@ -25,6 +28,7 @@ GRIP_ID = "projects/sat-io/open-datasets/GRIP4/South-East-Asia"  # GRIP4 roads, 
 FABDEM_ID = "projects/sat-io/open-datasets/FABDEM"  # Copernicus DEM with forests and buildings removed (verified access)
 ROAD_SEARCH_M = 5000
 OB_ID = "GOOGLE/Research/open-buildings/v3/polygons"
+BUILDINGS_PER_TILE = 2500  # Open Buildings per request when a box is fetched in tiles (fetch_buildings)
 OBT_ID = "GOOGLE/Research/open-buildings-temporal/v1"
 
 NODATA = -9999.0
@@ -85,9 +89,13 @@ def fetch_grid(image: ee.Image, grid: GridSpec, bands: list[str]) -> dict[str, n
     rows = np.array_split(np.arange(grid.height), n_split)
     cols = np.array_split(np.arange(grid.width), n_split)
     out = {b: np.empty((grid.height, grid.width), np.float32) for b in bands}
-    for rr in rows:
-        for cc in cols:
-            arr = _compute_block(img, grid, int(rr[0]), int(cc[0]), len(rr), len(cc))
+    blocks = [(rr, cc) for rr in rows for cc in cols]
+
+    def one(blk):
+        rr, cc = blk
+        return blk, _compute_block(img, grid, int(rr[0]), int(cc[0]), len(rr), len(cc))
+    with ThreadPoolExecutor(min(8, len(blocks))) as ex:  # a large grid's blocks download in parallel
+        for (rr, cc), arr in ex.map(one, blocks):
             for b in bands:
                 out[b][rr[0]:rr[-1] + 1, cc[0]:cc[-1] + 1] = arr[b]
     for b in bands:
@@ -273,9 +281,34 @@ def fetch_buildings(bbox: tuple[float, float, float, float], grid: GridSpec) -> 
     img = (t.filterDate("2023-01-01", "2024-01-01").mosaic().select(["building_height", "building_presence"])
            .addBands(t.filterDate("2016-01-01", "2017-01-01").mosaic().select(["building_presence"], ["presence_2016"]))
            .setDefaultProjection(proj))
-    reduced = img.reduceRegions(fc.select(["area_in_meters", "confidence"]), ee.Reducer.mean(), scale=4)
-    # NOTE(spec-drift): computeFeatures with GEOPANDAS_GEODATAFRAME pages internally (verified 2026-10-15).
-    gdf = ee.data.computeFeatures({"expression": reduced, "fileFormat": "GEOPANDAS_GEODATAFRAME"})
+    # NOTE(spec-drift): computeFeatures with GEOPANDAS_GEODATAFRAME pages internally (verified 2026-10-15). One request
+    # pages through every building in turn (Kurla, 20,248 buildings: 80-94 s, most of an area's preparation), so the box
+    # is cut into tiles of ~2,500 buildings fetched in parallel (3x3: 22 s). A building on a tile edge comes from both
+    # tiles and is kept once; same buildings and values (the per-building means differ by < 1e-13 m, rounding inside
+    # Earth Engine)
+    k = max(1, min(6, math.ceil(math.sqrt(n / BUILDINGS_PER_TILE))))
+
+    def one(f):
+        red = img.reduceRegions(f.select(["area_in_meters", "confidence"]), ee.Reducer.mean(), scale=4)
+        return ee.data.computeFeatures({"expression": red, "fileFormat": "GEOPANDAS_GEODATAFRAME"})
+    if k == 1:
+        gdf = one(fc)
+    else:
+        w, s, e, nn = bbox
+        xs, ys = np.linspace(w, e, k + 1), np.linspace(s, nn, k + 1)
+        # planar tiles whose outer edges reach ~100 m past the box: the box filter above is geodesic (its long top edge
+        # bows ~1 m north of the shorter tile edges), and geodesic tiles lost a building there (Rudraprayag, 18 Oct)
+        xs[0], xs[-1], ys[0], ys[-1] = w - 1e-3, e + 1e-3, s - 1e-3, nn + 1e-3
+        tiles = [fc.filterBounds(ee.Geometry.Rectangle([float(xs[i]), float(ys[j]), float(xs[i + 1]), float(ys[j + 1])],
+                                                       None, False))
+                 for j in range(k) for i in range(k)]
+        with ThreadPoolExecutor(min(12, len(tiles))) as ex:
+            parts = [p for p in ex.map(one, tiles) if len(p)]
+        if not parts:
+            return gpd.GeoDataFrame(columns=cols, geometry="geometry", crs=grid.crs), ["No Open Buildings coverage here"]
+        gdf = pd.concat(parts, ignore_index=True)
+        gdf = gdf[~gdf.geometry.to_wkb().duplicated()].reset_index(drop=True)
+        log.info("buildings: %d tiles", k * k)
     if gdf.crs is None:
         gdf = gdf.set_crs("EPSG:4326")
     gdf = gdf.to_crs(grid.crs).rename(columns={
