@@ -1,10 +1,11 @@
 import logging
 import re
+import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 from app.auth import current_user, require
@@ -38,7 +39,7 @@ def create_run(params: ScenarioParams, flow: bool = True, user: dict = Depends(r
 
 
 RUN_JOB_LOST_S = 960  # past Cloud Run's 900 s request timeout plus margin: a job still "running" was lost with its instance
-_run_pool = None
+_run_pool = ThreadPoolExecutor(2)  # flow simulations queue on their own lock (pipeline/flow.py)
 
 
 def _run_job(job_id: str, params: ScenarioParams, flow: bool, user: dict) -> None:
@@ -58,9 +59,6 @@ def start_run_job(params: ScenarioParams, flow: bool = True, user: dict = Depend
     A run with the flow model takes minutes on Cloud Run, and a connection held silent that long can be dropped on the
     way (seen on a phone hotspot: the run finished, the reply never arrived). The job state lives in Firestore, so a
     poll answered by another instance still sees it. POST /api/runs stays for scripts and the smoke test."""
-    global _run_pool
-    from concurrent.futures import ThreadPoolExecutor
-    _run_pool = _run_pool or ThreadPoolExecutor(2)  # flow simulations queue on their own lock (pipeline/flow.py)
     job_id = uuid.uuid4().hex[:12]
     fs.set_doc("run_jobs", job_id, {"status": "running", "aoi_id": params.aoi_id,
                                     "started_at": datetime.now(timezone.utc).isoformat()})
@@ -165,7 +163,8 @@ def area_extra(aoi_id: str, run_id: str) -> dict:
 
 
 _jobs: dict = {}
-_pool = None
+_jobs_lock = threading.Lock()
+_pool = ThreadPoolExecutor(4)  # advisory drafts (Gemini, ~50 s each)
 
 
 def audit(action: str, user: dict, run_id: str = "", **extra) -> None:
@@ -204,26 +203,29 @@ def _generate_and_store(run_id: str, user: dict | None = None) -> None:
 
 
 @router.post("/api/runs/{run_id}/advisory")
-async def advisory(run_id: str, refresh: bool = False, rules_only: bool = False, user: dict = Depends(require("analyst"))):
+def advisory(run_id: str, refresh: bool = False, rules_only: bool = False, user: dict = Depends(require("analyst"))):
     """S15.5: return the cached advisory, or start generating it in the background and return {status: pending}.
-    Gemini with high thinking takes ~50 s, beyond Firebase Hosting's 60 s rewrite budget, so the UI polls GET."""
-    global _pool
+    Gemini with high thinking takes ~50 s, beyond Firebase Hosting's 60 s rewrite budget, so the UI polls GET.
+    A plain `def`: its Firestore calls block, and on the event loop they stalled every other request."""
     run = fs.get_doc("runs", run_id)
     if not run:
         raise HTTPException(404, "Unknown run")
     if rules_only:  # instant deterministic brief (also the forced-fallback test path)
         from app.agents.advisor import generate_advisory
-        extra = await run_in_threadpool(area_extra, run["aoi_id"], run_id)
-        return (await run_in_threadpool(generate_advisory, run, extra, False)).model_dump(mode="json")
+        return generate_advisory(run, area_extra(run["aoi_id"], run_id), False).model_dump(mode="json")
     doc = fs.get_doc("advisories", run_id)
     if doc and doc.get("status", "ready") == "ready" and not refresh:
         return doc
-    if run_id not in _jobs:
-        from concurrent.futures import ThreadPoolExecutor
-        _pool = _pool or ThreadPoolExecutor(4)
-        # keep the current version readable while the new one is drafted (a new version never overwrites history)
+    with _jobs_lock:
+        if run_id in _jobs:
+            return {"status": "pending", "run_id": run_id}
+        _jobs[run_id] = None  # claimed: a second request meanwhile does not start another draft
+    try:  # keep the current version readable while the new one is drafted (a new version never overwrites history)
         fs.set_doc("advisories", run_id, {**(doc or {}), "status": "pending"})
         _jobs[run_id] = _pool.submit(_generate_and_store, run_id, user)
+    except Exception:
+        _jobs.pop(run_id, None)
+        raise
     return {"status": "pending", "run_id": run_id}
 
 
@@ -420,15 +422,16 @@ def get_alert(run_id: str):
 
 
 @router.post("/api/runs/{run_id}/alert")
-async def draft_alert(run_id: str, user: dict = Depends(require("analyst"))):
-    """Draft a public alert (agents/alerts.py): Gemini text checked against the facts, flooded-area polygons, CAP levels."""
+def draft_alert(run_id: str, user: dict = Depends(require("analyst"))):
+    """Draft a public alert (agents/alerts.py): Gemini text checked against the facts, flooded-area polygons, CAP levels.
+    A plain `def` (runs in the threadpool): loading an area takes seconds and must not hold up the event loop."""
     from app.agents import alerts
     from app.pipeline.run_pipeline import load_area
     run = fs.get_doc("runs", run_id)
     if not run:
         raise HTTPException(404, "Unknown run")
     aoi = fs.get_aoi(run["aoi_id"]) or {}
-    a = await run_in_threadpool(alerts.draft, run, load_area(run["aoi_id"]), aoi.get("name") or "the area")
+    a = alerts.draft(run, load_area(run["aoi_id"]), aoi.get("name") or "the area")
     fs.set_doc("alerts", run_id, a)
     audit("alert_draft", user, run_id, by_model=a["by"])
     return a

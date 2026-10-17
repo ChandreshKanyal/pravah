@@ -2,6 +2,7 @@
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 from app.auth import require
@@ -27,12 +28,16 @@ class ChatRequest(BaseModel):
 
 @router.post("/api/plan")
 async def plan(req: PlanRequest, user: dict = Depends(require("analyst"))):
+    from google.api_core.exceptions import NotFound
+
     from app.agents.planner import plan as run_plan
-    if not storage.exists(req.aoi_id, "shelters.json"):
+    try:  # storage calls block: off the event loop
+        shelters = await run_in_threadpool(storage.get_json, req.aoi_id, "shelters.json")
+    except NotFound:
         raise HTTPException(409, "Area not prepared yet")
     current = req.current_params or ScenarioParams(aoi_id=req.aoi_id)
     try:
-        return await run_plan(req.text[:2000], current, storage.get_json(req.aoi_id, "shelters.json"))
+        return await run_plan(req.text[:2000], current, shelters)
     except Exception as e:
         log.exception("plan failed")
         raise HTTPException(502, f"Planner unavailable ({e.__class__.__name__}); set the controls by hand")

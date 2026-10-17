@@ -1,6 +1,8 @@
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response
+from google.api_core.exceptions import NotFound
 from pydantic import BaseModel
 
 from app.auth import require
@@ -49,17 +51,26 @@ def aoi_status(aoi_id: str):
     return {"aoi_id": aoi_id, **{k: doc.get(k) for k in keys}}
 
 
+def _json_or(aoi_id: str, name: str, default):
+    try:
+        return storage.get_json(aoi_id, name)
+    except NotFound:
+        return default
+
+
 @router.get("/api/aoi/{aoi_id}/static-layers")
 def static_layers(aoi_id: str):
+    """Opened with every area: the storage reads run in parallel (12 one after another took ~1 s)."""
     doc = fs.get_aoi(aoi_id)
     if not doc:
         raise HTTPException(404, "Unknown AOI")
     grid = make_grid(tuple(doc["bbox"]))
-    layers = {n: f"/api/layers/{aoi_id}/{n}.png" for n in ("hand", "streams", "fsi", "crowd") if storage.exists(aoi_id, f"png/{n}.png")}
-    hotspots = storage.get_json(aoi_id, "hotspots.json") if storage.exists(aoi_id, "hotspots.json") else []
-    extra = {k: storage.get_json(aoi_id, f"{k}.json") if storage.exists(aoi_id, f"{k}.json") else []
-             for k in ("shelters", "medical", "crowd_hotspots")}
-    return {"aoi_id": aoi_id, "layers": layers, "hotspots": hotspots, **extra, **overlay_payload(grid)}
+    pngs, keys = ("hand", "streams", "fsi", "crowd"), ("hotspots", "shelters", "medical", "crowd_hotspots")
+    with ThreadPoolExecutor(8) as ex:
+        has = list(ex.map(lambda n: storage.exists(aoi_id, f"png/{n}.png"), pngs))
+        js = dict(zip(keys, ex.map(lambda k: _json_or(aoi_id, f"{k}.json", []), keys)))
+    layers = {n: f"/api/layers/{aoi_id}/{n}.png" for n, ok in zip(pngs, has) if ok}
+    return {"aoi_id": aoi_id, "layers": layers, **js, **overlay_payload(grid)}
 
 
 @router.get("/api/aoi/{aoi_id}/flood.png")
@@ -89,10 +100,10 @@ def verification_queue(aoi_id: str):
 @router.get("/api/aois")
 def list_aois(limit: int = Query(12, ge=1, le=50)):
     """Recently prepared areas for the Explore page (name, bbox, state)."""
-    docs = fs.get_db().collection("aois").limit(200).stream()
-    rows = [d.to_dict() for d in docs]
-    rows = [{k: r.get(k) for k in ("aoi_id", "name", "bbox", "mode", "state", "prepared_at", "latest_run_id")} for r in rows
-            if r.get("bbox") and not r.get("archived")]
+    keep = ["aoi_id", "name", "bbox", "mode", "state", "prepared_at", "latest_run_id"]
+    docs = fs.get_db().collection("aois").select(keep + ["archived"]).limit(200).stream()  # the listed fields only
+    rows = [fs.decode(d.to_dict()) for d in docs]
+    rows = [{k: r.get(k) for k in keep} for r in rows if r.get("bbox") and not r.get("archived")]
     rows.sort(key=lambda r: str(r.get("prepared_at") or ""), reverse=True)
     return rows[:limit]
 
@@ -160,12 +171,15 @@ def _summarise(r: dict) -> dict:
 def run_summaries(aoi_id: str) -> list[dict]:
     """Summary rows of an area's runs. Lists only the small editable fields from Firestore (field projection) and
     reads a full run document once, the first time it is seen: listing used to download every run in full (5-13 s)."""
-    docs = fs.get_db().collection("runs").where("aoi_id", "==", aoi_id).select(list(_META)).limit(300).stream()
+    db = fs.get_db()
+    docs = db.collection("runs").where("aoi_id", "==", aoi_id).select(list(_META)).limit(300).stream()
     metas = [d.to_dict() | {"run_id": d.to_dict().get("run_id") or d.id} for d in docs]
-    for m in metas:
-        if m["run_id"] not in _summary:
-            full = fs.get_doc("runs", m["run_id"]) or {}
-            _summary[m["run_id"]] = _summarise(full)
+    missing = [m["run_id"] for m in metas if m["run_id"] not in _summary]
+    if missing:  # one batched read for the runs not seen yet (they used to be read one at a time)
+        for snap in db.get_all([db.collection("runs").document(r) for r in missing]):
+            _summary[snap.id] = _summarise(fs.decode(snap.to_dict()) if snap.exists else {})
+        for r in missing:
+            _summary.setdefault(r, _summarise({}))
     return [{**_summary[m["run_id"]], **{k: m.get(k) for k in _META}} for m in metas]
 
 
@@ -202,12 +216,18 @@ def aoi_runs(aoi_id: str, limit: int = Query(10, ge=1, le=100), archived: bool =
 def projects():
     """Projects page: every prepared area with its saved runs counted (archived areas listed separately)."""
     out = []
-    for d in fs.get_db().collection("aois").limit(200).stream():
-        a = d.to_dict()
+    db = fs.get_db()
+    keep = ["aoi_id", "name", "bbox", "mode", "state", "prepared_at", "latest_run_id", "archived"]
+    by_area: dict[str, list] = {}
+    for r in db.collection("runs").select(["aoi_id", "created_at", "starred", "archived"]).stream():  # one query, not one per area
+        x = r.to_dict()
+        if not x.get("archived"):  # counts only: the small fields, not whole run documents
+            by_area.setdefault(x.get("aoi_id"), []).append(x)
+    for d in db.collection("aois").select(keep).limit(200).stream():
+        a = fs.decode(d.to_dict())
         if not a.get("bbox"):
             continue
-        runs = [r.to_dict() for r in fs.get_db().collection("runs").where("aoi_id", "==", a["aoi_id"]).select(list(_META)).limit(300).stream()]
-        runs = [r for r in runs if not r.get("archived")]  # counts only: the small fields, not whole run documents
+        runs = by_area.get(a.get("aoi_id"), [])[:300]
         last = max((str(r.get("created_at") or "") for r in runs), default="")
         out.append({k: a.get(k) for k in ("aoi_id", "name", "bbox", "mode", "state", "prepared_at", "latest_run_id", "archived")} |
                    {"runs": len(runs), "starred": sum(1 for r in runs if r.get("starred")), "last_run_at": last or None})

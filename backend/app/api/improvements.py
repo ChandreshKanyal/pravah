@@ -42,7 +42,9 @@ def improvements_refresh(aoi_id: str, user: dict = Depends(require("analyst"))):
 def improvement_image(aoi_id: str, key: str):
     if not re.fullmatch(r"[0-9a-f]{10}_[a-z]+", key):
         raise HTTPException(400, "Bad image key")
-    name = f"improvements/{key}.png"
-    if not storage.exists(aoi_id, name):
+    from google.api_core.exceptions import NotFound
+    try:  # one storage call per image (an exists check first doubled the round trips)
+        data = storage.get_bytes(aoi_id, f"improvements/{key}.png")
+    except NotFound:
         raise HTTPException(404, "No such image")
-    return Response(storage.get_bytes(aoi_id, name), media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
+    return Response(data, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})

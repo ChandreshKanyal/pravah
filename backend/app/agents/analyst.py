@@ -2,6 +2,7 @@
 import logging
 
 from google.adk.agents import LlmAgent
+from google.adk.agents.run_config import RunConfig, ToolThreadPoolConfig
 from google.adk.planners import BuiltInPlanner
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
@@ -50,7 +51,9 @@ async def chat(session_id: str, aoi_id: str, run_id: str | None, message: str) -
         delta["run_id"] = run_id
     msg = types.Content(role="user", parts=[types.Part(text=message)])
     texts, calls = [], []
-    async for ev in _get_runner().run_async(user_id=user, session_id=session_id, new_message=msg, state_delta=delta):
+    # tools run whole scenarios (a minute): on a thread pool, not the event loop the rest of the server shares
+    cfg = RunConfig(tool_thread_pool_config=ToolThreadPoolConfig(max_workers=4))
+    async for ev in _get_runner().run_async(user_id=user, session_id=session_id, new_message=msg, state_delta=delta, run_config=cfg):
         for p in (ev.content.parts if ev.content and ev.content.parts else []):
             if p.function_call:
                 calls.append(p.function_call.name)

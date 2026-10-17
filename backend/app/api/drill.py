@@ -1,6 +1,5 @@
 """Tabletop drills on a stored run (agents/drill.py): start, answer injects, after-action report."""
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from app.agents import drill as D
@@ -27,12 +26,14 @@ def _get(drill_id: str) -> dict:
     return d
 
 
+# plain `def` handlers: FastAPI runs them in its threadpool (Gemini and Firestore calls block; on the event loop they
+# stalled every other request)
 @router.post("/api/runs/{run_id}/drill")
-async def start_drill(run_id: str, body: Start, user: dict = Depends(require("viewer"))):
+def start_drill(run_id: str, body: Start, user: dict = Depends(require("viewer"))):
     run = fs.get_doc("runs", run_id)
     if not run:
         raise HTTPException(404, "Unknown run")
-    d = await run_in_threadpool(D.new_drill, run, body.participant or user.get("name") or "")
+    d = D.new_drill(run, body.participant or user.get("name") or "")
     fs.set_doc(COLL, d["drill_id"], d)
     return d
 
@@ -52,21 +53,21 @@ def get_drill(drill_id: str):
 
 
 @router.post("/api/drills/{drill_id}/answer")
-async def answer(drill_id: str, body: Answer, user: dict = Depends(require("viewer"))):
+def answer(drill_id: str, body: Answer, user: dict = Depends(require("viewer"))):
     d = _get(drill_id)
     if body.index >= len(d["plan"]["injects"]):
         raise HTTPException(400, "No such inject")
     run = fs.get_doc("runs", d["run_id"])
-    ev = await run_in_threadpool(D.evaluate, d, run, body.index, body.response)
+    ev = D.evaluate(d, run, body.index, body.response)
     fs.merge_doc(COLL, drill_id, {"responses": {str(body.index): ev}})
     return ev
 
 
 @router.post("/api/drills/{drill_id}/report")
-async def drill_report(drill_id: str, user: dict = Depends(require("viewer"))):
+def drill_report(drill_id: str, user: dict = Depends(require("viewer"))):
     d = _get(drill_id)
     if not d.get("responses"):
         raise HTTPException(400, "Answer at least one inject first")
-    rep = await run_in_threadpool(D.report, d)
+    rep = D.report(d)
     fs.merge_doc(COLL, drill_id, {"report": rep})
     return rep

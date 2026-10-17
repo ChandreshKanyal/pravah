@@ -92,6 +92,11 @@ async def upload_photo(file: UploadFile = File(...), aoi_id: str = Form(...),
     raw = await file.read()
     if len(raw) > MAX_BYTES:
         raise HTTPException(413, "Photo larger than 12 MB")
+    # decoding, Gemini, storage and Firestore all block: off the event loop the rest of the server shares
+    return await run_in_threadpool(_save_photo, raw, aoi_id, kind, lat, lng, user)
+
+
+def _save_photo(raw: bytes, aoi_id: str, kind: str, lat: float | None, lng: float | None, user: dict) -> dict:
     try:
         img = Image.open(io.BytesIO(raw))
         img.load()
@@ -103,12 +108,15 @@ async def upload_photo(file: UploadFile = File(...), aoi_id: str = Form(...),
     lon_, lat_ = (lng, lat) if lat is not None and lng is not None else gps
     jpg = _jpeg(img)
     photo_id = uuid.uuid4().hex[:12]
-    await run_in_threadpool(storage.put_bytes, aoi_id, f"photos/{photo_id}.jpg", jpg, "image/jpeg")
-    try:
-        result = await run_in_threadpool(classify, jpg, kind)
-    except Exception as e:
-        log.exception("photo classification failed")
-        raise HTTPException(502, f"Classification unavailable ({e.__class__.__name__})")
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(2) as ex:  # the upload and the classification are independent
+        up = ex.submit(storage.put_bytes, aoi_id, f"photos/{photo_id}.jpg", jpg, "image/jpeg")
+        try:
+            result = classify(jpg, kind)
+        except Exception as e:
+            log.exception("photo classification failed")
+            raise HTTPException(502, f"Classification unavailable ({e.__class__.__name__})")
+        up.result()
     res = result.model_dump()
     visible = res["building_visible"] if kind == "building" else res["drain_visible"]
     doc = {"photo_id": photo_id, "aoi_id": aoi_id, "kind": kind, "lon": lon_, "lat": lat_,
@@ -117,7 +125,7 @@ async def upload_photo(file: UploadFile = File(...), aoi_id: str = Form(...),
     if not visible:
         doc["message"] = f"No {kind} clearly visible in this photo; not applied. Try a clearer, closer shot."
     else:
-        doc.update(await run_in_threadpool(_link, aoi_id, kind, lon_, lat_))
+        doc.update(_link(aoi_id, kind, lon_, lat_))
         linked = doc.get("linked_bid") or doc.get("linked_drain_id")
         cls = res.get("structure_class") if kind == "building" else res.get("condition")
         if not linked:
@@ -126,8 +134,6 @@ async def upload_photo(file: UploadFile = File(...), aoi_id: str = Form(...),
             doc["message"] = f"Low confidence ({res['confidence']:.2f}) or unclear; saved for review, not applied."
         else:
             doc["accepted"] = True
-            if kind == "drain" and cls == "unclear":
-                doc["accepted"] = False
             if kind == "building":
                 doc["override_class"] = PHOTO_TO_BUILDING[cls]
                 doc["message"] = (f"Building {linked} reclassified from {doc.get('previous_class', 'proxy')} to "
@@ -149,10 +155,12 @@ def list_photos(aoi_id: str):
 @router.get("/api/photos/{photo_id}.jpg")
 def photo_image(photo_id: str, aoi_id: str):
     from fastapi.responses import Response
-    if not storage.exists(aoi_id, f"photos/{photo_id}.jpg"):
+    from google.api_core.exceptions import NotFound
+    try:  # one storage call (an exists check first doubled the round trips)
+        data = storage.get_bytes(aoi_id, f"photos/{photo_id}.jpg")
+    except NotFound:
         raise HTTPException(404, "Unknown photo")
-    return Response(storage.get_bytes(aoi_id, f"photos/{photo_id}.jpg"), media_type="image/jpeg",
-                    headers={"Cache-Control": "private, max-age=3600"})
+    return Response(data, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})
 
 
 def building_overrides(aoi_id: str) -> dict[str, dict]:

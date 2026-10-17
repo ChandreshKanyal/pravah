@@ -192,19 +192,23 @@ STEP = {  # what the chat shows while a tool runs (Gemini-style "thinking" steps
 async def ask_stream(session_id: str, message: str, page: str = "", aoi_id: str | None = None, run_id: str | None = None):
     """Yields events for the chat: {type: step, label} when a tool is called, {type: thought, text} (Gemini thinking
     summaries, streamed), {type: delta, text} (answer text as it is written), then {type: final, ...ask() result}."""
-    from google.adk.agents.run_config import RunConfig, StreamingMode
+    import asyncio
+
+    from google.adk.agents.run_config import RunConfig, StreamingMode, ToolThreadPoolConfig
     user = "official"
     aoi_name = ""
     if aoi_id:
         from app.services import firestore as fs
-        aoi_name = (fs.get_aoi(aoi_id) or {}).get("name") or ""
+        aoi_name = ((await asyncio.to_thread(fs.get_aoi, aoi_id)) or {}).get("name") or ""
     ctx = {"page": page or "home", "aoi_id": aoi_id or "", "aoi_name": aoi_name, "run_id": run_id or "",
            "proposals": [], "sources": [], "search_entry_point": ""}
     if await _sessions.get_session(app_name=APP, user_id=user, session_id=session_id) is None:
         await _sessions.create_session(app_name=APP, user_id=user, session_id=session_id, state=ctx)
     msg = types.Content(role="user", parts=[types.Part(text=message)])
     final_text, calls, streamed, thought_streamed = "", [], "", False
-    cfg = RunConfig(streaming_mode=StreamingMode.SSE)
+    # tools are plain functions (web search 60-115 s, forecast, Firestore): ADK runs them on the event loop unless they
+    # get a thread pool, and the whole server then stopped answering anyone until the tool returned
+    cfg = RunConfig(streaming_mode=StreamingMode.SSE, tool_thread_pool_config=ToolThreadPoolConfig(max_workers=8))
     async for ev in _get_runner().run_async(user_id=user, session_id=session_id, new_message=msg, state_delta=ctx, run_config=cfg):
         if ev.author != "assistant":
             continue
