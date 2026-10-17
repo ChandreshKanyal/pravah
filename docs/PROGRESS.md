@@ -1,53 +1,61 @@
 # Pravah progress
 
-## State at stop (17 Oct 2026, ~16:30 IST) - read this first
+## State at stop (17 Oct 2026, ~22:00 IST) - read this first
 
-All work is **committed** (latest 0d80c73 on `main`) but **not pushed or deployed**. Tests 94/94 (`backend/.venv/bin/python
--m pytest -q`), `npx tsc --noEmit` clean. Local: backend `uvicorn app.main:app --port 8080` (restart after backend edits;
-a restart orphans a running flow model, which goes "stale" after 5 min and the 3D page restarts it), frontend
-`vite --port 5173`. Data lives in Firestore `(default)` and bucket `pravah-dss-data-project-0fd9c4ae-bf90-452f-a80`
-(asia-south1). Model: `gemini-3.8-flash` everywhere. Deadline Sun 18 Oct 12:00 IST.
+All work is **committed** on `main` (no git remote is configured, so nothing is pushed). Tests 101/101
+(`backend/.venv/bin/python -m pytest -q`), `npm run build` clean. Local: backend `uvicorn app.main:app --port 8080`
+(restart after backend edits), frontend `vite --port 5173`. Data: Firestore `(default)` and bucket
+`pravah-dss-data-project-0fd9c4ae-bf90-452f-a80` (asia-south1). Model: `gemini-3.8-flash` everywhere. Deadline Sun 18 Oct
+12:00 IST.
 
-Deploy (human): `git push`; `./scripts/deploy_backend.sh`;
-`cd frontend && npm run build && cd .. && ~/.npm-global/bin/firebase deploy --only hosting --project project-0fd9c4ae-bf90-452f-a80`;
-`./scripts/smoke_test.sh`. Cloud data already holds the waterlogging backfill and the new default runs.
+**Deployed tonight (by the agent, at the human's request):**
+- Backend revision 00003 (2 CPU) is live and healthy. A redeploy with **8 CPU / 8 GiB** (`scripts/deploy_backend.sh`) was
+  started at ~22:00; check `gcloud run services describe pravah-backend --region asia-south1` for revision 00004, then
+  re-time Rudraprayag: `curl -X POST https://pravah-backend-265255051442.asia-south1.run.app/api/runs -d
+  '{"aoi_id":"56f044f26351","rain_source":"historical_extreme","duration_h":4}' -H 'content-type: application/json'`
+  (2 CPU: 263 s total, flow model 249 s; Mac: 57 s; expected 70-90 s on 8 CPU). If it is still slow: option B, lower
+  `flow_max_cell_hours` so large areas use 60 m cells (~8x less work), and re-validate.
+- Website deployed; the production build calls Cloud Run **directly** (`frontend/.env.production`), because Firebase
+  Hosting's `/api` rewrite to Cloud Run cuts requests at 60 s and runs now take longer. CORS checked from web.app.
+- Deploy fixes: `backend/.gcloudignore` (the upload was 884 MB of local venv), Dockerfile installs `libexpat1` (rasterio
+  failed to import on the newer python:3.12-slim) and import-checks compiled libraries at build time.
+- `scripts/smoke_test.sh` uses the website URL, so its run step goes through the 60 s rewrite and fails on long runs;
+  run it with the Cloud Run URL as BASE, or call the backend directly as above.
+
+Commands: `./scripts/deploy_backend.sh` (add `MIN_INSTANCES=1` for the judging window: no 15 s cold start, small hourly
+cost); `cd frontend && npm run build && cd .. && ~/.npm-global/bin/firebase deploy --only hosting --project project-0fd9c4ae-bf90-452f-a80`.
 
 Behaviour the human asked for (keep it):
-- **No area mode.** Every area gets river flooding, street waterlogging and landslides; physics is chosen per cell and per
-  channel from the data (`engines/profile.py`; see "one model for every area" below). AI is used only for sourced local
-  facts (storm-drain capacity lookup), never to choose physics, and a person confirms before it is used.
-- Map opens on **live roads**; scenario layers only after Run scenario in this visit (or "Show last run", History,
-  `?run=`). No automatic runs. Map state (settings, layers, tab, hour, camera, shown run) survives trips to 3D, the brief and
-  the drill (sessionStorage `pravah:ws:{aoiId}`); the shown run goes in `?run=`.
-- Rain panel: four sources (Forecast / Past day / Record / Design), each as "label over chips"; the hourly editor's scale is
-  frozen while dragging and capped at 300 mm/h (backend clamps too). Separate River and Storm drains sections.
-- 3D: water clipped to the simulated area; buildings grey -> yellow -> orange -> red by the water against them over time;
-  roads (closing pieces orange/red by hour), exit routes (teal, dashed once cut), shelter zones (blue ring + label) and
-  closing bridges, with chips to toggle; the model switch shows the model actually drawn.
-- Landslide closures, evacuations and shelter exclusions only on slopes >= 15 deg.
-- People move where the FD2321 hazard rating reaches "danger for some" (still water 0.5 m / 0.3 m fragile; river water
-  ~0.26-0.3 m).
-- Ask Pravah answers only about the platform, floods, landslides, weather and disaster response; actions need a confirm.
-- Projects: delete runs and areas (confirmed); archive is the reversible option.
+- **No area mode.** Physics chosen per cell and channel from the data (`engines/profile.py`); AI only for sourced local
+  facts (drain capacity lookup), confirmed by a person.
+- **The 2D map, people and roads use the flow model** (deepest of river, hollow and flow-model depth each hour; flooding =
+  >= 15 cm, or >= 5 cm on slopes < 5 deg). 3D reuses the run's simulation.
+- Map opens on **live roads**; scenario layers only after Run. No automatic runs. A run opens at **hour 1**. Map state
+  survives trips to 3D/brief/drill (sessionStorage `pravah:ws:{aoiId}`); the shown run is in `?run=`.
+- Rain panel: Forecast / Past day / Record / **Custom**; every source has **Average rain over the storm** (starts at the
+  actual data; anything else shows "Not the actual ..." and the run label says so), Duration and **Shape** (As forecast /
+  As measured, Steady, Early peak, Custom = hand-edited bars). Record = rarity (2/10/25/100-year Gumbel or wettest day).
+  Hand-edited runs are named "<source>, edited by hand"; above the world-record envelope the editor warns.
+- Fixes: satellite leads only when Gemini confirms and the centre matches; channel leads need water seen from space;
+  images open full screen; sources as numbered chips; the Google Search chip stays as Google sends it (required).
+- 3D overlays, building colours over time, landslide actions only >= 15 deg, FD2321 evacuation thresholds (standing water
+  only off river corridors), Ask Pravah answers only platform/disaster questions, delete runs/areas.
 
-Current default runs (each new run becomes the area default): Mumbai 46b7490e56ce (IMD very heavy, unified model),
-Amingaon/Guwahati 4812175de1bf (cloudburst; flow model ready), Rudraprayag d143334b8b1b (record rain, no flow model yet:
-3D computes it on open). The earlier Rudraprayag brief run with the Gemini brief is f253c9ee67ec (Projects -> Make default).
+Current default runs: Mumbai d277268c1783 -> bc64e91a5d67 (IMD very heavy, 17,195 to move: likely high, drains are a flat
+25 mm/h sink), Amingaon 734b0b1c8987 -> 955fd414a7b3, Rudraprayag 56f044f26351 -> 7ae4e101e63b (made by the live backend,
+same result as 935b9f923382), Kalyan d72416dfcfe0 -> ab9f8b47f91d (hand-edited 2150 mm / 9 h). Dera Ghazi Khan
+b48178d77d97, Houston de6b9b9e28bf (prepared tonight as a speed test) also exist.
 
 Open items:
-- Every run still replaces the area default (`run_pipeline` sets `latest_run_id`); consider not doing that for test runs.
-- Rerun "Fix before the rain" for river areas so road hollows appear (`POST /api/aoi/{id}/improvements`).
-- Flow emulator still uses the old drain rule (trained per area); emulators, triggers and demo flows predate `tail_h` and
-  the unified model: recompute if time (heavy on the 8 GB Mac); `scripts/preprocess_demo_aoi.py all` for demo caches.
-- Drain lookup is inconsistent across calls (Guwahati 7 vs 30 mm/h; Mumbai's "25 now, 50 planned" often returns no
-  figure) - by design nothing is used without a person's confirmation.
-- 2D map depth is the worst-case envelope (never recedes; labelled "Deepest flood so far"); driving it from the flow
-  model's frames would show rise and recession (not done).
-- 3D overlays have no click tooltips yet (click shows the water at the spot).
-- Takaoka (786e4120442d, Japan): OSM buildings only; fixes rerun when its map opens. The Mac swaps heavily.
-- Fixes lists of other areas still hold the old (looser) satellite leads until rebuilt (`improvements.build(aoi_id)`);
-  only Dera Ghazi Khan (b48178d77d97) was rebuilt.
-- OSM: a South Asia extract in Cloud Storage (no public servers at all) is the next step if Overpass gets worse.
+- Confirm the 8 CPU revision and its run time (above). Then check the live site in a browser: each demo area, one Run, 3D.
+- Rebuild "Fix before the rain" for Mumbai, Amingaon, Rudraprayag with the stricter check (`improvements.build(aoi_id)`;
+  only Dera Ghazi Khan was rebuilt).
+- `scripts/preprocess_demo_aoi.py all` after the engine changes (heavy on the Mac; overnight).
+- Area preparation speed-ups proposed, not done: gzip the graphml files (Houston walk graph 101 MB, re-downloaded by the
+  network step: 121 s of its 230 s), a write-through local file cache, vectorised Tobler times (~27 s), lsi in parallel
+  with building_proxy. Estimated Houston 9.5 -> 4-5 min.
+- Every run still replaces the area default; the drain lookup varies between calls; 3D overlays have no tooltips; South
+  Asia OSM extract in Cloud Storage if Overpass gets worse.
 
 ## 17 Oct, evening: the flow model drives the 2D map, people and roads
 Bug (Kalyan d72416dfcfe0, 2150 mm in 9 h): the 2D map showed 0.026 km2 at every hour while 3D flooded the city. The
