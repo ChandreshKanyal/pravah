@@ -21,7 +21,45 @@ All work is **committed** on `main` (no git remote is configured, so nothing is 
   no longer pays ~20 s of compiling. The cache is not baked into the image (Cloud Build's CPU may differ from Cloud Run's).
   Why steps are ~1 s: the explicit solver's stability limit (CFL 0.45) set by the fastest water (the river), not detail
   wanted; future options: local-inertial solver, river left to HAND, local time stepping (not for the deadline).
-- **State at 02:20 IST 18 Oct (read first tomorrow).** Live: backend revision 00008 + website (landslides removed, India
+- **State at ~04:00 IST 18 Oct: whole-codebase review pass (read first).** 9 commits after `95294d3`, all checked
+  locally, **none deployed yet** (backend + website both need a deploy; commands at the end of this bullet).
+  Bugs fixed:
+  1. *Server froze for everyone during assistant tools* (`e6ff2d1`): ADK 2.12 runs plain-function tools on the event
+     loop unless a tool thread pool is set, so a web search (60-115 s), a scenario run or the forecast stopped the whole
+     server answering. Tools now run on `ToolThreadPoolConfig`; the advisory, alert, drill and photo handlers no longer
+     block the loop (checked: assistant answer through a tool with the loop never stalled).
+  2. *Instance crash* (`0088b6b`): numba's default "workqueue" threading layer kills the process when two threads
+     launch parallel kernels at once (reproduced). Emulator training and the start-up compile called the flow model
+     without its lock. The lock is now inside `swe.simulate`; the image installs `libgomp1` so numba can use OpenMP
+     (thread-safe, ~130 us less per kernel launch, two launches per step). Checked: two concurrent run jobs on a local
+     server both finished, status polls answered in < 0.35 s throughout.
+  3. Gemini 429/5xx retried with back-off and jitter in our client and every ADK agent; fixes-list image reviews 4 at
+     a time (`9593a2f`). 4. Same area prepared twice gave some roads a different class (OSMnx merges segments into
+     `list(set(...))`, order random per process): now the most important class / first name / widest lanes / bridge if
+     any (`2155fe1`, new preps only). 5. Assistant run cache and 3D overlay cache grew without bound; verification
+     queue 500 on a run without the file; duplicate concurrent area loads and 3D terrain draws; advisory double-start
+     race (`b5db1a1`, `0088b6b`, `e6ff2d1`).
+  Faster, outputs identical (A/B against `95294d3`: every run field, PNG, npz, GeoJSON, flow frame byte-identical on
+  Rudraprayag, Kurla and Nagpur, incl. river inflow; prep files identical on a fresh Haridwar box apart from 4. above):
+  - Runs (local, cold): Nagpur 22.6 -> 14.0 s, Rudraprayag 27.6 -> 19.5 s, Kurla 31.2 -> 23.9 s. Routing (the
+    unexplained 11 s on Cloud Run) was 199 NetworkX searches + 119k row-by-row DataFrame reads: SciPy Dijkstra on a sparse
+    graph + per-network caches, 5-8x faster (`d583821`). Area loads read ~25 files in parallel; hourly maps drawn in
+    parallel; place labels, reach parameters and projections cached (`0088b6b`).
+  - Preparing an area: steps start when their inputs are ready (hydrology/FSI/road raster/road tables during the
+    buildings download, MERIT+FABDEM in the first wave), edge tables vectorized (`2155fe1`); Open Buildings fetched in
+    parallel tiles of ~2,500 (Kurla 80-94 -> 26 s, same buildings) (`ce90848`). Haridwar 4 km test: 92 -> 63 s.
+  - Area open and lists: static layers 5.7 -> 0.8 s, runs list 4.8 -> 1.1 s, Projects one query, brief's area facts
+    9.4 -> 0.2 s, forecast requests in parallel, deletions batched (`e6ff2d1`, `ca4966e`).
+  - Web searches at LOW thinking (`b49b863`): today's Kurla samples 15-21 s (one 62 s) vs 38-60 s at the default, same
+    places; the earlier single test said the opposite (115 vs 62 s), so the evidence is mixed: revert if live searches
+    get slower or fixes lists get thinner.
+  Not done: moving the flow model's time loop into numba (measured: the Python loop is ~4% of model time; the kernels
+  are the cost, so it would not pay). Demo areas need no re-run (run outputs identical; prep changes apply to new areas).
+  **After deploying, check** the Cloud Run log line `flow model compiled in ... (numba threading layer: omp)`: `omp`
+  means OpenMP loaded (faster); `workqueue` means it did not (still safe with the lock, just slower). Then run a demo
+  scenario and compare `timings_s.flow_model` (before: Rudraprayag 14 s, Kurla 31 s on 8 CPU).
+  Deploy: `./scripts/deploy_backend.sh`, then `cd frontend && npm run build && cd .. && ~/.npm-global/bin/firebase deploy --only hosting --project project-0fd9c4ae-bf90-452f-a80`.
+- **State at 02:20 IST 18 Oct.** Live: backend revision 00008 + website (landslides removed, India
   only, run jobs, early fixes search; deployed by the human ~02:00). India OSM tiles LIVE: 29,663 tiles, 1.93 GB in
   `gs://pravah-dss-data-project-0fd9c4ae-bf90-452f-a80/osm_tiles/india/` + `_meta.json` (switch-on marker; delete it to
   fall back to Overpass). Built on the Mac in 42 min (11.3 M ways, 1 without locations); a temporary n2-highmem-16 VM
