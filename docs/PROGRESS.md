@@ -21,6 +21,22 @@ All work is **committed** on `main` (no git remote is configured, so nothing is 
   no longer pays ~20 s of compiling. The cache is not baked into the image (Cloud Build's CPU may differ from Cloud Run's).
   Why steps are ~1 s: the explicit solver's stability limit (CFL 0.45) set by the fastest water (the river), not detail
   wanted; future options: local-inertial solver, river left to HAND, local time stepping (not for the deadline).
+- **State at 02:20 IST 18 Oct (read first tomorrow).** Live: backend revision 00008 + website (landslides removed, India
+  only, run jobs, early fixes search; deployed by the human ~02:00). India OSM tiles LIVE: 29,663 tiles, 1.93 GB in
+  `gs://pravah-dss-data-project-0fd9c4ae-bf90-452f-a80/osm_tiles/india/` + `_meta.json` (switch-on marker; delete it to
+  fall back to Overpass). Built on the Mac in 42 min (11.3 M ways, 1 without locations); a temporary n2-highmem-16 VM
+  was tried, lost the race (each shard reads all 28 M ways) and was deleted (~$0.60; no instances or disks left).
+  Check vs Overpass (same bundle code): Amingaon and Kalyan identical in drive/walk nodes+edges, bridges, POIs and
+  waterways; places 11 vs 12 in Kalyan; tiles 2-4 s vs Overpass 37 s.
+  Fixes analysis: 117 s on Kalyan, 89 s of it the Gemini web search (LOW thinking did not help: 115 s vs 62 s);
+  the search now starts at prep start (`eb5ed02`): fixes ready 28 s after prep.
+  Live new area near Nagpur (23a7ce34d369, before tiles were live): prep 106 s (osm 71 incl. 44 s Overpass, buildings
+  28, network 20); run 41 s (flow model 28 s: 13,450 steps of ~1.6 s over 4 h + 2 h tail on a tiny grid, so per-step
+  overhead dominates; routing 11 s, unexplained); fixes web search hit Gemini 429 RESOURCE_EXHAUSTED.
+  **Next:** (1) retry with backoff on Gemini 429 and image reviews back to 4 at a time (needs deploy); (2) prepare one
+  fresh Indian area live and record step timings with tiles; (3) profile routing's 11 s; (4) only if time: move the
+  flow model's time loop into numba (re-validate four areas); also refresh the remaining demo fixes lists,
+  MIN_INSTANCES=1 for judging (costs money, ask).
 - **Scope change (human decision, 01:00 IST 18 Oct; SPEC deviation): floods only, India only.**
   - Landslides removed completely (`635649d`): no landslide index at prep (it was 30-160 s of every prep, and in
     Rudraprayag, the one area where it mattered, it rested on expert ratings with AUC 0.60), no landslide closures,
