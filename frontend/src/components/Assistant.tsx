@@ -37,13 +37,15 @@ function sessionId(): string {
 }
 
 function md(text: string): ReactNode {
-  const bold = (s: string) => s.split(/(\*\*[^*]+\*\*)/g).map((p, i) => (p.startsWith("**") ? <b key={i}>{p.slice(2, -2)}</b> : p.replace(/^\*(.*)\*$/, "$1")));
+  const bold = (s: string) => s.replace(/`([^`]+)`/g, "$1").split(/(\*\*[^*]+\*\*)/g).map((p, i) => (p.startsWith("**") ? <b key={i}>{p.slice(2, -2)}</b> : p.replace(/^\*(.*)\*$/, "$1")));
   const out: ReactNode[] = [];
   let list: string[] = [];
   const flush = () => { if (list.length) { out.push(<ul key={out.length}>{list.map((l, i) => <li key={i}>{bold(l)}</li>)}</ul>); list = []; } };
   for (const line of text.split("\n")) {
-    const m = line.match(/^\s*[*-]\s+(.*)/);
-    if (m) list.push(m[1]);
+    const m = line.match(/^\s*[*-]\s+(.*)/), h = line.match(/^\s*#{1,6}\s+(.*)/);
+    if (/^\s*```/.test(line)) continue;  // fence markers: keep the lines, drop the backticks
+    if (h) { flush(); out.push(<p key={out.length}><b>{bold(h[1])}</b></p>); }
+    else if (m) list.push(m[1]);
     else if (line.trim()) { flush(); out.push(<p key={out.length}>{bold(line)}</p>); }
   }
   flush();
@@ -105,7 +107,7 @@ export default function Assistant() {
           break;
         }
         case "prepare_area": {
-          const r = await createAoi([x.west, x.south, x.east, x.north], String(x.name ?? "New area"), x.mode === "urban" ? "urban" : "river");
+          const r = await createAoi([x.west, x.south, x.east, x.north], String(x.name ?? "New area"));
           snack(`Preparing ${r.aoi.name}: a few minutes`);
           nav(`/area/${r.aoi.aoi_id}`);
           break;
