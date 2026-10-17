@@ -407,6 +407,9 @@ def _prepare(aoi: AOI, force: frozenset[str]) -> dict:
 
     storage.save_grid(aoi_id, grid)
     fs.update_aoi(aoi_id, {"grid": grid.to_dict(), "state": "preparing"})
+    if not storage.exists(aoi_id, "improvements.json") or "improvements" in force:
+        from app.pipeline import improvements as impv
+        impv.prefetch_reported(aoi_id, aoi.name, aoi.bbox)  # the fixes list's web search runs alongside the downloads
     images = ees.layer_images(grid, bare_earth=_bare(aoi))
     tasks = []
     with ThreadPoolExecutor(max_workers=8) as ex:

@@ -182,9 +182,30 @@ def _geocode(q: str, bbox) -> dict | None:
     return None
 
 
-def reported(x: dict, aoi_id: str) -> tuple[list[dict], list[dict], str]:
+_web: dict = {}  # aoi_id -> Future of the web search, started when preparation starts
+_web_pool = ThreadPoolExecutor(max_workers=2)
+
+
+def _search(name: str, bbox) -> tuple[str, str, list]:
     from app.agents import historian
-    text, entry, sources = historian.search(x["name"], [round(v, 4) for v in x["bbox"]], REPORT_PROMPT)
+    return historian.search(name, [round(v, 4) for v in bbox], REPORT_PROMPT)
+
+
+def prefetch_reported(aoi_id: str, name: str, bbox) -> None:
+    """Start the web search (Gemini + Google Search, 60-115 s on 18 Oct, most of the fixes analysis) as soon as area
+    preparation starts: it needs only the name and box, so it runs alongside the downloads and is usually done when
+    the area is ready."""
+    if aoi_id not in _web:
+        _web[aoi_id] = _web_pool.submit(_search, name, bbox)
+
+
+def reported(x: dict, aoi_id: str) -> tuple[list[dict], list[dict], str]:
+    fut = _web.pop(aoi_id, None)
+    try:
+        text, entry, sources = fut.result() if fut else _search(x["name"], x["bbox"])
+    except Exception as e:  # noqa: BLE001  the early search failed: try once more now
+        log.info("early web search failed (%s); searching again", e)
+        text, entry, sources = _search(x["name"], x["bbox"])
     m = re.search(r"\[.*\]", text or "", re.S)
     try:
         raw = json.loads(m.group(0)) if m else []
@@ -367,7 +388,7 @@ def step_finish(aoi_id: str) -> dict:
         it["confidence"] = "medium"
         return it
 
-    with ThreadPoolExecutor(max_workers=4) as ex:
+    with ThreadPoolExecutor(max_workers=8) as ex:  # each lead: 3 Earth Engine clips + one Gemini review
         checked = list(ex.map(check, items))
     dropped = sum(1 for c in checked if c is None)
     items = imp.rank([c for c in checked if c is not None])
