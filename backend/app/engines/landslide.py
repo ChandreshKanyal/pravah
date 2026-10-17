@@ -171,9 +171,19 @@ def lsi_dynamic_classes(lsi_static: np.ndarray, edges: list[float], rain_mm_h, s
     return out
 
 
-def actionable(lsi_dyn: np.ndarray, triggered: np.ndarray, cap: int = 3) -> np.ndarray:
+ACTION_MIN_SLOPE_DEG = 15.0
+
+
+def actionable(lsi_dyn: np.ndarray, triggered: np.ndarray, cap: int = 3, slope_deg: np.ndarray | None = None,
+               min_slope_deg: float = ACTION_MIN_SLOPE_DEG) -> np.ndarray:
     """Classes used for decisions (closures, evacuation, shelter exclusion, risk raise): hours where rainfall does not
     exceed the I-D threshold are capped at `cap`, as LHASA (Kirschbaum & Stanley 2018) issues no landslide hazard
-    without the rainfall trigger. The uncapped classes stay on the map as susceptibility."""
+    without the rainfall trigger. Cells gentler than `min_slope_deg` are capped too: the classes are relative to the
+    training region, so in a wet, mostly flat area (Amingaon, Guwahati) road embankments and 6-13 deg rises reached
+    class 5 and closed roads with no slope to fail; rain-triggered shallow landslides are rare below ~15 deg. The
+    uncapped classes stay on the map as susceptibility."""
     trig = np.asarray(triggered, bool).reshape(-1, *([1] * (lsi_dyn.ndim - 1)))
-    return np.where(trig, lsi_dyn, np.minimum(lsi_dyn, cap)).astype(lsi_dyn.dtype)
+    out = np.where(trig, lsi_dyn, np.minimum(lsi_dyn, cap))
+    if slope_deg is not None:
+        out = np.where(np.nan_to_num(slope_deg) < min_slope_deg, np.minimum(out, cap), out)
+    return out.astype(lsi_dyn.dtype)
