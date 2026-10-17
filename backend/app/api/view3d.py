@@ -1,7 +1,9 @@
-"""S19 3D view (option B, our own data only): Terrain-RGB from the Copernicus DEM grid, an hourly texture
-(hillshade + flood depth) on the same UTM grid, and Open Buildings footprints with ground height and run risk.
-Coordinates are metre offsets from the grid centre so terrain, texture and buildings align exactly.
+"""S19 3D view (our own data only): the ground the 2D flow model runs on (FABDEM bare earth, hydrologically conditioned
+in hilly areas) as a height grid, a terrain picture (Sentinel-2 true colour, or a hillshade with rivers), Open Buildings
+footprints with ground height, and per-run building risk. Water comes from /api/runs/{id}/flow (api/flow.py).
+Coordinates are metre offsets from the grid centre, so terrain, water and buildings align exactly.
 Never uses the Maps Elevation API (Maps terms 3.2.3(c)(iii))."""
+import gzip
 import io
 import json
 import threading
@@ -11,22 +13,24 @@ import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, Response
 from google.api_core.exceptions import NotFound
 from PIL import Image
-
 from scipy import ndimage
 
 from app.auth import require
 from app.engines.render import DEPTH_COLORS, DEPTH_EDGES, _rgb, _smooth_mask
 from app.services import firestore as fs, storage
+from app.services.terrain import flow_ground
 
 TEX_K = 3  # texture at cell/3 (10 m) so rivers, streams and flood edges are crisp on the mesh
 RIVER = np.array([66, 133, 214.0])
+S2_KEY = "png/s2_rgb_v1.jpg"
+_s2_busy: set[str] = set()
 
 router = APIRouter()
 
 
-def _png(rgb: np.ndarray) -> bytes:
+def _jpeg(rgb: np.ndarray, q: int = 85) -> bytes:
     buf = io.BytesIO()
-    Image.fromarray(rgb).save(buf, "PNG", compress_level=6)
+    Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8)).save(buf, "JPEG", quality=q)
     return buf.getvalue()
 
 
@@ -34,48 +38,40 @@ def _png(rgb: np.ndarray) -> bytes:
 def meta(aoi_id: str):
     try:
         grid = storage.load_grid(aoi_id)
-        dem = storage.load_layers(aoi_id, "terrain")["dem"]
+        dem, ground = flow_ground(aoi_id)
     except NotFound:
         raise HTTPException(404, "Area not prepared")
-    from app.engines.grid import rowcol_to_lonlat
+    from app.engines.grid import _to_utm, lonlat_bounds, rowcol_to_lonlat
     lon, lat = rowcol_to_lonlat(grid, (grid.height - 1) / 2, (grid.width - 1) / 2)
     W, H = grid.width * grid.cell, grid.height * grid.cell
-    from app.engines.grid import lonlat_bounds
-    threading.Thread(target=_tex_base, args=(aoi_id,), daemon=True).start()  # warm the 3D texture base
+    threading.Thread(target=_tex_base, args=(aoi_id,), daemon=True).start()  # warm the terrain picture
     aoi_m = None
-    bbox = (fs.get_aoi(aoi_id) or {}).get("bbox")
+    doc = fs.get_aoi(aoi_id) or {}
+    bbox = doc.get("bbox")
     if bbox:
-        from app.engines.grid import _to_utm
         w, s_, e, n = bbox
         t = _to_utm(grid.crs)
         cx, cy = grid.x0 + W / 2, grid.y0 - H / 2
         aoi_m = [[round(x - cx, 1), round(y - cy, 1)] for x, y in (t.transform(lo, la) for lo, la in [(w, s_), (e, s_), (e, n), (w, n), (w, s_)])]
     return {"origin": [float(lon), float(lat)], "bounds_m": [-W / 2, -H / 2, W / 2, H / 2], "aoi_m": aoi_m,
-            "bounds_ll": [float(x) for x in lonlat_bounds(grid)],
-            "z_min": float(np.nanmin(dem)), "z_max": float(np.nanmax(dem)), "cell": grid.cell}
+            "bounds_ll": [float(x) for x in lonlat_bounds(grid)], "mode": doc.get("mode", "river"),
+            "z_min": float(np.nanmin(dem)), "z_max": float(np.nanmax(dem)), "cell": grid.cell,
+            "width": grid.width, "height": grid.height, "ground": ground,
+            "imagery": storage.exists(aoi_id, S2_KEY)}
 
 
 @router.get("/api/aoi/{aoi_id}/3d/dem.bin")
-def dem_bin(aoi_id: str, step: int = 2):
-    """DEM block-averaged by `step` as little-endian float32, row-major from the north-west corner; header in
-    X-Grid: "width,height,cell"."""
-    dem = storage.load_layers(aoi_id, "terrain")["dem"].astype(np.float64)
+def dem_bin(aoi_id: str, step: int = 1):
+    """Ground heights (the flow model's ground) block-averaged by `step`, little-endian float32, row-major from the
+    north-west corner, gzip-encoded; header X-Grid: "width,height,cell"."""
+    dem = np.asarray(flow_ground(aoi_id)[0], np.float64)
     grid = storage.load_grid(aoi_id)
     step = int(min(max(step, 1), 4))
     h, w = (dem.shape[0] // step) * step, (dem.shape[1] // step) * step
     d = np.nan_to_num(dem[:h, :w], nan=float(np.nanmin(dem))).reshape(h // step, step, w // step, step).mean(axis=(1, 3))
-    return Response(d.astype("<f4").tobytes(), media_type="application/octet-stream",
+    return Response(gzip.compress(d.astype("<f4").tobytes(), 5), media_type="application/octet-stream",
                     headers={"X-Grid": f"{d.shape[1]},{d.shape[0]},{grid.cell * step}", "Access-Control-Expose-Headers": "X-Grid",
-                             "Cache-Control": "public, max-age=86400"})
-
-
-@router.get("/api/aoi/{aoi_id}/3d/terrain.png")
-def terrain(aoi_id: str):
-    """Mapbox Terrain-RGB encoding: height = -10000 + (R*65536 + G*256 + B) * 0.1."""
-    dem = np.nan_to_num(storage.load_layers(aoi_id, "terrain")["dem"].astype(np.float64), nan=0.0)
-    v = np.clip(np.round((dem + 10000) * 10), 0, 2**24 - 1).astype(np.uint32)
-    rgb = np.stack([(v >> 16) & 255, (v >> 8) & 255, v & 255], axis=-1).astype(np.uint8)
-    return Response(_png(rgb), media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
+                             "Content-Encoding": "gzip", "Cache-Control": "public, max-age=3600"})
 
 
 def _hillshade(dem: np.ndarray, cell: float) -> np.ndarray:
@@ -89,17 +85,18 @@ def _hillshade(dem: np.ndarray, cell: float) -> np.ndarray:
 
 @lru_cache(maxsize=4)
 def _tex_base(aoi_id: str) -> np.ndarray:
-    """Per-area base picture at 3x the grid: hillshaded terrain tinted by elevation, rivers (JRC surface water present
-    >= 50 % of the time) and main streams (>= 10 km2 upstream) in blue. Context only, not model output."""
+    """Per-area picture at 3x the grid: terrain tinted by elevation with a soft hillshade (the 3D view lights the relief
+    itself), rivers (JRC surface water present >= 50 % of the time) and main streams (>= 10 km2 upstream) in blue.
+    Context only, not model output."""
     grid = storage.load_grid(aoi_id)
-    dem = storage.load_layers(aoi_id, "terrain")["dem"].astype(np.float64)
+    dem = np.asarray(flow_ground(aoi_id)[0], np.float64)
     k = TEX_K
     demf = ndimage.zoom(np.nan_to_num(dem, nan=float(np.nanmin(dem))).astype(np.float32), k, order=1, grid_mode=True, mode="nearest")
     hs = _hillshade(demf, grid.cell / k)
     p2, p98 = np.nanpercentile(dem, 2), np.nanpercentile(dem, 98)
     z = np.clip((demf - p2) / max(1.0, p98 - p2), 0, 1)
     low, high = np.array([96, 128, 78.0]), np.array([196, 182, 156.0])
-    rgb = (low + z[..., None] * (high - low)) * (0.42 + 0.78 * hs[..., None])
+    rgb = (low + z[..., None] * (high - low)) * (0.7 + 0.4 * hs[..., None])
     river = np.zeros(demf.shape, bool)
     try:
         river |= _smooth_mask(np.nan_to_num(storage.load_layers(aoi_id, "hazard_hist")["gsw_occ"]) >= 50, k)
@@ -110,80 +107,96 @@ def _tex_base(aoi_id: str) -> np.ndarray:
         river |= _smooth_mask(h30["stream"] & (np.nan_to_num(h30["upa"]) >= 10.0), k, sigma_cells=0.3, level=0.35)
     except (NotFound, KeyError):
         pass
-    rgb[river] = RIVER * (0.75 + 0.25 * hs[river][..., None])
+    rgb[river] = RIVER * (0.85 + 0.15 * hs[river][..., None])
     return rgb.astype(np.float32)
 
 
-@lru_cache(maxsize=4)
-def _run_depth(run_id: str) -> np.ndarray:
-    return np.load(io.BytesIO(storage.get_run(run_id, "depth.npz")))["depth"].astype(np.float32)
+@router.get("/api/aoi/{aoi_id}/3d/base.jpg")
+def base_texture(aoi_id: str):
+    """Hillshaded terrain with rivers and main streams (shown while the satellite picture loads, or without it)."""
+    try:
+        rgb = _tex_base(aoi_id)
+    except NotFound:
+        raise HTTPException(404, "Area not prepared")
+    return Response(_jpeg(rgb), media_type="image/jpeg", headers={"Cache-Control": "public, max-age=3600"})
+
+
+def _make_s2(aoi_id: str) -> None:
+    try:
+        from app.services import earth_engine as ees
+        rgb = ees.s2_rgb(storage.load_grid(aoi_id), TEX_K)
+        storage.put_bytes(aoi_id, S2_KEY, _jpeg(rgb, 88), "image/jpeg")
+    finally:
+        _s2_busy.discard(aoi_id)
+
+
+@router.get("/api/aoi/{aoi_id}/3d/imagery.jpg")
+def imagery(aoi_id: str):
+    """Sentinel-2 true colour (cloud-masked dry-season median, 10 m) on the grid. 202 while it is being made (first
+    request per area, about 10-30 s); the page keeps the hillshade until it is ready."""
+    try:
+        return Response(storage.get_bytes(aoi_id, S2_KEY), media_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
+    except NotFound:
+        pass
+    if aoi_id not in _s2_busy:
+        _s2_busy.add(aoi_id)
+        threading.Thread(target=_make_s2, args=(aoi_id,), daemon=True).start()
+    return Response(status_code=202, headers={"Retry-After": "5"})
 
 
 @router.get("/api/runs/{run_id}/3d/texture_h{hour}.jpg")
 def texture(run_id: str, hour: int, aoi_id: str):
-    """Base picture with the run's flood depth at `hour` on top (nested smoothed bands, as on the 2D map). JPEG, cached
-    per run and hour in GCS (written in the background) and per area/run in memory."""
-    key = f"png/tex3d_v2_h{hour}.jpg"
+    """Hillshade picture with the run's HAND flood depth at `hour` (nested smoothed bands, as on the 2D map)."""
+    key = f"png/tex3d_v3_h{hour}.jpg"
     hdr = {"Cache-Control": "public, max-age=86400"}
     try:
         return Response(storage.get_run(run_id, key), media_type="image/jpeg", headers=hdr)
     except NotFound:
         pass
     try:
-        depth = _run_depth(run_id)
+        depth = np.load(io.BytesIO(storage.get_run(run_id, "depth.npz")))["depth"].astype(np.float32)
     except NotFound:
         raise HTTPException(404, "Run not found")
     rgb = _tex_base(aoi_id).copy()
-    d = depth[min(max(hour, 1), depth.shape[0]) - 1]
-    filled = np.nan_to_num(d, nan=-np.inf)
+    filled = np.nan_to_num(depth[min(max(hour, 1), depth.shape[0]) - 1], nan=-np.inf)
     band = sum(_smooth_mask(filled >= e, TEX_K).astype(np.int8) for e in DEPTH_EDGES) - 1
     for i, c in enumerate(DEPTH_COLORS):
         m = band == i
         rgb[m] = 0.2 * rgb[m] + 0.8 * np.array(_rgb(c))
-    buf = io.BytesIO()
-    Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8)).save(buf, "JPEG", quality=85)
-    out = buf.getvalue()
+    out = _jpeg(rgb)
     threading.Thread(target=storage.put_run, args=(run_id, key, out, "image/jpeg"), daemon=True).start()
     return Response(out, media_type="image/jpeg", headers=hdr)
 
 
-@router.get("/api/aoi/{aoi_id}/3d/base.jpg")
-def base_texture(aoi_id: str):
-    """Terrain, rivers and main streams only, for areas with no run yet."""
+_bld_mem: dict[str, bytes] = {}
+
+
+def _buildings(aoi_id: str) -> bytes:
+    """Cached (memory, then storage) only when non-empty: an area whose buildings arrive later must not stay empty."""
+    if aoi_id in _bld_mem:
+        return _bld_mem[aoi_id]
+    data = _buildings_build(aoi_id)
+    if data != b"[]":
+        if len(_bld_mem) >= 4:
+            _bld_mem.pop(next(iter(_bld_mem)))
+        _bld_mem[aoi_id] = data
+    return data
+
+
+def _buildings_build(aoi_id: str) -> bytes:
+    """[{i: index in buildings_proxy (= risk array index), p: [[x, y], ...] metre offsets, z: ground m, h: height m}]."""
+    key = "bld3d_v2.json"
     try:
-        rgb = _tex_base(aoi_id)
+        return storage.get_bytes(aoi_id, key)
     except NotFound:
-        raise HTTPException(404, "Area not prepared")
-    buf = io.BytesIO()
-    Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8)).save(buf, "JPEG", quality=85)
-    return Response(buf.getvalue(), media_type="image/jpeg", headers={"Cache-Control": "public, max-age=3600"})
-
-
-@router.get("/api/aoi/{aoi_id}/3d/buildings.json")
-def buildings_static(aoi_id: str, user: dict = Depends(require("viewer"))):
-    """Buildings before any run: same format, risk unknown (shown as low)."""
-    return buildings("none", aoi_id, user)
-
-
-@router.get("/api/runs/{run_id}/3d/buildings.json")
-def buildings(run_id: str, aoi_id: str, user: dict = Depends(require("viewer"))):
-    """[{p: [[x, y], ...] metre offsets, z: ground m, h: height m, r: risk 0 critical..3 low}] (cached per run)."""
-    if run_id != "none":
-        try:
-            return Response(storage.get_run(run_id, "buildings3d.json"), media_type="application/json")
-        except NotFound:
-            pass
+        pass
     grid = storage.load_grid(aoi_id)
     try:
         b = storage.load_gdf(aoi_id, "buildings_proxy.parquet")
     except NotFound:  # areas prepared before the building-class step
-        return Response(b"[]", media_type="application/json")
+        return b"[]"
     b = b.to_crs(grid.crs) if str(b.crs) != str(grid.crs) else b
-    dem = storage.load_layers(aoi_id, "terrain")["dem"]
-    try:
-        risk = np.load(io.BytesIO(storage.get_run(run_id, "bld_risk.npy"))) if run_id != "none" else np.full(len(b), 3, np.uint8)
-    except NotFound:
-        risk = np.full(len(b), 3, np.uint8)
+    dem = np.asarray(flow_ground(aoi_id)[0])
     cx, cy = grid.x0 + grid.width * grid.cell / 2, grid.y0 - grid.height * grid.cell / 2
     rows = np.clip(b["row"].to_numpy(int), 0, grid.height - 1)
     cols = np.clip(b["col"].to_numpy(int), 0, grid.width - 1)
@@ -195,9 +208,24 @@ def buildings(run_id: str, aoi_id: str, user: dict = Depends(require("viewer")))
         if poly.is_empty:
             continue
         pts = [[round(x - cx, 1), round(y - cy, 1)] for x, y in poly.simplify(0.5).exterior.coords]
-        out.append({"p": pts, "z": round(float(z[i]), 1), "h": round(float(max(hgt[i], 2.5)), 1),
-                    "r": int(risk[i]) if i < len(risk) else 3})
+        out.append({"i": i, "p": pts, "z": round(float(z[i]), 1), "h": round(float(max(hgt[i], 2.5)), 1)})
     data = json.dumps(out, separators=(",", ":")).encode()
-    if run_id != "none":
-        storage.put_run(run_id, "buildings3d.json", data, "application/json")
-    return Response(data, media_type="application/json")
+    if out:
+        storage.put_bytes(aoi_id, key, data, "application/json")
+    return data
+
+
+@router.get("/api/aoi/{aoi_id}/3d/buildings.json")
+def buildings(aoi_id: str, user: dict = Depends(require("viewer"))):
+    """Open Buildings footprints on the flow ground (per area; risk comes per run from risk.bin)."""
+    return Response(_buildings(aoi_id), media_type="application/json", headers={"Cache-Control": "public, max-age=3600"})
+
+
+@router.get("/api/runs/{run_id}/3d/risk.bin")
+def building_risk(run_id: str, user: dict = Depends(require("viewer"))):
+    """Estimated risk per building (uint8, 0 critical .. 3 low), indexed like buildings.json "i"."""
+    try:
+        risk = np.load(io.BytesIO(storage.get_run(run_id, "bld_risk.npy"))).astype(np.uint8)
+    except NotFound:
+        raise HTTPException(404, "No building risk for this run")
+    return Response(risk.tobytes(), media_type="application/octet-stream", headers={"Cache-Control": "public, max-age=86400"})
