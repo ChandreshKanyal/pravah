@@ -33,7 +33,7 @@ class PlanOverrides(BaseModel):
     travel_mode: Literal["walk", "drive"] | None = None
     evac_start_hour: int | None = None
     disabled_shelter_ids: list[str] | None = Field(None, description="full list of closed shelter ids after the change")
-    bridge_cut_stage_m: float | None = None
+    bridge_margin_m: float | None = Field(None, description="0..5 m below the deck at which a bridge is closed")
     walk_depth_limit_m: float | None = None
     vehicle_depth_limit_m: float | None = None
     max_travel_min: int | None = None
@@ -47,7 +47,7 @@ mm per hour means rain_source=manual with manual_intensity_mm_h. If the request 
 (leave fields null). Output only the schema."""
 
 RANGES = {"upstream_inflow_m3s": (0, 20000), "manual_intensity_mm_h": (0, 300), "duration_h": (1, 24), "river_offset_m": (-1, 5), "pop_multiplier": (0.5, 2),
-          "forecast_day_index": (0, 9), "evac_start_hour": (1, 24), "worst_multiplier": (1, 5)}
+          "forecast_day_index": (0, 9), "evac_start_hour": (1, 24), "worst_multiplier": (1, 5), "bridge_margin_m": (0, 5)}
 
 
 def _agent() -> LlmAgent:
@@ -79,8 +79,9 @@ async def plan(text: str, current: ScenarioParams, shelters: list[dict], forecas
 def merge(current: ScenarioParams, ov: PlanOverrides, shelter_ids: set[str]) -> dict:
     p = current.model_dump()
     changes = {k: v for k, v in ov.model_dump(exclude={"explanation"}).items() if v is not None}
-    if "manual_intensity_mm_h" in changes and "rain_source" not in changes:
-        changes["rain_source"] = "manual"
+    if "manual_intensity_mm_h" in changes:
+        changes["rain_preset"] = None  # an explicit intensity replaces an IMD category
+        changes["rain_source"] = changes.get("rain_source", "manual")
     for k, (lo, hi) in RANGES.items():
         if k in changes:
             changes[k] = type(changes[k])(min(hi, max(lo, changes[k])))

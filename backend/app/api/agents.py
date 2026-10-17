@@ -46,3 +46,41 @@ async def chat(req: ChatRequest, user: dict = Depends(require("analyst"))):
     except Exception as e:
         log.exception("chat failed")
         raise HTTPException(502, f"Assistant unavailable ({e.__class__.__name__})")
+
+
+class AssistantRequest(BaseModel):
+    session_id: str
+    message: str
+    page: str = ""
+    aoi_id: str | None = None
+    run_id: str | None = None
+
+
+@router.post("/api/assistant")
+async def assistant(req: AssistantRequest, user: dict = Depends(require("analyst"))):
+    """The floating assistant on every page: answers (web-grounded), finds places, and proposes actions to confirm."""
+    from app.agents.assistant import ask
+    try:
+        return await ask(req.session_id[:64], req.message[:2000], req.page[:40], req.aoi_id, req.run_id)
+    except Exception as e:
+        log.exception("assistant failed")
+        raise HTTPException(502, f"Assistant unavailable ({e.__class__.__name__})")
+
+
+@router.post("/api/assistant/stream")
+async def assistant_stream(req: AssistantRequest, user: dict = Depends(require("analyst"))):
+    """Server-sent events for the chat: steps, thinking summaries and answer text as they happen, then the result."""
+    import json as _json
+
+    from fastapi.responses import StreamingResponse
+
+    from app.agents.assistant import ask_stream
+
+    async def gen():
+        try:
+            async for e in ask_stream(req.session_id[:64], req.message[:2000], req.page[:40], req.aoi_id, req.run_id):
+                yield f"data: {_json.dumps(e)}\n\n"
+        except Exception as e:  # noqa: BLE001
+            log.exception("assistant stream failed")
+            yield f"data: {_json.dumps({'type': 'error', 'message': f'Assistant unavailable ({e.__class__.__name__})'})}\n\n"
+    return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

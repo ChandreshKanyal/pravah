@@ -84,7 +84,7 @@ def run_scenario(tool_context: ToolContext, rain_source: str | None = None, manu
                  upstream_inflow_m3s: float | None = None,
                  pop_multiplier: float | None = None, travel_mode: str | None = None, evac_start_hour: int | None = None,
                  disable_shelter_ids: list[str] | None = None, enable_shelter_ids: list[str] | None = None,
-                 bridge_cut_stage_m: float | None = None) -> dict:
+                 bridge_margin_m: float | None = None) -> dict:
     """Run a what-if scenario: copies the current run's settings and changes only the arguments given.
 
     Args:
@@ -101,7 +101,7 @@ def run_scenario(tool_context: ToolContext, rain_source: str | None = None, manu
         evac_start_hour: hour the evacuation starts (1-based).
         disable_shelter_ids: shelter ids to close (e.g. ["S3"]).
         enable_shelter_ids: shelter ids to reopen.
-        bridge_cut_stage_m: river stage (m) at which bridges are closed.
+        bridge_margin_m: close a bridge when the river is within this many metres of its deck (0 = at the deck).
 
     Returns:
         A summary of the new run with its run_id, and previous_run_id for comparison.
@@ -113,11 +113,13 @@ def run_scenario(tool_context: ToolContext, rain_source: str | None = None, manu
     for k, v in dict(rain_source=rain_source, manual_intensity_mm_h=manual_intensity_mm_h, duration_h=duration_h,
                      hyetograph=hyetograph, forecast_day_index=forecast_day_index, worst_multiplier=worst_multiplier,
                      river_offset_m=river_offset_m, upstream_inflow_m3s=upstream_inflow_m3s, pop_multiplier=pop_multiplier, travel_mode=travel_mode,
-                     evac_start_hour=evac_start_hour, bridge_cut_stage_m=bridge_cut_stage_m).items():
+                     evac_start_hour=evac_start_hour, bridge_margin_m=bridge_margin_m).items():
         if v is not None:
             p[k] = v
-    if manual_intensity_mm_h is not None and rain_source is None:
-        p["rain_source"] = "manual"
+    if manual_intensity_mm_h is not None:
+        p["rain_preset"] = None  # an explicit intensity replaces an IMD category
+        if rain_source is None:
+            p["rain_source"] = "manual"
     dis = set(p.get("disabled_shelter_ids", [])) | set(disable_shelter_ids or [])
     p["disabled_shelter_ids"] = sorted(dis - set(enable_shelter_ids or []))
     params = ScenarioParams(**p)
@@ -218,5 +220,54 @@ def get_historical_summary(tool_context: ToolContext) -> dict:
     return json.loads(json.dumps({k: (v[:10] if isinstance(v, list) else v) for k, v in h.items()}, default=str))
 
 
+def instant_what_if(tool_context: ToolContext, total_mm: float, hours: int, early_peak: bool = True,
+                    river_offset_m: float = 0.0) -> dict:
+    """Instant estimate of the 2D water model's peak flood for a storm, from the area's AI emulator (milliseconds,
+    no routes or shelters). Use it for quick "what if X mm falls in Y hours" questions; use run_scenario for a full plan.
+
+    Args:
+        total_mm: storm total in mm.
+        hours: storm duration, 1-6 hours.
+        early_peak: True for an early-peaked storm (most rain in the first hours), False for steady rain.
+        river_offset_m: river level above normal in metres (river areas).
+
+    Returns:
+        flooded_km2, people_in_water_30cm (residents at home in water at least 30 cm deep), max_depth_m, the IMD
+        category of the storm, and outside_trained_range (non-empty = less reliable).
+    """
+    from app.pipeline import emulator
+    h, st = emulator.predict(tool_context.state["aoi_id"], float(total_mm), int(max(1, min(24, hours))),
+                             "triangular_front" if early_peak else "constant", float(river_offset_m))
+    if h is None:
+        return {"error": "The AI emulator is not trained for this area yet (What-if tab)."}
+    return {"flooded_km2": st["flooded_km2"], "people_in_water_30cm": st["people_in_water"], "max_depth_m": st["max_depth_m"],
+            "imd_category": st["imd_category"], "outside_trained_range": st["outside_trained_range"], "source": "AI emulator of the 2D model"}
+
+
+def rain_triggers(tool_context: ToolContext, place: str | None = None) -> dict:
+    """Rain triggers for early action: per village or neighbourhood, the smallest early-peaked storm (mm in 1, 3 and 6
+    hours) that puts at least 25 people (or 5% of residents) in water 30 cm deep at home, from the 2D water model.
+
+    Args:
+        place: a place name to look up (fuzzy); omit for the most exposed places.
+
+    Returns:
+        places (name, residents, thresholds_mm by duration, IMD category by duration) and the method note.
+    """
+    from app.pipeline import emulator
+    t = emulator.triggers_json(tool_context.state["aoi_id"])
+    if not t:
+        return {"error": "No triggers yet: train the AI emulator for this area (What-if tab)."}
+    rows = t["places"]
+    if place:
+        names = [r["name"] for r in rows]
+        hit = difflib.get_close_matches(place, names, n=3, cutoff=0.5)
+        rows = [r for r in rows if r["name"] in hit]
+        if not rows:
+            return {"places": [], "note": f"No trigger for '{place}': it does not flood within the trained storms, or the name is not an OSM place here."}
+    return {"places": [{k: r[k] for k in ("name", "residents", "thresholds_mm", "imd")} for r in rows[:8]],
+            "depth_m": t["depth_m"], "note": t.get("note", "")}
+
+
 TOOLS = [get_forecast_summary, run_scenario, get_run_summary, compare_runs, list_shelters, list_bridges,
-         list_closed_roads, find_shelter_by_name, get_historical_summary]
+         list_closed_roads, find_shelter_by_name, get_historical_summary, instant_what_if, rain_triggers]
