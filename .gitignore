@@ -27,3 +27,8 @@ build/
 .DS_Store
 .idea/
 .vscode/
+
+# local API caches and build info (never commit)
+backend/cache/*.json
+cache/*.json
+*.tsbuildinfo
