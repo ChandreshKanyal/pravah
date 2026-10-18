@@ -224,7 +224,7 @@ def _road_tables(aoi_id: str, grid: GridSpec) -> tuple[dict, list[str], np.ndarr
         except NotFound:
             return None
         if mode == "drive":
-            G = ox.add_edge_travel_times(ox.add_edge_speeds(G))
+            G = ox.add_edge_travel_times(roads.add_speeds(G))
         return roads.edge_table(ox.project_graph(G, to_crs=grid.crs), grid, mode, t["dem"], t["slope_deg"])
     with ThreadPoolExecutor(2) as ex:
         got = dict(zip(("walk", "drive"), ex.map(one, ("walk", "drive"))))

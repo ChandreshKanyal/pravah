@@ -4,6 +4,7 @@ import math
 import geopandas as gpd
 import networkx as nx
 import numpy as np
+import osmnx as ox
 import shapely
 from scipy.ndimage import maximum_filter
 from shapely.geometry import LineString
@@ -20,6 +21,23 @@ NARROWNESS = {
     "secondary": 0.3, "secondary_link": 0.3,
     "primary": 0.2, "primary_link": 0.2, "trunk": 0.2, "trunk_link": 0.2, "motorway": 0.2,
 }
+
+
+# Typical free-flow speeds (km/h) by road class, used only when no road in the area has a mapped speed limit (OSMnx
+# then has nothing to average; e.g. Puri, 18 Oct). Planning assumptions for Indian roads, not measured; links take
+# their road's speed.
+DEFAULT_KPH = {"motorway": 80, "trunk": 60, "primary": 50, "secondary": 40, "tertiary": 30, "unclassified": 25,
+               "residential": 20, "living_street": 10, "service": 15, "road": 25}
+DEFAULT_KPH |= {f"{k}_link": v for k, v in DEFAULT_KPH.items()}
+FALLBACK_KPH = 25
+
+
+def add_speeds(G):
+    """OSMnx speeds from mapped speed limits (mean per road class); when no edge has one, DEFAULT_KPH."""
+    try:
+        return ox.add_edge_speeds(G)
+    except ValueError:
+        return ox.add_edge_speeds(G, hwy_speeds=DEFAULT_KPH, fallback=FALLBACK_KPH)
 
 
 def tobler_kmh(tan_theta):
