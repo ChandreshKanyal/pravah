@@ -230,6 +230,13 @@ def build_facts(run: dict, area_extra: dict | None = None) -> dict:
         "drains": [{"id": d["id"], "type": d["type"], "name": d.get("name", ""), "priority": d["priority"],
                     "exposed_people_300m": d.get("exposed_people_300m"), 
                     "lonlat": [d["lon"], d["lat"]]} for d in (run.get("drains") or area_extra.get("drains", []))[:10]],
+        # the area's Fixes list (pipeline/improvements.py): pre-monsoon works found by the model, on satellite images or in
+        # web reports (with a source); FX ids so they never clash with the run's own ids
+        "fixes": [{"id": f"FX{k}", "title": f.get("title", ""), "place": f.get("place", ""), "action": f.get("action", ""),
+                   "department": f.get("department", ""), "basis": f.get("basis", ""), "confidence": f.get("confidence", ""),
+                   "why": [w[:220] for w in (f.get("why") or [])[:2]], "numbers": f.get("numbers") or {},
+                   "source": next((x.get("uri") for x in f.get("sources") or [] if x.get("uri")), None), "lonlat": _ll(f)}
+                  for k, f in enumerate((area_extra.get("fixes") or [])[:8], start=1)],
         "forecast": area_extra.get("forecast", {}),
         "history": area_extra.get("history", {}),
         "warnings": run.get("warnings", [])[:10],
@@ -240,7 +247,7 @@ def build_facts(run: dict, area_extra: dict | None = None) -> dict:
 
 def _trim(facts: dict) -> None:
     """Keep the facts under ~12 KB by shortening the longest lists first."""
-    for k in ("closed_roads", "routes", "shelters", "clusters", "warnings"):
+    for k in ("closed_roads", "routes", "fixes", "shelters", "clusters", "warnings"):
         while len(json.dumps(facts)) > MAX_FACTS_BYTES and len(facts.get(k, [])) > 3:
             facts[k] = facts[k][:-1]
 
@@ -340,6 +347,18 @@ def _bridge(b: dict) -> str:
         f"the bridge at {b['place']}" if b.get("place") else "this bridge"
 
 
+def _fix_owner(dept: str) -> str:
+    """The Fixes list names a local department; the brief has a fixed list."""
+    d = dept.lower()
+    if "police" in d:
+        return "Police"
+    if "pwd" in d or "public works" in d:
+        return "PWD (roads and bridges)"
+    if "irrigation" in d or "flood control" in d or "water resources" in d:
+        return "Irrigation / Flood control"
+    return "Municipal body (drains, water-logging)"
+
+
 def rules_advisory(facts: dict) -> list[Recommendation]:
     """S15.4: deterministic recommendations for all three horizons."""
     out: list[Recommendation] = []
@@ -395,7 +414,12 @@ def rules_advisory(facts: dict) -> list[Recommendation]:
                                   location_label=_where(g, f"Staging point {g['id']}"), evidence_ids=[g["id"]],
                                   owner="Health (CMO, 108 ambulance)",
                                   why="Dry, flat ground next to a road that stays open all scenario.", confidence="medium"))
-    for d in facts["drains"][:3]:
+    for f in facts.get("fixes", [])[:3]:  # the Fixes list when it is ready (it ranks the drains too), else the drains
+        out.append(Recommendation(horizon="seasonal", priority="P2", action=f.get("action") or f.get("title", ""),
+                                  location_label=f.get("place") or f.get("title", ""), evidence_ids=[f["id"]],
+                                  owner=_fix_owner(f.get("department", "")), why="; ".join(f.get("why") or []) or f.get("title", ""),
+                                  confidence="medium" if f.get("confidence") in ("high", "medium") else "low"))
+    for d in ([] if facts.get("fixes") else facts["drains"][:3]):
         out.append(Recommendation(horizon="seasonal", priority="P2", action=f"Inspect and clear the {d.get('type', 'drain')} at {d.get('name') or 'this point'}",
                                   location_label=(d.get("name") or d.get("type", "drain")), evidence_ids=[d["id"]],
                                   owner="Municipal body (drains, water-logging)",

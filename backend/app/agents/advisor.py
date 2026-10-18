@@ -25,6 +25,10 @@ Use the words estimated, susceptibility, suggested; never say "will flood" or "s
 facts (flood, water-logging); this is not a landslide, cyclone or earthquake tool. A bridge with reason "overtopped"
 closes when the river reaches its deck; one with reason construction, closed or disused is marked so in OpenStreetMap,
 not closed by the storm: suggest confirming its status with PWD, not closing it. Include 3-5 limitations.
+"fixes" (when present) is the area's ranked list of pre-monsoon works: turn the most important 2-4 into seasonal (or,
+for a second road out, structural) recommendations citing their FX ids, with the fix's place and department. A fix with
+basis "web" is a waterlogging spot reported online: say "reported"; one with basis "model" or confidence "check" is
+suggested for inspection, not confirmed.
 
 FACTS JSON:
 {facts}

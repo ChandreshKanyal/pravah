@@ -63,3 +63,22 @@ def test_gemini_error_gives_rules_fallback_with_three_horizons():
 def test_route_linked_to_nearest_cluster():
     facts = F.build_facts(_run())
     assert facts["routes"][0]["from_cluster"] == "C1"
+
+
+def test_fixes_list_reaches_the_brief():
+    """The area's Fixes list is in the facts (FX ids, numbers checkable) and the rules brief turns it into seasonal work."""
+    from app.agents import advisor
+    fix = {"id": "I1", "title": "Keep the only road out clear", "place": "Kapadia Main Road", "lon": 79.003, "lat": 30.301,
+           "action": "Keep this road clear in heavy rain", "department": "Traffic police and ward office", "basis": "model",
+           "confidence": "check", "why": ["The only drivable road out for about 4,980 people behind it"],
+           "numbers": {"people_cut_off": 4980}, "sources": []}
+    facts = F.build_facts(_run(), {"fixes": [fix]})
+    assert facts["fixes"][0]["id"] == "FX1" and facts["fixes"][0]["lonlat"] == [79.003, 30.301]
+    ok = Recommendation(horizon="seasonal", priority="P2", action="Keep Kapadia Main Road clear", location_label="Kapadia Main Road",
+                        evidence_ids=["FX1"], why="It is the only road out for about 4,980 people.", confidence="medium")
+    kept, _ = F.validate([ok], facts)
+    assert kept and kept[0].lonlat == [79.003, 30.301]
+    with mock.patch.object(advisor.gemini, "generate_json", side_effect=RuntimeError("boom")):
+        adv = advisor.generate_advisory(_run(), {"fixes": [fix]})
+    rec = next(r for r in adv.recommendations if "FX1" in r.evidence_ids)
+    assert rec.horizon == "seasonal" and rec.owner == "Police"
