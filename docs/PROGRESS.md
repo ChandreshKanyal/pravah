@@ -21,6 +21,13 @@ All work is **committed** on `main` (no git remote is configured, so nothing is 
   no longer pays ~20 s of compiling. The cache is not baked into the image (Cloud Build's CPU may differ from Cloud Run's).
   Why steps are ~1 s: the explicit solver's stability limit (CFL 0.45) set by the fastest water (the river), not detail
   wanted; future options: local-inertial solver, river left to HAND, local time stepping (not for the deadline).
+- **COST WATCH (18 Oct, human decision): the brief is drafted automatically after every website run.** Opening Brief
+  took ~90 s (one Gemini call at HIGH thinking: ~10k thinking tokens, ~1.6k out, ~5.5k in; measured 73 s; MEDIUM 37 s,
+  LOW 12 s on the same run). `_run_job` in `api/runs.py` now calls `start_advisory` as soon as a run finishes, so every
+  run started from the website costs one HIGH-thinking Gemini call even if nobody opens its brief (scripts and the smoke
+  test, POST /api/runs, do not). A draft already under way (`pending_since` < 4 min) is not started again from another
+  instance. If Vertex AI costs climb: revert to drafting on first open (remove the `start_advisory` call in `_run_job`),
+  or move the brief to MEDIUM thinking (`gemini_thinking_pro`), or show the instant rules brief while Gemini drafts.
 - **~13:00 IST 18 Oct (not deployed): shelters and routes explained.** Each run now checks every shelter against
   published rules: freeboard >= 0.6 m above peak flood water on lower ground within 150 m (IS 14264 / IS 15690 plinth
   rule), door roads cut (ARC 4496: avoid isolated shelters), height above drainage, farthest home vs 2.25 km (Odisha

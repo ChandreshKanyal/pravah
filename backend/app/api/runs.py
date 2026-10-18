@@ -46,6 +46,13 @@ def _run_job(job_id: str, params: ScenarioParams, flow: bool, user: dict) -> Non
     try:
         result = create_run(params, flow, user)
         fs.merge_doc("run_jobs", job_id, {"status": "done", "run_id": result.run_id})
+        # draft the brief now (Gemini, ~75 s at high thinking) so it is usually ready when someone opens Brief.
+        # Costs one Gemini call per website run even if the brief is never opened: see docs/PROGRESS.md (18 Oct)
+        # before changing; scripts and the smoke test (POST /api/runs) do not draft.
+        try:
+            start_advisory(result.run_id, user)
+        except Exception:  # noqa: BLE001  the brief is still drafted on first open
+            log.exception("could not start the brief for %s", result.run_id)
     except HTTPException as e:
         fs.merge_doc("run_jobs", job_id, {"status": "error", "code": e.status_code, "error": str(e.detail)[:500]})
     except Exception as e:  # noqa: BLE001
@@ -231,17 +238,32 @@ def advisory(run_id: str, refresh: bool = False, rules_only: bool = False, user:
     doc = fs.get_doc("advisories", run_id)
     if doc and doc.get("status", "ready") == "ready" and not refresh:
         return doc
+    if doc and doc.get("status") == "pending" and not refresh and _recent(doc.get("pending_since"), 240):
+        return {"status": "pending", "run_id": run_id}  # a draft is under way, maybe on another instance
+    start_advisory(run_id, user, doc)
+    return {"status": "pending", "run_id": run_id}
+
+
+def _recent(iso: str | None, seconds: float) -> bool:
+    try:
+        return (datetime.now(timezone.utc) - datetime.fromisoformat(iso)).total_seconds() < seconds
+    except (TypeError, ValueError):
+        return False
+
+
+def start_advisory(run_id: str, user: dict | None, doc: dict | None = None) -> bool:
+    """Draft the brief in the background unless a draft is already running (False then)."""
     with _jobs_lock:
         if run_id in _jobs:
-            return {"status": "pending", "run_id": run_id}
+            return False
         _jobs[run_id] = None  # claimed: a second request meanwhile does not start another draft
     try:  # keep the current version readable while the new one is drafted (a new version never overwrites history)
-        fs.set_doc("advisories", run_id, {**(doc or {}), "status": "pending"})
+        fs.set_doc("advisories", run_id, {**(doc or {}), "status": "pending", "pending_since": datetime.now(timezone.utc).isoformat()})
         _jobs[run_id] = _pool.submit(_generate_and_store, run_id, user)
     except Exception:
         _jobs.pop(run_id, None)
         raise
-    return {"status": "pending", "run_id": run_id}
+    return True
 
 
 @router.get("/api/runs/{run_id}/advisory")
