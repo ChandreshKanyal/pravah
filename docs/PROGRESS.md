@@ -21,6 +21,14 @@ All work is **committed** on `main` (no git remote is configured, so nothing is 
   no longer pays ~20 s of compiling. The cache is not baked into the image (Cloud Build's CPU may differ from Cloud Run's).
   Why steps are ~1 s: the explicit solver's stability limit (CFL 0.45) set by the fastest water (the river), not detail
   wanted; future options: local-inertial solver, river left to HAND, local time stepping (not for the deadline).
+- **Showcase areas ready (18 Oct ~15:15 IST; checklist item 3 done; website change `Explore.tsx` committed, NOT yet
+  deployed).** Five areas, each with a titled run made current, flow model, Gemini brief, 3D pictures/frames, shelter and
+  route explanations and the fixes list cached: Rudraprayag cloudburst, Chennai Adyar-Velachery live forecast (new area),
+  Mumbai Kurla-Mithi 26 Jul 2005 replay, Puri IMD extremely heavy rain + 50,000 visitors (new 8x7 km area `66bc06eb21cb`;
+  the old 1.6 km box `0b23a1a9f059` is not used), Silchar everything at once (new area). Ids, results and the brief
+  description and video script are in `docs/SUBMISSION.md`. Explore's "Try a prepared area" lists the five by area id;
+  the area list asks for `limit=50` (it returned 12, so older showcase areas would drop off). Do not re-run or rename
+  these areas during evaluation. Puri's first run `38124a3fe6a4` (1-in-100-year, 77 mm) stays in its history.
 - **HAND-OFF, 18 Oct 14:35 IST (read first). Feature freeze: no new features (human decision). Everything below up to
   `6190df1` is committed AND deployed (backend and website, ~14:16 IST); git tree clean apart from the other agent's .pptx.**
   Competition (AI Builder Cup 2026, JAPAC, hack2skill): **prototype submission closes Sun 18 Oct 23:59 IST**; prototype

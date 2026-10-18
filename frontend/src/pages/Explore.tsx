@@ -17,7 +17,7 @@ const DEMOS: { name: string; aoi: string; bbox: BBox; icon: string; note: string
   { name: "Rudraprayag", aoi: "56f044f26351", bbox: [78.93, 30.24, 79.03, 30.33], icon: "thunderstorm", note: "Cloudburst · Uttarakhand hills, Char Dham pilgrims" },
   { name: "Chennai Adyar–Velachery", aoi: "7a7c41e90681", bbox: [80.205, 12.96, 80.285, 13.035], icon: "rainy", note: "Live forecast · northeast monsoon" },
   { name: "Mumbai Kurla–Mithi", aoi: "d277268c1783", bbox: [72.865, 19.06, 72.895, 19.09], icon: "location_city", note: "Real event · 26 July 2005 replayed" },
-  { name: "Puri", aoi: "66bc06eb21cb", bbox: [85.785, 19.785, 85.865, 19.845], icon: "beach_access", note: "Worst case · 1-in-100-year rain, Rath Yatra crowds" },
+  { name: "Puri", aoi: "66bc06eb21cb", bbox: [85.785, 19.785, 85.865, 19.845], icon: "beach_access", note: "Worst case · extremely heavy rain, Rath Yatra crowds" },
   { name: "Silchar", aoi: "90ee5d445ddf", bbox: [92.745, 24.785, 92.835, 24.87], icon: "flood", note: "Everything at once · record rain, Barak in flood" },
 ];
 
