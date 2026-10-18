@@ -802,10 +802,11 @@ button.area-title:hover .area-edit, button.area-title:focus-visible .area-edit {
 
 /* ---------- Ask Pravah (Assistant.tsx): floating Gemini chat on every page ---------- */
 .asst-fab { position: fixed; z-index: 40; right: 20px; bottom: 20px; width: 56px; height: 56px; border: 0; border-radius: 16px; cursor: pointer;
-  display: grid; place-items: center; color: #fff; box-shadow: var(--e3, var(--e2));
-  background: linear-gradient(135deg, #4285f4 0%, #9b72cb 55%, #d96570 100%); }
-.asst-fab .ms { font-size: 28px; }
-.asst-fab:hover { filter: brightness(1.08); }
+  display: grid; place-items: center; box-shadow: var(--e3, var(--e2)); background: var(--surface-container-lowest, #fff); }
+.asst-fab svg { transition: transform var(--d-med) var(--ease); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .asst-fab { background: var(--surface-container-high); } }
+:root[data-theme="dark"] .asst-fab { background: var(--surface-container-high); }
+.asst-fab:hover { background: var(--surface-container-low); } .asst-fab:hover svg { transform: rotate(45deg) scale(1.06); }
 .asst { position: fixed; z-index: 41; right: 20px; bottom: 20px; width: min(380px, calc(100vw - 32px)); height: min(560px, calc(100vh - 120px));
   display: flex; flex-direction: column; overflow: hidden; border-radius: 20px; }
 .asst-head { display: flex; align-items: center; gap: 10px; padding: 12px 8px 10px 16px; border-bottom: 1px solid var(--outline-variant); }

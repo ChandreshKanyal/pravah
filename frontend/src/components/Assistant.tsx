@@ -133,7 +133,10 @@ export default function Assistant() {
     <>
       {!open && (
         <button className="asst-fab sl" onClick={() => setOpen(true)} aria-label="Ask Pravah" title="Ask Pravah (Gemini)">
-          <Icon name="auto_awesome" />
+          {/* a four-point spark in Gemini's colours (the same spark as the thinking indicators), not Google's logo file */}
+          <svg viewBox="0 0 24 24" width="36" height="36" aria-hidden="true"><defs><linearGradient id="fabspark" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stopColor="#4285f4" /><stop offset=".55" stopColor="#9b72cb" /><stop offset="1" stopColor="#d96570" /></linearGradient></defs>
+            <path fill="url(#fabspark)" d="M12 2c.6 4.8 4.4 9.4 10 10-5.6.6-9.4 5.2-10 10-.6-4.8-4.4-9.4-10-10 5.6-.6 9.4-5.2 10-10z" /></svg>
         </button>
       )}
       {open && (
