@@ -219,6 +219,7 @@ export class Scene3D {
     const old = this.terrainMat.map;
     if (img) {
       const t = new THREE.Texture(img);
+      t.flipY = false;  // image row 0 is the grid's north row, at v = 0 like the terrain's uv and the water's data textures
       t.colorSpace = THREE.SRGBColorSpace;
       t.anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
       t.needsUpdate = true;
