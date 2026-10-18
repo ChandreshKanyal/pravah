@@ -230,7 +230,7 @@ Human review of the Dera Ghazi Khan area (8 points). Done:
   claim are kept (the "Gemini unsure" leads are dropped). NOTE(spec-drift): stricter than S-fixes (unclear was kept).
 - Fixes panel: images open in a full-screen viewer (arrows, Esc, "Open full size"); sources are numbered name chips.
   The Google Search suggestion chip stays as Google sends it: Vertex AI grounding terms require it to be shown
-  unmodified whenever grounded results are shown (checked 17 Oct).
+  unmodified whenever grounded results are shown (checked 17 Oct). NOTE(deviation, 18 Oct, human request): the chat no longer shows it (fixes list and history still do); grounded chat answers keep their numbered source links.
 - Tests: `tests/test_rain_choices.py` (98 pass); `npm run build` clean.
 - What-if banner contradicted itself ("50 mm/h ... for 4 h (edited by hand), 2150 mm in 9 h"): hand edits froze the
   source's numbers into the name, and the backend ran every edited hour even past the duration. Now a hand-edited run is

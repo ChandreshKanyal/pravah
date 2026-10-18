@@ -6,7 +6,7 @@ import { useLocation, useMatch, useNavigate } from "react-router-dom";
 import { askAssistantStream, createAoi, type AssistantAction } from "../api/client";
 import { Icon, IconButton, useSnackbar } from "./m3";
 
-type Msg = { role: "user" | "bot"; text: string; actions?: AssistantAction[]; sources?: { title: string; uri: string }[]; entry?: string;
+type Msg = { role: "user" | "bot"; text: string; actions?: AssistantAction[]; sources?: { title: string; uri: string }[];
   steps?: string[]; thoughts?: string; pending?: boolean; secs?: number };
 export type AppCommand = { type: "run"; patch: Record<string, any> } | { type: "layers"; on?: string[]; off?: string[]; fixes?: boolean };
 const PENDING = "pravah-pending-command";
@@ -85,7 +85,7 @@ export default function Assistant() {
         if (e.type === "step") upd((b) => ({ ...b, steps: [...(b.steps ?? []), e.label], text: "" }));  // text before a tool call was a preamble
         else if (e.type === "thought") upd((b) => ({ ...b, thoughts: (b.thoughts ?? "") + e.text }));
         else if (e.type === "delta") upd((b) => ({ ...b, text: b.text + e.text }));
-        else if (e.type === "final") upd((b) => ({ ...b, text: e.reply, actions: e.proposals, sources: e.sources, entry: e.search_entry_point, pending: false, secs: Math.round((Date.now() - t0) / 1000) }));
+        else if (e.type === "final") upd((b) => ({ ...b, text: e.reply, actions: e.proposals, sources: e.sources, pending: false, secs: Math.round((Date.now() - t0) / 1000) }));
         else if (e.type === "error") upd((b) => ({ ...b, text: `Sorry, ${e.message}.`, pending: false }));
       });
       upd((b) => (b.pending ? { ...b, pending: false, text: b.text || "Sorry, no answer came back. Please try again." } : b));
@@ -171,7 +171,6 @@ export default function Assistant() {
                 {m.sources && m.sources.length > 0 && (
                   <div className="asst-src">Sources: {m.sources.slice(0, 5).map((s, k) => <a key={k} href={s.uri} target="_blank" rel="noreferrer">{host(s.uri, s.title)}</a>)}</div>
                 )}
-                {m.entry && <div className="web-entry asst-entry" dangerouslySetInnerHTML={{ __html: m.entry }} />}
               </div>
             ))}
           </div>
