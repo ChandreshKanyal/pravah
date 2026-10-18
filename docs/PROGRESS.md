@@ -21,6 +21,7 @@ All work is **committed** on `main` (no git remote is configured, so nothing is 
   no longer pays ~20 s of compiling. The cache is not baked into the image (Cloud Build's CPU may differ from Cloud Run's).
   Why steps are ~1 s: the explicit solver's stability limit (CFL 0.45) set by the fastest water (the river), not detail
   wanted; future options: local-inertial solver, river left to HAND, local time stepping (not for the deadline).
+- **18 Oct ~20:20 IST (human request; website only, committed, needs a hosting deploy):** the site opens in light mode by default (dark or system only when chosen with the theme button; `theme.ts`, `index.html`), and the home map starts on satellite (`Explore.tsx`). the agent notes file is now `MEMORY.md`; `backend/cache` (OSMnx download cache) no longer tracked.
 - **HAND-OFF, 18 Oct ~16:45 IST (read first; supersedes the 14:35 checklist below).** Backend revision 00013 (fixes in
   the brief) is LIVE (human deployed 15:40). Website changes committed but **NOT yet deployed** (human runs:
   `cd ~/Desktop/pravah/frontend && npm run build && cd .. && ~/.npm-global/bin/firebase deploy --only hosting --project project-0fd9c4ae-bf90-452f-a80`):
