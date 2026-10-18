@@ -1,6 +1,7 @@
 // "Fix before the rain": places where maintenance would most reduce flooding, each with the evidence it rests on.
 // Evidence kinds are kept apart on purpose: web reports (cited), open satellite imagery checked by Gemini, and model
 // estimates that need a site visit. Google satellite and Street View are only opened for a person to look at.
+import SearchChip from "./SearchChip";
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { apiUrl } from "../api/client";
@@ -74,7 +75,7 @@ export default function ImprovementsPanel({ data, selected, onSelect, onClose, o
               10 m imagery cannot show a blocked drain or a rubbish pile, so those need a site visit: use <b>Check in the field</b>.</p>
               {data.attribution && <p>{data.attribution}</p>}
             </details>
-            {data.search_entry_point && <div className="web-entry" dangerouslySetInnerHTML={{ __html: data.search_entry_point }} />}
+            {data.search_entry_point && <SearchChip html={data.search_entry_point} />}
           </footer>
         </>
       )}
@@ -139,7 +140,7 @@ function Detail({ it, data, onBack, onClose, onLook, onStreetView, onField }: {
           <ol className="imp-src">{it.sources.map((s, i) => (
             <li key={s.uri}><a href={s.uri} target="_blank" rel="noreferrer" title={s.uri}><span className="n">{i + 1}</span>{s.title && !s.title.includes("/") ? s.title : host(s.uri)}</a></li>
           ))}</ol>
-          {data.search_entry_point && <div className="web-entry" dangerouslySetInnerHTML={{ __html: data.search_entry_point }} />}
+          {data.search_entry_point && <SearchChip html={data.search_entry_point} />}
         </>
       )}
 

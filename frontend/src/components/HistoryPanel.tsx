@@ -1,3 +1,4 @@
+import SearchChip from "./SearchChip";
 import { useEffect, useState } from "react";
 import { historyAoi } from "../api/client";
 import type { HistoryAoi } from "../types/api";
@@ -52,7 +53,7 @@ export default function HistoryPanel({ aoiId, onFly, onData }: { aoiId: string; 
             <div className="row">{w.source_urls.map((u) => <a key={u} className="body-s" href={u} target="_blank" rel="noreferrer">{new URL(u).hostname.replace("www.", "")} <Icon name="open_in_new" className="sm" /></a>)}</div>
           </div>
         ))}
-        {h.search_entry_point && <div className="web-entry" dangerouslySetInnerHTML={{ __html: h.search_entry_point }} />}
+        {h.search_entry_point && <SearchChip html={h.search_entry_point} />}
       </section>
     </div>
   );
