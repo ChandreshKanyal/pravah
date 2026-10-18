@@ -27,6 +27,92 @@ class Network:
     static: dict | None = None  # per-edge values that never change between runs (see _static)
 
 
+# Shelter suitability checks (18 Oct), each from a published rule:
+# - freeboard: the floor should stand at least 0.6 m above the highest flood level (IS 14264 / IS 15690 plinth rule);
+#   here the shelter's ground against the peak water surface within WINDOW_M (no water that close: not limiting)
+# - isolation: avoid buildings the water can cut off (American Red Cross ARC 4496): the hour every road at the door closes
+# - distance: Odisha's coastal shelter plan aimed at a shelter within 2.25 km of every home (IIT Kharagpur study)
+# - space: 3.5 m2 per person (Sphere), already in the capacity
+# A shelter that stays dry but fails the freeboard or isolation check is still usable, with a travel-time penalty so
+# people go to one with margin when one is reachable.
+FREEBOARD_M = 0.6
+WINDOW_M = 150.0
+GUIDE_KM = 2.25
+CAUTION_PENALTY_S = 900.0
+MAIN_ROADS = {"motorway", "trunk", "primary", "secondary", "tertiary"}
+
+
+def _shelter_checks(area, depth: np.ndarray, r: int, c: int, node, E, first: np.ndarray, evac_start: int) -> dict:
+    """Facts behind a shelter's status: peak water at its cell, freeboard above nearby flood water, distance to that
+    water, the hour all roads at its door close, height above drainage."""
+    grid = area.grid
+    peak = np.nan_to_num(depth.max(axis=0), nan=0.0)
+    out: dict = {"peak_depth_m": round(float(peak[r, c]), 2)}
+    wet_h = np.flatnonzero(np.nan_to_num(depth[:, r, c], nan=1.0) > 0)
+    out["wet_from_h"] = int(wet_h[0]) + 1 if len(wet_h) else None
+    k = int(WINDOW_M // grid.cell)
+    r0, r1, c0, c1 = max(0, r - k), min(grid.height, r + k + 1), max(0, c - k), min(grid.width, c + k + 1)
+    win = peak[r0:r1, c0:c1]
+    z = area.dem if area.dem is not None else area.hand  # HAND differences stand in for heights when no DEM is loaded
+    zs = float(z[r, c]) if z is not None and np.isfinite(z[r, c]) else np.nan
+    # only water on lower ground can rise towards the shelter; water ponded uphill stays where it is (or would
+    # already have reached the shelter's own cell)
+    zw = np.nan_to_num(z[r0:r1, c0:c1], nan=np.inf) if z is not None else None
+    wet = (win >= 0.03) & (zw < zs) if zw is not None and np.isfinite(zs) else win >= 0.03
+    wet[r - r0, c - c0] |= peak[r, c] >= 0.03
+    if wet.any() and np.isfinite(zs):
+        wse = np.where(wet, np.minimum(zw, zs) + win, -np.inf).max()
+        out["freeboard_m"] = round(float(zs - wse), 1) if np.isfinite(wse) else None
+        rr, cc = np.nonzero(wet)
+        out["nearest_water_m"] = int(round(float(np.min(np.hypot(rr + r0 - r, cc + c0 - c))) * grid.cell))
+    else:
+        out["freeboard_m"], out["nearest_water_m"] = None, None  # no flood water within WINDOW_M
+    if area.hand is not None:
+        out["hand_m"] = round(float(np.nan_to_num(area.hand[r, c])), 1)
+    if node is not None:
+        inc = np.flatnonzero((E["u"].to_numpy() == node) | (E["v"].to_numpy() == node))
+        cut = int(first[inc].max()) if len(inc) else routing.NEVER
+        out["door_cut_h"] = None if cut >= routing.NEVER else cut
+    else:
+        out["door_cut_h"] = None
+    flags = []
+    if out["freeboard_m"] is not None and out["freeboard_m"] < FREEBOARD_M:
+        flags.append("low_freeboard")
+    if out["door_cut_h"] is not None:
+        flags.append("cut_off")
+    out["flags"] = flags
+    return out
+
+
+def _route_facts(eidx: list[int], E, S: dict, depth_t: np.ndarray, csr) -> dict:
+    """What a route runs along: main-road share, the roads it uses most, bridges, steep or crowded stretches and the
+    deepest water on it at the evacuation hour (below the closure limit, or the road would be shut)."""
+    L = np.array([S["length_m"][e] for e in eidx], float) if eidx else np.zeros(0)
+    tot = float(L.sum()) or 1.0
+    main = sum(L[i] for i, e in enumerate(eidx) if routing_hw(S["highway"][e]) in MAIN_ROADS)
+    names: dict[str, float] = {}
+    for i, e in enumerate(eidx):
+        n = S["name"][e]
+        if n:
+            names[n] = names.get(n, 0.0) + L[i]
+    flat, starts = csr
+    deep = 0.0
+    d = np.nan_to_num(depth_t.ravel(), nan=0.0)
+    for e in eidx:
+        cells = flat[starts[e]:starts[e + 1]]
+        if len(cells):
+            deep = max(deep, float(d[cells].max()))
+    return {"main_road_share": round(float(main) / tot, 2), "via": [n for n, _ in sorted(names.items(), key=lambda x: -x[1])[:2]],
+            "bridges_on_route": int(sum(1 for e in eidx if S["bridge"][e])),
+            "steep_m": int(round(sum(L[i] for i, e in enumerate(eidx) if E["slope_adjacent"].iat[e]))),
+            "crowding": round(float(np.mean([E["crowd_e"].iat[e] for e in eidx])), 2) if eidx else 0.0,
+            "max_water_m": round(deep, 2)}
+
+
+def routing_hw(v) -> str:
+    return str(v[0] if isinstance(v, (list, tuple)) and v else v or "")
+
+
 def load_network(edges: gpd.GeoDataFrame, nodes: gpd.GeoDataFrame) -> Network:
     edges = edges.reset_index(drop=True)
     edges["cells"] = edges["cells"].apply(lambda c: [int(x) for x in c])
@@ -161,10 +247,14 @@ def plan(area, p: ScenarioParams, depth: np.ndarray, stage: np.ndarray,
         else:
             status[s["id"]] = "usable"
             caps[s["id"]], nodes_of[s["id"]] = int(s["capacity"]), s["node"]
+    checks = {s["id"]: _shelter_checks(area, depth, s["row"], s["col"], s.get("node"), E, first, p.evac_start_hour) for s in supply}
 
     # S8.5-S8.7 travel times, assignment, routes
     cutoff = p.max_travel_min * 60
     times = G.travel_times(nodes_of, cutoff, demand.keys())
+    for sid, tt_s in times.items():  # prefer shelters with margin: low freeboard or cut off later costs 15 min
+        if checks[sid]["flags"]:
+            times[sid] = {n: t + CAUTION_PENALTY_S for n, t in tt_s.items()}
     alloc, gap, _ = routing.transport_solve(demand, caps, times)
     total = int(sum(demand.values()))
     ratio = total / why["central"] if why["central"] > 0 else 0.0
@@ -176,6 +266,8 @@ def plan(area, p: ScenarioParams, depth: np.ndarray, stage: np.ndarray,
     for node, sid in alloc:
         by_shelter.setdefault(sid, []).append(node)
     paths = {sid: G.paths_to(nodes_of[sid], nodes, cutoff) for sid, nodes in by_shelter.items()}  # one search per shelter
+    depth_eval = depth[t_eval - 1]
+    csr = net.csr or routing.cells_csr(E["cells"].tolist())
     for (node, sid), people in alloc.items():
         assigned[sid] += people
         eidx = paths[sid][node]
@@ -190,7 +282,10 @@ def plan(area, p: ScenarioParams, depth: np.ndarray, stage: np.ndarray,
                        "access_min": round(access_s.get(node, 0.0) / 60, 1),
                        "length_km": round(float(sum(S["length_m"][e] for e in eidx)) / 1000, 2),
                        "passable_until_h": until,
-                       "use_now_gone_soon": until is not None and until <= p.evac_start_hour + 2, "geometry": geom})
+                       "use_now_gone_soon": until is not None and until <= p.evac_start_hour + 2,
+                       # hours left after arriving before a road on it closes (None: stays open)
+                       "margin_h": None if until is None else round(until - p.evac_start_hour - (travel_s + access_s.get(node, 0.0)) / 3600, 1),
+                       **_route_facts(eidx, E, S, depth_eval, csr), "geometry": geom})
     routes.sort(key=lambda r: -r["people"])
     if gap > 0:
         spare_ap = [s["id"] for s in supply if s["source"] == "assembly" and status[s["id"]] == "usable"
@@ -220,7 +315,11 @@ def plan(area, p: ScenarioParams, depth: np.ndarray, stage: np.ndarray,
         shelters_out.append({"id": s["id"], "name": s["name"], "kind": s.get("kind", ""), "lon": s["lon"], "lat": s["lat"],
                              "capacity": int(s["capacity"]), "assigned": int(a), "spare": int(max(0, s["capacity"] - a)),
                              "status": status[s["id"]], "note": s.get("note", ""),
-                             "capacity_confidence": s.get("capacity_confidence", "low")})
+                             "capacity_confidence": s.get("capacity_confidence", "low"), "floors": s.get("floors"),
+                             "area_m2": s.get("area_m2"), "checks": checks[s["id"]],
+                             "routes_in": sum(1 for r in routes if r["to_shelter"] == s["id"]),
+                             "farthest_km": max((r["length_km"] for r in routes if r["to_shelter"] == s["id"]), default=None),
+                             "slowest_min": max((r["eta_min"] for r in routes if r["to_shelter"] == s["id"]), default=None)})
 
     # S7.8 staging points: dry, flat, near a drive road open all scenario, close to the worst clusters
     staging = _staging(area, p, depth, exposure_ctx.get("clusters", []), first, net)
