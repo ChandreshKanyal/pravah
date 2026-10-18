@@ -61,7 +61,7 @@ export async function createRun(p: ScenarioParams, opts?: { flow?: boolean }): P
 }
 export const getRun = (id: string) => call<RunResult>(`/api/runs/${id}`);
 export const getGeoJson = (url: string) => call<GeoJSON.FeatureCollection>(url);
-export const listAois = () => call<AoiListItem[]>("/api/aois");
+export const listAois = () => call<AoiListItem[]>("/api/aois?limit=50");
 export const geocode = (q: string) => call<GeocodeResult[]>(`/api/geocode?q=${encodeURIComponent(q)}`);
 export const requestAdvisory = (runId: string, refresh = false) =>
   call<Advisory | { status: "pending"; run_id: string }>(`/api/runs/${runId}/advisory${refresh ? "?refresh=true" : ""}`, { method: "POST" });

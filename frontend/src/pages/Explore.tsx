@@ -11,9 +11,14 @@ import type { AoiListItem, GeocodeResult } from "../types/api";
 
 const LIMIT_KM = 10;  // one limit for every area (backend models/aoi.py)
 type BBox = [number, number, number, number];
-const DEMOS: { name: string; bbox: BBox; icon: string; note: string }[] = [
-  { name: "Rudraprayag", bbox: [78.93, 30.24, 79.03, 30.33], icon: "landscape", note: "Uttarakhand · river confluence, steep hills" },
-  { name: "Mumbai Kurla–Mithi", bbox: [72.865, 19.06, 72.895, 19.09], icon: "location_city", note: "Maharashtra · urban waterlogging" },
+// showcase areas for the judges (18 Oct): each has a titled scenario run made current, with its brief, flow model,
+// 3D pictures and shelter/route explanations already cached
+const DEMOS: { name: string; aoi: string; bbox: BBox; icon: string; note: string }[] = [
+  { name: "Rudraprayag", aoi: "56f044f26351", bbox: [78.93, 30.24, 79.03, 30.33], icon: "thunderstorm", note: "Cloudburst · Uttarakhand hills, Char Dham pilgrims" },
+  { name: "Chennai Adyar–Velachery", aoi: "7a7c41e90681", bbox: [80.205, 12.96, 80.285, 13.035], icon: "rainy", note: "Live forecast · northeast monsoon" },
+  { name: "Mumbai Kurla–Mithi", aoi: "d277268c1783", bbox: [72.865, 19.06, 72.895, 19.09], icon: "location_city", note: "Real event · 26 July 2005 replayed" },
+  { name: "Puri", aoi: "66bc06eb21cb", bbox: [85.785, 19.785, 85.865, 19.845], icon: "beach_access", note: "Worst case · 1-in-100-year rain, Rath Yatra crowds" },
+  { name: "Silchar", aoi: "90ee5d445ddf", bbox: [92.745, 24.785, 92.835, 24.87], icon: "flood", note: "Everything at once · record rain, Barak in flood" },
 ];
 
 function Fly({ to }: { to: { bbox?: BBox | null; lat?: number; lng?: number; zoom?: number } | null }) {
@@ -87,7 +92,7 @@ export default function Explore() {
 
   // Demo cards open the prepared area directly when one exists; otherwise they pre-fill the prepare dialog.
   const ready = (areas ?? []).filter((a) => a.state === "ready" || a.state === "partial");
-  const demoArea = (d: (typeof DEMOS)[number]) => ready.find((a) => a.name.toLowerCase().startsWith(d.name.split(" ")[0].toLowerCase()));
+  const demoArea = (d: (typeof DEMOS)[number]) => ready.find((a) => a.aoi_id === d.aoi);
   const demoIds = new Set(DEMOS.map(demoArea).filter(Boolean).map((a) => a!.aoi_id));
   const seen = new Set<string>();
   const recent = ready.filter((a) => {
@@ -145,7 +150,7 @@ export default function Explore() {
                   if (a) open(a);
                   else { setDraft({ bbox: d.bbox, name: d.name }); }
                 }}>
-                  <span className={`avatar ${d.icon === "location_city" ? "urban" : "river"}`}><Icon name={d.icon} /></span>
+                  <span className={`avatar ${["location_city", "rainy"].includes(d.icon) ? "urban" : "river"}`}><Icon name={d.icon} /></span>
                   <span className="txt"><span className="t">{d.name}</span><span className="s">{d.note}</span></span>
                   <Icon name="chevron_right" className="trail" />
                 </button>
