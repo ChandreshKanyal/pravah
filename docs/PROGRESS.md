@@ -21,6 +21,12 @@ All work is **committed** on `main` (no git remote is configured, so nothing is 
   no longer pays ~20 s of compiling. The cache is not baked into the image (Cloud Build's CPU may differ from Cloud Run's).
   Why steps are ~1 s: the explicit solver's stability limit (CFL 0.45) set by the fastest water (the river), not detail
   wanted; future options: local-inertial solver, river left to HAND, local time stepping (not for the deadline).
+- **~08:45 IST 18 Oct, after the review pass (not deployed):** (1) 3D picture was upside down (three.js `flipY`;
+  water and buildings were right, the satellite/terrain texture was mirrored north-south): fixed. (2) Areas whose roads
+  carry no `maxspeed` at all failed the network step (Puri `0b23a1a9f059`: no shelters/routes); now typical Indian
+  speeds by road class (`roads.DEFAULT_KPH`, planning assumptions, NOTE(spec-drift): S7.2 used OSMnx imputation only);
+  Puri re-prepared locally: ready, 69 shelters, 29 medical. Its earlier runs predate this; run a new scenario.
+  (3) Assistant's Prepare-area box is fitted to 10 km server-side. (4) Chat hides the Search suggestion chip.
 - **State at ~04:00 IST 18 Oct: whole-codebase review pass (read first).** 9 commits after `95294d3`, all checked
   locally, **none deployed yet** (backend + website both need a deploy; commands at the end of this bullet).
   Bugs fixed:
