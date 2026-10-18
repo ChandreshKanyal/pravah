@@ -285,9 +285,12 @@ def _network(aoi: AOI, grid: GridSpec, warnings: list[str], meta: dict, road_tab
     n_osm = len(sh)
     n_proper = sum(1 for x in sh if x["kind"] != shel.WORSHIP)  # halls of worship need confirmation
     if n_proper < shel.MIN_OSM_SHELTERS:
+        cand = shel.candidate_large_buildings(b, hand, slope_deg, in_aoi, shel.MAX_CANDIDATES - n_proper)
+        sh += cand
+        added = (f"added {len(cand)} unverified large-building candidates" if cand else
+                 "no large building here is on high, gently sloping ground to suggest instead")
         warnings.append(f"Only {n_proper} schools/community halls in OpenStreetMap here ({n_osm - n_proper} places of "
-                        "worship); added unverified large-building candidates. Add or confirm shelters with local authorities.")
-        sh += shel.candidate_large_buildings(b, hand, slope_deg, in_aoi, shel.MAX_CANDIDATES - n_proper)
+                        f"worship); {added}. Add or confirm shelters with local authorities.")
     trees = {m: (cKDTree(nodes[["x", "y"]].to_numpy()), nodes["node"].to_numpy()) for m, (_, nodes) in tables.items()}
     out = []
     for prefix, lst in (("S", sh), ("M", med)):

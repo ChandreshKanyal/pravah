@@ -91,3 +91,29 @@ def test_evacuation_deadline_ignores_bridges_that_were_never_open():
                                             {"first_closed_hour": 3, "reason": "overtopped"}]}
     assert _evac_window(ev) == 3
     assert _evac_window({"routes_summary": [], "bridges": [{"first_closed_hour": 1, "reason": "construction"}]}) is None
+
+
+def test_speeds_without_any_maxspeed():
+    """Puri, 18 Oct: no road carried a speed limit and OSMnx raised, failing the whole network step."""
+    import networkx as nx
+    from app.engines.roads import DEFAULT_KPH, add_speeds
+    G = nx.MultiDiGraph(crs="EPSG:4326")
+    G.add_node(1, x=0.0, y=0.0); G.add_node(2, x=0.001, y=0.0); G.add_node(3, x=0.002, y=0.0)
+    G.add_edge(1, 2, highway="residential", length=100.0)
+    G.add_edge(2, 3, highway=["primary_link", "primary"], length=100.0)
+    sp = sorted(d["speed_kph"] for *_, d in add_speeds(G).edges(data=True))
+    assert sp == [DEFAULT_KPH["residential"], DEFAULT_KPH["primary_link"]]
+
+
+def test_bridge_spans_with_a_single_way():
+    """An area with one OSM bridge way: its union is a LineString, which shapely.ops.linemerge rejected."""
+    import geopandas as gpd
+    from shapely.geometry import LineString
+    from app.engines import bridges
+    from app.models.grid import GridSpec
+    g = GridSpec(crs="EPSG:32644", x0=0.0, y0=300.0, cell=30.0, width=10, height=10)
+    ways = gpd.GeoDataFrame({"osmid": ["1"], "name": ["Setu"], "highway": ["primary"]},
+                            geometry=[LineString([(40, 150), (200, 150)])], crs=g.crs)
+    hand = np.full((10, 10), 8.0)
+    out = bridges.spans(ways, g, hand, np.zeros((10, 10), np.int32))
+    assert len(out) == 1 and out[0]["name"] == "Setu"

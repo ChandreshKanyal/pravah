@@ -13,7 +13,7 @@ import math
 import numpy as np
 import shapely
 from shapely.geometry import LineString
-from shapely.ops import linemerge, unary_union
+from shapely.ops import unary_union
 from shapely.strtree import STRtree
 
 from app.engines.grid import GridSpec, xy_to_rowcol
@@ -63,7 +63,9 @@ def spans(ways, grid: GridSpec, hand: np.ndarray, reach_id: np.ndarray, dist_str
     if ways is None or not len(ways):
         return []
     rows = ways.reset_index(drop=True)
-    merged = linemerge(unary_union(list(rows.geometry)))  # a bridge mapped as several consecutive ways is one span
+    # a bridge mapped as several consecutive ways is one span (shapely.line_merge also takes the single LineString an
+    # area with one bridge way unions to; shapely.ops.linemerge raised on it and failed the network step)
+    merged = shapely.line_merge(unary_union(list(rows.geometry)))
     lines = list(merged.geoms) if hasattr(merged, "geoms") else [merged]
     tree = STRtree(list(rows.geometry))
     out = []
