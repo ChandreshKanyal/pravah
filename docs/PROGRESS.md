@@ -21,6 +21,12 @@ All work is **committed** on `main` (no git remote is configured, so nothing is 
   no longer pays ~20 s of compiling. The cache is not baked into the image (Cloud Build's CPU may differ from Cloud Run's).
   Why steps are ~1 s: the explicit solver's stability limit (CFL 0.45) set by the fastest water (the river), not detail
   wanted; future options: local-inertial solver, river left to HAND, local time stepping (not for the deadline).
+- **Guided tour (18 Oct ~16:30 IST, human request; website only).** `components/Tour.tsx`, mounted in `App.tsx`:
+  24 cards; home (welcome, search, draw, prepared areas) -> Rudraprayag map -> 3D -> brief -> drill -> Ask Pravah -> ?.
+  Anchors are existing classes plus `data-tour` on the scenario chip, the draw row, the prepared-area list, the brief's
+  share row and the ? button. Auto-starts only on the home page and only until finished or skipped (`pravah.tour.v1` in
+  localStorage). Prepared areas now open on the 2D map (`?run=`). Rudraprayag was run again at 15:54 IST (run
+  `36ce7157adc7`) and was switched back to `34be95ff18e8`; check the five areas' current runs before submitting.
 - **Fixes in the brief (18 Oct ~15:40 IST, human request; breaks the feature freeze by agreement; needs a backend deploy).**
   `area_extra` reads the area's `improvements.json`; `build_facts` adds the top 8 fixes as `FX1..` (FX so they never
   clash with run ids); the prompt asks for 2-4 of them as seasonal/structural actions; the rules brief uses the top 3
