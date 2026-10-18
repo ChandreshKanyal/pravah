@@ -21,6 +21,15 @@ All work is **committed** on `main` (no git remote is configured, so nothing is 
   no longer pays ~20 s of compiling. The cache is not baked into the image (Cloud Build's CPU may differ from Cloud Run's).
   Why steps are ~1 s: the explicit solver's stability limit (CFL 0.45) set by the fastest water (the river), not detail
   wanted; future options: local-inertial solver, river left to HAND, local time stepping (not for the deadline).
+- **~13:00 IST 18 Oct (not deployed): shelters and routes explained.** Each run now checks every shelter against
+  published rules: freeboard >= 0.6 m above peak flood water on lower ground within 150 m (IS 14264 / IS 15690 plinth
+  rule), door roads cut (ARC 4496: avoid isolated shelters), height above drainage, farthest home vs 2.25 km (Odisha
+  MPCS plan), Sphere 3.5 m2. NOTE(spec-drift): a usable shelter failing freeboard or isolation costs 15 min in the
+  transport assignment (S8.6 used travel time only). Routes carry margin after arrival, main-road share, roads used,
+  bridges, steep/crowded stretches, deepest water. Click a shelter or route (2D map, Results lists, 3D) for a card with
+  those checks and Gemini's explanation from them only (`GET /api/runs/{id}/explain/{kind}/{key}`, cached per run).
+  Runs made before this show "run again" for the checks. Also: rename areas from the top bar; Gemini-style analysing
+  panel during preparation; Routes badge fixed; "no mode" note removed. Street View black backgrounds: not reproduced.
 - **~08:45 IST 18 Oct, after the review pass (not deployed):** (1) 3D picture was upside down (three.js `flipY`;
   water and buildings were right, the satellite/terrain texture was mirrored north-south): fixed. (2) Areas whose roads
   carry no `maxspeed` at all failed the network step (Puri `0b23a1a9f059`: no shelters/routes); now typical Indian

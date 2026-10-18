@@ -39,6 +39,7 @@ PROMPT = """You explain one decision of a flood evacuation plan to an Indian dis
 Facts for this {what} (JSON; the only facts you may use):
 {facts}
 
+Name an unnamed or "Large building ..." shelter by its place (e.g. "the large building near X"), not by its code.
 Write: a one-line headline; 2-4 short reasons it was chosen (or, if it is not used, why not); 0-3 cautions to check
 on the ground. Use the numbers exactly as given, in plain words. Never call anything "safe": say it stays dry or keeps
 margin in this scenario. Do not mention JSON, field names or penalties in minutes unless they explain the choice."""
@@ -56,7 +57,7 @@ def shelter_facts(run: dict, sid: str) -> dict | None:
         return None
     usable = [x for x in run.get("shelters", []) if x.get("status") == "usable"]
     p = run.get("params", {})
-    return {"shelter": {k: s.get(k) for k in ("id", "name", "status", "capacity", "assigned", "spare", "capacity_confidence",
+    return {"shelter": {k: s.get(k) for k in ("id", "name", "place", "status", "capacity", "assigned", "spare", "capacity_confidence",
                                              "floors", "area_m2", "note", "routes_in", "farthest_km", "slowest_min", "checks")}
             | {"type": KINDS.get(s.get("kind", ""), s.get("kind", ""))},
             "scenario": {"rain": run.get("rain_label"), "travel_mode": p.get("travel_mode", "walk"),
@@ -72,7 +73,7 @@ def route_facts(run: dict, route: dict) -> dict:
     keep = ("to_shelter", "place", "people", "eta_min", "access_min", "length_km", "passable_until_h", "margin_h",
             "use_now_gone_soon", "main_road_share", "via", "bridges_on_route", "steep_m", "crowding", "max_water_m")
     return {"route": {k: route.get(k) for k in keep},
-            "shelter": {"name": sh.get("name"), "type": KINDS.get(sh.get("kind", ""), sh.get("kind", "")), "checks": sh.get("checks")},
+            "shelter": {"name": sh.get("name"), "place": sh.get("place"), "type": KINDS.get(sh.get("kind", ""), sh.get("kind", "")), "checks": sh.get("checks")},
             "scenario": {"rain": run.get("rain_label"), "travel_mode": p.get("travel_mode", "walk"),
                          "walk_depth_limit_m": p.get("walk_depth_limit_m"), "evacuation_hour": p.get("evac_start_hour"),
                          "hours": len(run.get("rain_series_mm_h") or [])}}

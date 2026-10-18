@@ -88,6 +88,8 @@ export async function uploadPhoto(aoi_id: string, kind: "building" | "drain", fi
 export const photoUrl = (aoi_id: string, photo_id: string) => apiUrl(`/api/photos/${photo_id}.jpg?aoi_id=${aoi_id}`);
 export const archiveAoi = (id: string, archived = true) =>
   call<{ archived: boolean }>(`/api/aoi/${id}/archive`, { method: "POST", body: JSON.stringify({ archived }) });
+export const explainChoice = (runId: string, kind: "shelter" | "route", key: string) =>
+  call<import("../types/api").Explanation>(`/api/runs/${runId}/explain/${kind}/${encodeURIComponent(key)}`);
 export const renameAoi = (id: string, name: string) =>
   call<{ name: string }>(`/api/aoi/${id}/name`, { method: "PUT", body: JSON.stringify({ name }) });
 export const getAoiRuns = (id: string, limit = 10, archived = false) =>

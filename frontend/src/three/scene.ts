@@ -541,6 +541,15 @@ export class Scene3D {
     pos.needsUpdate = true; colA.needsUpdate = true;
   }
 
+  /** Screen position (client px) of a point `above` m over the ground at (x east, y north); null if behind the camera. */
+  toScreen(x: number, y: number, above: number): [number, number] | null {
+    if (!this.dem) return null;
+    const v = new THREE.Vector3(x, (this.groundAt(x, -y) + above) * this.k, -y).project(this.camera);
+    if (v.z > 1) return null;
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    return [rect.left + ((v.x + 1) / 2) * rect.width, rect.top + ((1 - v.y) / 2) * rect.height];
+  }
+
   /** Ground or water point under a screen position (march along the ray over the height grid). */
   pick(clientX: number, clientY: number): Probe | null {
     const d = this.dem;

@@ -12,7 +12,7 @@ import type { Dem } from "./scene";
 type XY = [number, number];
 export type Overlays = {
   roads: { p: XY[]; c: number | null; r: string | null; h: number[] | null; k: number; n: string }[];
-  routes: { p: XY[]; until: number | null; people: number; to: string; eta: number }[];
+  routes: { p: XY[]; until: number | null; people: number; to: string; eta: number; key?: string }[];
   shelters: { id: string; name: string; x: number; y: number; people: number; capacity: number }[];
   bridges: { id: string; name: string; x: number; y: number; c: number; r: string | null }[];
 };

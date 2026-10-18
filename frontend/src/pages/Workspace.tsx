@@ -4,6 +4,7 @@ import { useMap } from "@vis.gl/react-google-maps";
 import type { Layer, PickingInfo } from "@deck.gl/core";
 import { createRun, setRunMeta, getAoiStatus, getForecast, getGeoJson, getImprovements, getRun, getStaticLayers, refreshImprovements } from "../api/client";
 import PrepThinking from "../components/PrepThinking";
+import ChoiceCard, { type Choice } from "../components/ChoiceCard";
 import ImprovementsPanel from "../components/ImprovementsPanel";
 import { reportRun, takePendingCommand, type AppCommand } from "../components/Assistant";
 import DrawControl, { type DrawMode } from "../components/DrawControl";
@@ -151,6 +152,7 @@ export default function Workspace() {
   const [impSel, setImpSel] = useState<Improvement | null>(null);
   const [impCats, setImpCats] = useState<Set<ImprovementCategory> | null>(null);
   const [sv, setSv] = useState<{ lon: number; lat: number; t: number } | null>(null);
+  const [choice, setChoice] = useState<Choice | null>(null);  // the shelter or route whose details card is open
   const [svOn, setSvOn] = useState(false);     // Street View open: our overlays step aside and "Back to map" shows
   const [svClose, setSvClose] = useState(0);
   useEffect(() => {  // Esc also leaves Street View
@@ -327,6 +329,7 @@ export default function Workspace() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, st, aoiId]);
   useEffect(() => { reportRun(run?.run_id ?? null); return () => reportRun(null); }, [run]);
+  useEffect(() => setChoice(null), [run?.run_id, live]);
 
   // layers, plus a count of every legend symbol they draw, so the legend shows exactly what is on the map at this hour
   const { layers, drawn } = useMemo(() => {
@@ -493,8 +496,12 @@ export default function Workspace() {
   const doneStages = STAGES.filter((g) => stageState(g.keys) === "done").length;
   const activeStage = STAGES.findIndex((g) => stageState(g.keys) === "todo");
   const onPick = useCallback((info: PickingInfo) => {
-    if (info.layer?.id === "imp") { const it = info.object as Improvement; setImpSel(it); setFly({ lon: it.lon, lat: it.lat, zoom: Math.max(zoom, 16), t: Date.now() }); }
-  }, [zoom]);
+    const id = info.layer?.id ?? "", o = info.object as any;
+    if (id === "imp") { const it = o as Improvement; setImpSel(it); setFly({ lon: it.lon, lat: it.lat, zoom: Math.max(zoom, 16), t: Date.now() }); return; }
+    // a shelter or route of the shown run: its checks and Gemini's explanation (ChoiceCard)
+    if (run && !live && o && ["shelters", "shelters-all", "assembly"].includes(id) && o.id) { setImpOpen(false); setChoice({ kind: "shelter", id: o.id }); return; }
+    if (run && !live && o && id === "routes" && o.p?.to_shelter) { setImpOpen(false); setChoice({ kind: "route", key: `${o.p.from_node}-${o.p.to_shelter}` }); }
+  }, [zoom, run, live]);
   const impItems = imp?.items ?? [];
   const days = fc?.daily.map((d, i) => (i === 0 ? "Today" : new Date(d.date + "T00:00:00").toLocaleDateString("en-IN", { weekday: "short", day: "numeric" }))) ?? [];
   const onHist = useCallback((h: HistoryAoi) => { setHist(h); }, []);
@@ -522,7 +529,7 @@ export default function Workspace() {
               drain={status?.drain} onDrain={(d) => setStatus((s) => (s ? { ...s, drain: d } : s))}
               waterlogging={profileOf(status)?.hazards.includes("waterlogging") ?? status?.mode === "urban"} />
           )}
-          {ready && tab === "results" && (run ? <Results run={run} hour={hour} onFly={onFly} previous={prev} /> : (
+          {ready && tab === "results" && (run ? <Results run={run} hour={hour} onFly={onFly} previous={prev} onChoose={(c) => { setImpOpen(false); setChoice(c); }} /> : (
             <div className="stack" style={{ alignItems: "center", textAlign: "center", padding: "48px 16px" }}>
               <Icon name="insights" className="xl muted" />
               <p className="title-m">No results yet</p>
@@ -639,7 +646,12 @@ export default function Workspace() {
             onField={(it) => nav(`/area/${aoiId}/verify?kind=drain&lat=${it.lat}&lon=${it.lon}&ref=${encodeURIComponent(`${it.id} ${it.title}`)}`)} />
         )}
 
-        {!impOpen && <MapLegend drawn={drawn} hasRun={!!run && !live} when={run && !live ? (clockAt(run.start_local, hour) ? `${clockAt(run.start_local, hour)} · hour ${hour}` : `hour ${hour}`) : undefined} />}
+        {choice && run && !live && !impOpen && (
+          <ChoiceCard run={run} choice={choice} className="map-choice" onClose={() => setChoice(null)}
+            routes={(routes?.features ?? []).map((f) => f.properties as Record<string, any>)} />
+        )}
+
+        {!impOpen && !choice && <MapLegend drawn={drawn} hasRun={!!run && !live} when={run && !live ? (clockAt(run.start_local, hour) ? `${clockAt(run.start_local, hour)} · hour ${hour}` : `hour ${hour}`) : undefined} />}
 
         <div className="bottom">
           <LayerPanel on={on} toggle={toggle} hasRun={!!run} mapType={mapType} setMapType={setMapType} urban={profileOf(status)?.hazards.includes("waterlogging") ?? status?.mode === "urban"} />

@@ -7,6 +7,7 @@ import { apiUrl, getAoiStatus, getRun } from "../api/client";
 import { Button, Chip, Icon, IconButton, Segmented, Switch } from "../components/m3";
 import { markerUrl } from "../layers/factories";
 import type { OverlayShow, Overlays } from "../three/overlays";
+import ChoiceCard, { type Choice } from "../components/ChoiceCard";
 import FlowTimeline, { RATES, clockOf, span, type Rate } from "../three/FlowTimeline";
 import { DEEP, DRY, HAZARD, RISK, SHALLOW, Scene3D, hazard, type Bld, type ColorMode, type Dem, type Frames, type Probe, type WaterStyle } from "../three/scene";
 import type { RunResult } from "../types/api";
@@ -85,6 +86,7 @@ export default function View3D() {
   const [playing, setPlayingS] = useState(false);
   const [rate, setRateS] = useState<Rate>("normal");
   const [probe, setProbe] = useState<Probe | null>(null);
+  const [choice, setChoice] = useState<Choice | null>(null);  // clicked shelter or route: its details card
   const [err, setErr] = useState("");
   const played = useRef(new Set<string>());  // models already played from the start once
   const picked = useRef(false);               // the person chose a model: do not switch it for them
@@ -119,7 +121,7 @@ export default function View3D() {
   useEffect(() => {  // the run's roads, exit routes, shelters and bridges, in the 3D frame
     setOvl(null);
     if (!run) return;
-    fetch(apiUrl(`/api/runs/${run.run_id}/3d/overlays.json`)).then((r) => (r.ok ? r.json() : Promise.reject())).then(setOvl).catch(() => setOvl(null));
+    fetch(apiUrl(`/api/runs/${run.run_id}/3d/overlays.json?v=2`)).then((r) => (r.ok ? r.json() : Promise.reject())).then(setOvl).catch(() => setOvl(null));
   }, [run]);
 
   // ground pictures, asked for as the page opens (not after the terrain arrives): shaded terrain first, then the
@@ -241,7 +243,11 @@ export default function View3D() {
     const d = down.current;
     down.current = null;
     if (!d || Math.hypot(e.clientX - d[0], e.clientY - d[1]) > 5 || e.button !== 0) return;
-    setProbe(sc.current?.pick(e.clientX, e.clientY) ?? null);
+    const s = sc.current, pr = s?.pick(e.clientX, e.clientY) ?? null;
+    const hit = s && ovl && run ? hitOverlay(s, ovl, show, pr, e.clientX, e.clientY, meta) : null;
+    if (hit) { setChoice(hit); setProbe(null); return; }
+    setChoice(null);
+    setProbe(pr);
   };
 
   const flyWhole = () => {
@@ -353,6 +359,8 @@ export default function View3D() {
           {imagery ? " Imagery: modified Copernicus Sentinel-2 data." : ""} Terrain: FABDEM. Buildings: Google Open Buildings.</p>
       </div>
 
+      {choice && run && <ChoiceCard run={run} choice={choice} className="v3d-choice" onClose={() => setChoice(null)}
+        routes={ovl?.routes.map((r) => ({ from_node: r.key?.split("-")[0], to_shelter: r.to, people: r.people, eta_min: r.eta, passable_until_h: r.until }))} />}
       {probe && <ProbeCard probe={probe} scene={sc.current} frames={frames} time={time} start={run?.start_local} onClose={() => setProbe(null)} />}
 
       {run && frames && (
@@ -397,4 +405,35 @@ function ProbeCard({ probe, scene, frames, time, start, onClose }: {
       {probe.building && <p className="body-s">Building, about {probe.building.h} m tall.</p>}
     </div>
   );
+}
+
+/** A shelter (its zone on the ground or its label) or an exit route under a click, if those layers are shown. */
+function hitOverlay(s: Scene3D, o: Overlays, show: OverlayShow, pr: Probe | null, cx: number, cy: number,
+  meta: { width: number; height: number; cell: number } | null): Choice | null {
+  if (show.shelters) {
+    for (const sh of o.shelters) {
+      const lab = s.toScreen(sh.x, sh.y, 70);  // the label sits on a 70 m pin (overlays.ts)
+      if (lab && Math.abs(cx - lab[0]) < 70 && cy > lab[1] - 18 && cy < lab[1] + 18) return { kind: "shelter", id: sh.id };
+    }
+  }
+  if (!pr || !meta) return null;
+  const x = -meta.width * meta.cell / 2 + (pr.c + 0.5) * meta.cell, y = meta.height * meta.cell / 2 - (pr.r + 0.5) * meta.cell;
+  if (show.shelters) {
+    const near = o.shelters.find((sh) => Math.hypot(sh.x - x, sh.y - y) <= 85);
+    if (near) return { kind: "shelter", id: near.id };
+  }
+  if (show.routes) {
+    let best: { d: number; key: string } | null = null;
+    for (const rt of o.routes) {
+      if (!rt.key) continue;
+      for (let i = 1; i < rt.p.length; i++) {
+        const [ax, ay] = rt.p[i - 1], [bx, by] = rt.p[i], dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy || 1;
+        const t = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / L2));
+        const d = Math.hypot(ax + t * dx - x, ay + t * dy - y);
+        if (d < 30 && (!best || d < best.d)) best = { d, key: rt.key };
+      }
+    }
+    if (best) return { kind: "route", key: best.key };
+  }
+  return null;
 }

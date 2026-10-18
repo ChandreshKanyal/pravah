@@ -883,3 +883,24 @@ button.area-title:hover .area-edit, button.area-title:focus-visible .area-edit {
 @keyframes pt-turn { 0%, 100% { transform: rotate(0); } 50% { transform: rotate(90deg) scale(.9); } }
 @keyframes pt-in { from { opacity: 0; transform: translateY(4px); } }
 @media (prefers-reduced-motion: reduce) { .prep-think *, .prep-think *::before { animation: none !important; } }
+
+/* ---------- shelter / route details (ChoiceCard.tsx) ---------- */
+.choice-card { display: flex; flex-direction: column; gap: 10px; padding: 16px; overflow-y: auto; animation: pt-in var(--d-med) var(--ease); }
+.map-choice { position: absolute; z-index: 6; top: 64px; right: 12px; max-height: calc(100% - 160px); width: min(392px, calc(100% - 24px)); }
+@media (max-width: 720px) { .map-choice { top: auto; max-height: 58%; bottom: 76px; } }
+.choice-card .cc-head { display: flex; gap: 12px; align-items: flex-start; }
+.choice-card .cc-ic { color: var(--primary); margin-top: 2px; }
+.choice-card .cc-ai { background: var(--surface-container-low); border-radius: var(--r-md); padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
+.choice-card .cc-ai-h { display: flex; gap: 8px; align-items: flex-start; font: 400 14px/20px var(--font); }
+.choice-card .cc-ai-h .asst-spark { flex: none; margin-top: 1px; }
+.choice-card .cc-list { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; font: 400 13px/19px var(--font); color: var(--on-surface); }
+.choice-card .cc-list.warn li::marker { color: var(--error); }
+.choice-card .cc-sub { color: var(--on-surface-variant); margin-top: 2px; }
+.choice-card .cc-checks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.choice-card .cc-checks li { display: flex; gap: 10px; align-items: flex-start; }
+.choice-card .cc-checks .t { display: block; font: 400 13.5px/19px var(--font); color: var(--on-surface); }
+.choice-card .cc-checks .s { display: block; font: 400 12px/17px var(--font); color: var(--on-surface-variant); }
+.choice-card .cc-checks .ms { margin-top: 1px; } .choice-card .ms.ok { color: var(--tertiary); } .choice-card .ms.bad { color: var(--error); } .choice-card .ms.neutral { color: var(--on-surface-variant); }
+.choice-card .cc-foot { margin: 0; }
+.v3d-choice { position: absolute; z-index: 8; top: 12px; right: 12px; max-height: calc(100% - 120px); width: min(380px, calc(100% - 24px)); }
+@media (max-width: 720px) { .v3d-choice { top: auto; bottom: 90px; max-height: 55%; } }

@@ -132,7 +132,10 @@ export interface ExposureSummary {
 }
 
 export interface TriageRow { structure_class: string; risk_class: string; buildings: number; people: number }
-export interface ShelterResult { id: string; name: string; kind: string; lon: number; lat: number; capacity: number; assigned: number; spare: number; status: string; note: string; capacity_confidence: string; place?: string }
+export interface ShelterChecks { peak_depth_m: number; wet_from_h: number | null; freeboard_m: number | null; nearest_water_m: number | null; hand_m?: number; door_cut_h: number | null; flags: string[] }
+export interface ShelterResult { id: string; name: string; kind: string; lon: number; lat: number; capacity: number; assigned: number; spare: number; status: string; note: string; capacity_confidence: string; place?: string;
+  floors?: number; area_m2?: number; checks?: ShelterChecks; routes_in?: number; farthest_km?: number | null; slowest_min?: number | null }
+export interface Explanation { facts: Record<string, any>; ai: { headline: string; reasons: string[]; cautions: string[] } | null }
 export interface BridgeStatus { id: string; name: string; lon: number; lat: number; first_closed_hour: number | null; reason: string | null; place?: string;
   status?: "open" | "construction" | "closed" | "disused"; deck_m?: number; deck_source?: "terrain" | "minimum"; length_m?: number; peak_vs_deck_m?: number | null }
 export interface RouteSummary {

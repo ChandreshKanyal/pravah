@@ -1,3 +1,4 @@
+import type { Choice } from "./ChoiceCard";
 import { Link } from "react-router-dom";
 import { useState } from "react";
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
@@ -48,7 +49,8 @@ function Chart({ data, unit, title, color, start }: { data: { h: number; v: numb
   );
 }
 
-export default function Results({ run, hour, onFly, previous }: { run: RunResult; hour: number; onFly: (lon: number, lat: number) => void; previous?: RunResult | null }) {
+export default function Results({ run, hour, onFly, previous, onChoose }: { run: RunResult; hour: number; onFly: (lon: number, lat: number) => void; previous?: RunResult | null;
+  onChoose?: (c: Choice) => void }) {
   const [tab, setTab] = useState<"shelters" | "routes" | "bridges" | "buildings" | "drains">(run.drains?.length ? "drains" : "shelters");
   const e = run.exposure;
   const H = run.rain_series_mm_h.length;
@@ -119,7 +121,7 @@ export default function Results({ run, hour, onFly, previous }: { run: RunResult
                 const st = STATUS[s.status] ?? { label: s.status, tag: "", icon: "help" };
                 const pct = s.capacity ? Math.min(100, (100 * s.assigned) / s.capacity) : 0;
                 return (
-                  <div key={s.id} className="li dense clickable sl" onClick={() => onFly(s.lon, s.lat)} role="button" tabIndex={0}>
+                  <div key={s.id} className="li dense clickable sl" onClick={() => { onFly(s.lon, s.lat); onChoose?.({ kind: "shelter", id: s.id }); }} role="button" tabIndex={0}>
                     <span className="label-l" style={{ width: 28, color: "var(--primary)" }}>{s.id}</span>
                     <span className="txt">
                       <span className="t" style={{ display: "block", fontSize: 14 }}>{niceName(s).length > 40 ? niceName(s).slice(0, 40) + "…" : niceName(s)}</span>
@@ -136,7 +138,7 @@ export default function Results({ run, hour, onFly, previous }: { run: RunResult
             <table className="tbl">
               <thead><tr><th>To</th><th className="r">People</th><th className="r">ETA</th><th>Open until</th></tr></thead>
               <tbody>{run.routes.slice(0, 15).map((r, i) => (
-                <tr key={i} className={r.from_lon != null ? "clickable" : ""} onClick={() => r.from_lon != null && onFly(r.from_lon, r.from_lat!)}>
+                <tr key={i} className={r.from_lon != null ? "clickable" : ""} onClick={() => { if (r.from_lon != null) onFly(r.from_lon, r.from_lat!); if (r.from_node != null) onChoose?.({ kind: "route", key: `${r.from_node}-${r.to_shelter}` }); }}>
                   <td><b>{shName(r.to_shelter)}</b>{r.place && <span className="body-s muted" style={{ display: "block" }}>from {r.place}</span>}{r.length_km != null && <span className="body-s muted"> · {r.length_km} km</span>}</td>
                   <td className="r">{nf(r.people)}</td>
                   <td className="r" title={r.access_min ? `includes ${r.access_min} min walk to the road network` : undefined}>{r.eta_min} min</td>

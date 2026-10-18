@@ -307,7 +307,7 @@ def _overlays(run_id: str) -> bytes:
         roads.append({"p": pts, "c": p.get("first_closed_hour"), "r": p.get("reason"), "h": p.get("hazard") or None,
                       "k": k, "n": p.get("name") or ""})
     routes = [{"p": pts, "until": p.get("passable_until_h"), "people": p.get("people", 0), "to": p.get("to_shelter"),
-               "eta": p.get("eta_min")} for p, pts in lines(load("routes.geojson"))]
+               "eta": p.get("eta_min"), "key": f"{p.get('from_node')}-{p.get('to_shelter')}"} for p, pts in lines(load("routes.geojson"))]
     shelters, bridges = [], []
     for s in run.get("shelters") or []:
         if (s.get("assigned") or 0) > 0:
