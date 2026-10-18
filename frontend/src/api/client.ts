@@ -1,6 +1,6 @@
 import type {
   AOI, AoiListItem, AoiStatus, AreaDrain, DrainLookup, Advisory, AdvisoryVersion, ChatResponse, Forecast, GeocodeResult, HistoryAoi, HistoryIndia, Official,
-  AlertDraft, Drill, Improvements, DrillEval, DrillReport, DrillSummary, EmulatorStats, EmulatorStatus, PhotoDoc, PlanResponse, ProjectArea, Review, Triggers, RunResult, RunSummary, ScenarioParams, StaticLayers, Translation, VerificationItem,
+  AlertDraft, Drill, Improvements, DrillEval, DrillReport, DrillSummary, EmulatorStats, EmulatorStatus, PlanResponse, ProjectArea, Review, Triggers, RunResult, RunSummary, ScenarioParams, StaticLayers, Translation,
 } from "../types/api";
 import { idToken } from "../auth";
 
@@ -72,20 +72,6 @@ export const chat = (session_id: string, aoi_id: string, run_id: string | null, 
   call<ChatResponse>("/api/chat", { method: "POST", body: JSON.stringify({ session_id, aoi_id, run_id, message }) });
 export const historyIndia = () => call<HistoryIndia>("/api/history/india");
 export const historyAoi = (id: string, web = false) => call<HistoryAoi>(`/api/history/aoi/${id}${web ? "?web=true" : ""}`);
-export const listPhotos = (aoi_id: string) => call<PhotoDoc[]>(`/api/photos?aoi_id=${aoi_id}`);
-export const verificationQueue = (aoi_id: string) => call<{ run_id: string | null; queue: VerificationItem[] }>(`/api/aoi/${aoi_id}/verification-queue`);
-export async function uploadPhoto(aoi_id: string, kind: "building" | "drain", file: File, pin?: { lat: number; lng: number }): Promise<PhotoDoc> {
-  const fd = new FormData();
-  fd.append("file", file);
-  fd.append("aoi_id", aoi_id);
-  fd.append("kind", kind);
-  if (pin) { fd.append("lat", String(pin.lat)); fd.append("lng", String(pin.lng)); }
-  const r = await fetch(apiUrl("/api/photos"), { method: "POST", body: fd, headers: await authHeaders() });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(typeof j.detail === "string" ? j.detail : `${r.status}`);
-  return j;
-}
-export const photoUrl = (aoi_id: string, photo_id: string) => apiUrl(`/api/photos/${photo_id}.jpg?aoi_id=${aoi_id}`);
 export const archiveAoi = (id: string, archived = true) =>
   call<{ archived: boolean }>(`/api/aoi/${id}/archive`, { method: "POST", body: JSON.stringify({ archived }) });
 export const explainChoice = (runId: string, kind: "shelter" | "route", key: string) =>

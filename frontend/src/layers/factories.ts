@@ -305,7 +305,7 @@ export function markers<T extends { lon: number; lat: number }>(id: string, data
   return layers;
 }
 
-/** Plain circle markers (Brief and Field check mini maps, which carry their own keys). */
+/** Plain circle markers (the Brief's mini map, which carries its own keys). */
 export function points<T extends { lon: number; lat: number }>(id: string, data: T[], color: RGBA | ((d: T) => RGBA),
   radius: number | ((d: T) => number) = 8, label?: (d: T) => string): Layer[] {
   const layers: Layer[] = [new ScatterplotLayer<T>({

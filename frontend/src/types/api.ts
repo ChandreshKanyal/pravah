@@ -219,12 +219,6 @@ export interface HistoryAoi {
   labels?: Record<string, string>;
 }
 export interface HistoryIndia { gfd_tiles: string; labels: Record<string, string>; note: string }
-export interface PhotoDoc {
-  photo_id: string; aoi_id: string; kind: "building" | "drain"; lon: number; lat: number; result: Record<string, any>;
-  accepted: boolean; message: string; linked_bid?: string; previous_class?: string; override_class?: string; created_at: string;
-  link_distance_m?: number | null; model?: string;
-}
-export interface VerificationItem { bid: string; lon: number; lat: number; current_class: string; score: number; people: number }
 
 export interface EmulatorStatus {
   state: "none" | "queued" | "running" | "ready" | "failed"; progress?: number; error?: string; n_train?: number; modes?: number;

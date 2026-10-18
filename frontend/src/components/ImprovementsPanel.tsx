@@ -20,9 +20,9 @@ export function basisLine(it: Improvement): string {
   return BASIS[it.basis].label;
 }
 
-export default function ImprovementsPanel({ data, selected, onSelect, onClose, onLook, onStreetView, onField, cats, setCats }: {
+export default function ImprovementsPanel({ data, selected, onSelect, onClose, onLook, onStreetView, cats, setCats }: {
   data: Improvements; selected: Improvement | null; onSelect: (it: Improvement | null) => void; onClose: () => void;
-  onLook: (it: Improvement) => void; onStreetView: (it: Improvement) => void; onField: (it: Improvement) => void;
+  onLook: (it: Improvement) => void; onStreetView: (it: Improvement) => void;
   cats: Set<ImprovementCategory> | null; setCats: (c: Set<ImprovementCategory> | null) => void;
 }) {
   const items = data.items ?? [];
@@ -35,7 +35,7 @@ export default function ImprovementsPanel({ data, selected, onSelect, onClose, o
   };
   return (
     <section className="imp-panel surface-float" aria-label="Fix before the rain">
-      {selected ? <Detail it={selected} data={data} onBack={() => onSelect(null)} onClose={onClose} onLook={onLook} onStreetView={onStreetView} onField={onField} /> : (
+      {selected ? <Detail it={selected} data={data} onBack={() => onSelect(null)} onClose={onClose} onLook={onLook} onStreetView={onStreetView} /> : (
         <>
           <header className="imp-head">
             <div className="grow">
@@ -72,7 +72,7 @@ export default function ImprovementsPanel({ data, selected, onSelect, onClose, o
               <p>Drains, culverts, low spots and single-exit roads are ranked by our flood and road models; channels,
               new construction and bare ground come from 10 m open satellite data (Sentinel-2, Dynamic World), each checked by Gemini;
               reported spots come from Gemini with Google Search, kept only with a link that opens and names the place.
-              10 m imagery cannot show a blocked drain or a rubbish pile, so those need a site visit: use <b>Check in the field</b>.</p>
+              10 m imagery cannot show a blocked drain or a rubbish pile, so those need a site visit.</p>
               {data.attribution && <p>{data.attribution}</p>}
             </details>
             {data.search_entry_point && <SearchChip html={data.search_entry_point} />}
@@ -88,9 +88,9 @@ function shortCat(c: ImprovementCategory, label: string): string {
     single_exit: "Single exits", encroachment: "New construction", bare_ground: "Bare ground" } as Record<string, string>)[c] ?? label;
 }
 
-function Detail({ it, data, onBack, onClose, onLook, onStreetView, onField }: {
+function Detail({ it, data, onBack, onClose, onLook, onStreetView }: {
   it: Improvement; data: Improvements; onBack: () => void; onClose: () => void;
-  onLook: (it: Improvement) => void; onStreetView: (it: Improvement) => void; onField: (it: Improvement) => void;
+  onLook: (it: Improvement) => void; onStreetView: (it: Improvement) => void;
 }) {
   const [big, setBig] = useState<number | null>(null);
   const b = BASIS[it.basis];
@@ -151,7 +151,6 @@ function Detail({ it, data, onBack, onClose, onLook, onStreetView, onField }: {
       <div className="imp-actions">
         <Button variant="tonal" size="small" icon="satellite" onClick={() => onLook(it)}>Look closer</Button>
         <Button variant="tonal" size="small" icon="streetview" onClick={() => onStreetView(it)}>Street View</Button>
-        <Button variant="outlined" size="small" icon="photo_camera" onClick={() => onField(it)}>Check in the field</Button>
       </div>
       <p className="body-s muted" style={{ marginTop: 8 }}>Look closer and Street View open Google imagery for you to inspect; it is not analysed by Pravah.</p>
     </div>

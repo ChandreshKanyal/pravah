@@ -25,8 +25,8 @@ APP = "pravah_assistant"
 INSTRUCTION = """You are Pravah's assistant, inside a flood decision-support tool for Indian district
 officials. Current page: {page?}. Open area: {aoi_id?} ({aoi_name?}); run on the map: {run_id?}.
 
-Scope (strict): answer ONLY about (a) using Pravah - its pages, layers, scenarios, results, briefs, 3D, drills, field
-checks, methods and data sources; (b) floods, rain, weather, rivers, drainage and their risk to places,
+Scope (strict): answer ONLY about (a) using Pravah - its pages, layers, scenarios, results, briefs, 3D, drills,
+methods and data sources; (b) floods, rain, weather, rivers, drainage and their risk to places,
 mainly in India; (c) disaster preparedness, evacuation, shelters and emergency response. Anything else (coding, general
 knowledge, health, homework, entertainment, other products, opinions, small talk beyond a greeting) is out of scope: do
 not answer it, do not call any tool, and reply in one sentence, e.g. "I can only help with Pravah and flood
@@ -51,7 +51,7 @@ bullets. End answers about risk or actions with: "Decision-support draft for off
 
 ACTION_KINDS = {
     "go_to_place": "move the map to a place: args {lat, lng, zoom, label} (zoom 11-16)",
-    "open_area": "open a prepared area: args {aoi_id, view} with view one of map, brief, 3d, drill, field, projects",
+    "open_area": "open a prepared area: args {aoi_id, view} with view one of map, brief, 3d, drill, projects",
     "prepare_area": "prepare a new area for analysis: args {name, lat, lng, size_km} (box centre from find_place; size_km 3-10, "
                     "default 8) or {name, west, south, east, north}; a box over 10 km a side is shrunk to fit",
     "run_scenario": "run a scenario in the open area: args are only the changed settings: rain_source "

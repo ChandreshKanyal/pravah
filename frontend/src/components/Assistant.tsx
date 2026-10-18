@@ -103,7 +103,7 @@ export default function Assistant() {
           break;
         case "open_area": {
           const v = String(x.view ?? "map");
-          nav(v === "projects" ? `/projects?area=${x.aoi_id}` : `/area/${x.aoi_id}${({ brief: "/advisory", "3d": "/3d", drill: "/drill", field: "/verify" } as Record<string, string>)[v] ?? ""}`);
+          nav(v === "projects" ? `/projects?area=${x.aoi_id}` : `/area/${x.aoi_id}${({ brief: "/advisory", "3d": "/3d", drill: "/drill" } as Record<string, string>)[v] ?? ""}`);
           break;
         }
         case "prepare_area": {

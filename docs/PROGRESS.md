@@ -21,6 +21,11 @@ All work is **committed** on `main` (no git remote is configured, so nothing is 
   no longer pays ~20 s of compiling. The cache is not baked into the image (Cloud Build's CPU may differ from Cloud Run's).
   Why steps are ~1 s: the explicit solver's stability limit (CFL 0.45) set by the fastest water (the river), not detail
   wanted; future options: local-inertial solver, river left to HAND, local time stepping (not for the deadline).
+- **Field check removed (18 Oct, human decision). NOTE(spec-drift): S12 field photo verification is gone.** No photo
+  upload (`/api/photos`), no Gemini photo classifier, no verification queue (`/api/aoi/{id}/verification-queue`,
+  `verification.json`), no "Check in the field" on fixes, no Field check page or top-bar pill, no assistant `field`
+  view. Building classes stay proxies ("likely ...") for good; drains rank without photo conditions (the engine still
+  accepts them, empty). Existing `photos` documents and images are left in Firestore/GCS (deleted with their area).
 - **COST WATCH (18 Oct, human decision): the brief is drafted automatically after every website run.** Opening Brief
   took ~90 s (one Gemini call at HIGH thinking: ~10k thinking tokens, ~1.6k out, ~5.5k in; measured 73 s; MEDIUM 37 s,
   LOW 12 s on the same run). `_run_job` in `api/runs.py` now calls `start_advisory` as soon as a run finishes, so every

@@ -642,8 +642,7 @@ export default function Workspace() {
             onSelect={(it) => { setImpSel(it); if (it) setFly({ lon: it.lon, lat: it.lat, zoom: Math.max(zoom, 16), t: Date.now() }); }}
             onClose={() => { setImpOpen(false); setImpSel(null); }}
             onLook={(it) => { setMapType("hybrid"); setFly({ lon: it.lon, lat: it.lat, zoom: 19, t: Date.now() }); }}
-            onStreetView={(it) => setSv({ lon: it.lon, lat: it.lat, t: Date.now() })}
-            onField={(it) => nav(`/area/${aoiId}/verify?kind=drain&lat=${it.lat}&lon=${it.lon}&ref=${encodeURIComponent(`${it.id} ${it.title}`)}`)} />
+            onStreetView={(it) => setSv({ lon: it.lon, lat: it.lat, t: Date.now() })} />
         )}
 
         {choice && run && !live && !impOpen && (

@@ -8,7 +8,6 @@ import "./styles.css";
 
 // Secondary pages load on demand (the 3D view pulls in deck.gl geo layers).
 const Advisory = lazy(() => import("./pages/Advisory"));
-const Verify = lazy(() => import("./pages/Verify"));
 const Methods = lazy(() => import("./pages/Methods"));
 const View3D = lazy(() => import("./pages/View3D"));
 const Projects = lazy(() => import("./pages/Projects"));
@@ -22,7 +21,6 @@ const router = createBrowserRouter([
       { path: "area/:aoiId", element: <Workspace /> },
       { path: "area/:aoiId/advisory", element: S(<Advisory />) },
       { path: "area/:aoiId/run/:runId/advisory", element: S(<Advisory />) },
-      { path: "area/:aoiId/verify", element: S(<Verify />) },
       { path: "area/:aoiId/3d", element: S(<View3D />) },
       { path: "area/:aoiId/drill", element: S(<Drill />) },
       { path: "methods", element: S(<Methods />) },

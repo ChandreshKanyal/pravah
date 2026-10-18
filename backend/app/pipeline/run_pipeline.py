@@ -1,6 +1,5 @@
 """run_pipeline(params): fixed order S10 -> S3 -> S5 -> S6 -> S8 -> S15 (stages are added as they are built)."""
 import io
-import json
 import logging
 import threading
 import time
@@ -536,7 +535,7 @@ def run_pipeline(p: ScenarioParams, flow_model: bool = True) -> RunResult:
         "damage": "JRC global depth-damage curve, Asia residential (Huizinga et al. 2017)",
     }
     t2 = time.time()
-    exposure, triage_rows, queue, ctx = _exposure(area, p, depth, warnings)
+    exposure, triage_rows, ctx = _exposure(area, p, depth, warnings)
     timings["exposure"] = round(time.time() - t2, 2)
 
     drains_out, pond_img = [], None
@@ -579,7 +578,6 @@ def run_pipeline(p: ScenarioParams, flow_model: bool = True) -> RunResult:
         jobs.append(ex.submit(npz, "depth.npz", depth))
         if sim is not None:  # river + hollows alone, for the 3D comparison and the flow agreement check
             jobs.append(ex.submit(npz, "static_depth.npz", static_depth))
-        jobs.append(ex.submit(storage.put_run, run_id, "verification.json", json.dumps(queue).encode(), "application/json"))
         if ctx:  # per-building risk (0 critical .. 3 low) for the 3D view
             rb = io.BytesIO()
             np.save(rb, ctx["risk_codes"])
@@ -671,10 +669,10 @@ def _label_places(area: Area, result: RunResult) -> None:
 
 
 def _exposure(area: Area, p: ScenarioParams, depth: np.ndarray, warnings: list[str]) -> tuple[ExposureSummary, list[TriageRow], list[dict], dict]:
-    """S6.4-S6.9 at run time: scaled population, per-hour exposure, risk at the worst hour, triage, clusters, queue."""
+    """S6.4-S6.8 at run time: scaled population, per-hour exposure, risk at the worst hour, triage, clusters."""
     if area.bld is None or area.pop_unattr is None:
         warnings.append("Buildings not prepared for this area; exposure unavailable")
-        return ExposureSummary(), [], [], {}
+        return ExposureSummary(), [], {}
     b = area.bld
     base_total = float(b["pop_base"].sum() + (area.pop_unattr * area.aoi_mask).sum())
     k = population.scale_factor(base_total, p.pop_multiplier, p.pop_total_override)
@@ -696,16 +694,7 @@ def _exposure(area: Area, p: ScenarioParams, depth: np.ndarray, warnings: list[s
     cols = np.clip(b["col"].astype(int), 0, area.grid.width - 1)
     ph = ex_engine.per_hour(depth, rows, cols, pop_b, pop_un)
     d_w = ph["d_b"][-1]  # worst case: flood depth peaks at the last hour (envelope)
-    # S6.3: accepted field photos replace the proxy class and fragility (copies; the cached area stays untouched)
-    struct, frag, conf = b["structure_class"].astype(object).copy(), b["fragility"].astype(float).copy(), b["confidence"].astype(float).copy()
-    from app.api.photos import building_overrides
-    ov = building_overrides(area.aoi_id)
-    if ov:
-        from app.engines.buildings import apply_field_overrides
-        src = apply_field_overrides([str(x) for x in b["bid"]], struct, frag, conf, ov)
-        n = int((src == "field_photo").sum())
-        if n:
-            warnings.append(f"{n} building(s) use field-photo verified classes")
+    struct, frag = b["structure_class"].astype(object), b["fragility"].astype(float)  # proxy classes (no field photos since 18 Oct)
     R, risk, _reason = ex_engine.building_risk(d_w, frag, area.dist_stream_m[rows, cols])
     exposed = d_w >= ex_engine.WET_M
     to_ll = lambda r, c: rowcol_to_lonlat(area.grid, r, c)  # noqa: E731
@@ -719,11 +708,10 @@ def _exposure(area: Area, p: ScenarioParams, depth: np.ndarray, warnings: list[s
         clusters=cl,
     )
     tri = [TriageRow(**r) for r in ex_engine.triage(struct, risk, pop_b)]
-    queue = ex_engine.verification_queue(b["bid"], R, conf, pop_b, b["lon"], b["lat"], struct)
     ctx = {"rows": rows, "cols": cols, "pop_b": pop_b, "pop_un": pop_un, "d_b": ph["d_b"],
            "risk_codes": np.array([ex_engine.RISK_ORDER.index(r) for r in risk], np.uint8), "frag": frag,
            "clusters": cl}
-    return summary, tri, queue, ctx
+    return summary, tri, ctx
 
 
 def _drains(area: Area, depth: np.ndarray, pond_fill: np.ndarray, ctx: dict) -> list[dict]:
@@ -739,12 +727,7 @@ def _drains(area: Area, depth: np.ndarray, pond_fill: np.ndarray, ctx: dict) -> 
         np.add.at(exposed, (ctx["rows"][m], ctx["cols"][m]), ctx["pop_b"][m])
     lab = area.pluvial["dep_label"]
     like = np.where(lab > 0, pond_fill[-1][lab], 0.0)
-    cond: dict[str, str] = {}
-    try:
-        for d in sorted(fs.query("photos", aoi_id=area.aoi_id, kind="drain", accepted=True), key=lambda d: d.get("created_at", "")):
-            cond[str(d["linked_drain_id"])] = d["result"]["condition"]
-    except Exception as e:
-        log.info("drain photos unavailable: %s", e)
+    cond: dict[str, str] = {}  # drain conditions from field photos: none since Field check was removed (18 Oct)
     cands = [c for c in area.drain_cands if area.aoi_mask[c["row"], c["col"]]]
     if not cands:
         return []

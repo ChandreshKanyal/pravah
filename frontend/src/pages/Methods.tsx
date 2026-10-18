@@ -42,7 +42,7 @@ const LIMITS = [
   "The water-flow model (3D) solves the shallow-water equations on 30 m cells but has no river bathymetry, pipes, culverts or infiltration curve (losses are a constant runoff coefficient), and false dams in narrow gorges are carved away. It is shown next to the brief, which still uses the HAND envelope.",
   "The rational method is designed for small catchments. Applied to the selected area with an envelope (no recession), it gives coarse, conservative estimates; an areal reduction factor softens it for larger catchments.",
   "Resolution: MERIT Hydro is about 90 m and the DEM is 30 m. Single streets and small drains are not resolved. Copernicus GLO-30 is a surface model, including buildings and trees, which matters most in cities.",
-  "Building classes are proxies from footprint and height until verified by field photos. Open Buildings heights are model estimates.",
+  "Building classes are proxies from footprint and height, not confirmed on the ground. Open Buildings heights are model estimates.",
   "Population is a residential estimate (WorldPop). Day/night differences are not modelled; pilgrims and tourists must be entered as a number (they are spread over temples, markets and hotels).",
   "Floods only: landslides, which often come with heavy rain in hill areas, are not assessed.",
   "OpenStreetMap roads and shelters can be incomplete in hill towns. Capacities use footprint × floors × Sphere space standards and must be confirmed locally.",
@@ -134,9 +134,9 @@ export default function Methods() {
 
           <section id="exposure">
             <h2>Exposure and risk</h2>
-            <p>WorldPop residents are shared among Open Buildings footprints by volume within each ~90 m block. Each building gets a proxy structure class (“likely kaccha”, “likely pukka multi-storey” …) from footprint, height and density, replaced by a field-photo class when verified.</p>
+            <p>WorldPop residents are shared among Open Buildings footprints by volume within each ~90 m block. Each building gets a proxy structure class (“likely kaccha”, “likely pukka multi-storey” …) from footprint, height and density.</p>
             <F>{"R_b = 0.5 · D(depth) + 0.3 · F(structure) + 0.2 · P(stream proximity)\nD = JRC depth-damage fraction, Asia residential (Huizinga et al. 2017): 0.5 m → 0.33, 1 m → 0.49, 2 m → 0.72, 6 m → 1.0"}</F>
-            <p>Classes: ≥ 0.7 critical, 0.5–0.7 high, 0.3–0.5 moderate. The verification queue ranks buildings by risk × (1 − confidence) × people.</p>
+            <p>Classes: ≥ 0.7 critical, 0.5–0.7 high, 0.3–0.5 moderate.</p>
           </section>
 
           <section id="routing">
@@ -167,7 +167,7 @@ export default function Methods() {
               <li>People move where the flood hazard rating (DEFRA/EA FD2321, depth × (speed + 0.5) + debris) reaches “danger for some”: river water moves at the Manning speed of its channel; standing water has no speed, which gives 0.5 m (0.3 m in fragile homes).</li>
             </ul>
             <F>{"filled = PriorityFlood+ε(FABDEM)   (Barnes et al. 2014)\nV_in = C_ws · Σ max(0, i − drain capacity) · A_ws   → fill each built-up hollow to the level that holds V_in\ndepth = max(river HAND depth on reliable channels, waterlogging depth)"}</F>
-            <p>The storm-drain capacity is 25 mm/h (Mumbai's historical standard; configurable) and applies under built-up land, in the waterlogging screen and the water-flow model alike. A one-line profile of each area (built-up share, slopes, largest river) is shown above the scenario; it sets display defaults and never switches a hazard off. Tides and storm surge are not modelled. Drains and culverts are ranked for pre-monsoon clearing by flow accumulation, ponding or flood susceptibility, and exposed people within 300 m; field photos marked blocked raise the priority.</p>
+            <p>The storm-drain capacity is 25 mm/h (Mumbai's historical standard; configurable) and applies under built-up land, in the waterlogging screen and the water-flow model alike. A one-line profile of each area (built-up share, slopes, largest river) is shown above the scenario; it sets display defaults and never switches a hazard off. Tides and storm surge are not modelled. Drains and culverts are ranked for pre-monsoon clearing by flow accumulation, ponding or flood susceptibility, and exposed people within 300 m.</p>
           </section>
 
           <section id="brief">
@@ -191,7 +191,6 @@ export default function Methods() {
               <li><b>Ask Pravah</b> (the assistant on every page; ADK agent with tools) answers general questions only from Google Search results (sources shown), finds places with Google geocoding, reads an open area's results through the same engines, and is told never to state a number it did not get from a tool. Anything it would do in the app (move the map, open a view, prepare an area, run a scenario, switch layers) is shown as a proposal you confirm; it cannot act on its own.</li>
               <li><b>Advisory brief</b>: Gemini drafts recommendations from a compact facts sheet. A validator drops any recommendation that cites an unknown id or a number not in its cited facts, and fills empty horizons from deterministic rules; if Gemini fails, a rules-based brief is produced.</li>
               <li><b>Web incidents</b>: a separate agent with Google Search grounding returns sourced leads, shown with Google Search suggestions and labelled unverified.</li>
-              <li><b>Field photos</b>: Gemini vision classifies structures or drains in photos your teams take; never Google Maps or Street View imagery.</li>
             </ul>
           </section>
 
@@ -216,16 +215,16 @@ export default function Methods() {
             <p><b>Reported on the web.</b> Gemini with Google Search lists spots in the box that municipal lists or news name as repeatedly waterlogged. A link is kept only if its site is among the pages Search returned; places are positioned with Google geocoding (vague results such as a whole suburb are dropped) and compared with our terrain model (low ground or a road hollow nearby).</p>
             <p><b>Seen from space.</b> Only open data that may be analysed: Copernicus Sentinel-2 (10 m) and Google Dynamic World. Mapped rivers and canals whose surface reads as vegetation (NDVI ≥ 0.35 in recent clear scenes; culverted stretches excluded) suggest weeds or silt; land that turned built-up since 2016–17 on former water or wetland, or under 2 m above a stream within 150 m, and new bare ground near streams, suggest encroachment or dumped muck. Gemini looks at the image clips (true and false colour, or before and after) and says whether they show the claim; leads it says the images contradict are dropped.</p>
             <p><b>Model estimate.</b> Culverts and drain crossings (OpenStreetMap) ranked by the water arriving from upstream and the people on low ground within 400 m; road hollows in built-up parts of the bare-earth terrain that fill first; and road links that are the only drivable way out for a neighbourhood (graph bridges) on low ground or over a stream.</p>
-            <p><b>What it cannot do.</b> 10 m imagery cannot show a blocked drain, a rubbish pile or parked cars, and Google satellite and Street View images may not be analysed by AI under the Maps terms. Those checks need eyes on site: each item opens Google imagery for a person to look at, and “Check in the field” sends a team photo to Gemini through Field check.</p>
+            <p><b>What it cannot do.</b> 10 m imagery cannot show a blocked drain, a rubbish pile or parked cars, and Google satellite and Street View images may not be analysed by AI under the Maps terms. Those checks need eyes on site: each item opens Google imagery (Look closer, Street View) for a person to look at; Pravah never analyses it.</p>
           </section>
 
           <section id="governance">
             <h2>Access and data governance</h2>
             <ul>
-              <li><b>Sign-in and roles.</b> With sign-in enabled (Firebase Authentication with Google accounts), roles are viewer, field, analyst, approver and admin. Running scenarios and using Gemini need the analyst role; approving a brief needs the approver role; uploading field photos needs the field role.</li>
+              <li><b>Sign-in and roles.</b> With sign-in enabled (Firebase Authentication with Google accounts), roles are viewer, analyst, approver and admin. Running scenarios and using Gemini need the analyst role; approving a brief needs the approver role.</li>
               <li><b>Sensitive outputs.</b> Building-level risk (the 3D buildings) is served only to signed-in users when sign-in is enabled, because labels like “critical risk” on individual houses can affect residents.</li>
               <li><b>Audit trail.</b> Brief generation, reviews, approvals, translations, official-status entries and area archiving are logged with the user, time and version.</li>
-              <li><b>Where data lives.</b> Model inputs and outputs stay in this Google Cloud project (Cloud Storage, Firestore). Google Maps content is display only. Field photos are your teams' own and are used only to reclassify buildings and drains.</li>
+              <li><b>Where data lives.</b> Model inputs and outputs stay in this Google Cloud project (Cloud Storage, Firestore). Google Maps content is display only.</li>
             </ul>
           </section>
 

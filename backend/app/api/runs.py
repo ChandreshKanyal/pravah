@@ -133,10 +133,9 @@ def get_run(run_id: str):
 
 
 def area_extra(aoi_id: str, run_id: str) -> dict:
-    """Area-level facts for the advisory: medical, crowding, verification queue, forecast, history (best effort). The
+    """Area-level facts for the advisory: medical, crowding, forecast, history (best effort). The
     reads run at the same time (they went one after another), and the forecast point comes from the grid instead of
     loading the whole area."""
-    import json
 
     from google.api_core.exceptions import NotFound
 
@@ -161,7 +160,7 @@ def area_extra(aoi_id: str, run_id: str) -> dict:
         return places.area_places(aoi_id)
 
     jobs = {"medical": lambda: opt_json("medical.json"), "crowding": lambda: opt_json("crowd_hotspots.json"),
-            "verification": lambda: json.loads(storage.get_run(run_id, "verification.json")), "forecast": forecast,
+            "forecast": forecast,
             "places": places_, "aoi": lambda: fs.get_aoi(aoi_id), "history": lambda: fs.get_doc("history_cache", aoi_id)}
     got: dict = {}
     with ThreadPoolExecutor(len(jobs)) as ex:
@@ -173,7 +172,7 @@ def area_extra(aoi_id: str, run_id: str) -> dict:
                 if k == "forecast":
                     log.info("advisory forecast unavailable: %s", e)
                 got[k] = None
-    out: dict = {k: got[k] for k in ("medical", "crowding", "verification", "forecast", "places") if got[k] is not None}
+    out: dict = {k: got[k] for k in ("medical", "crowding", "forecast", "places") if got[k] is not None}
     aoi = got["aoi"] or {}
     if aoi.get("official"):
         out["official"] = aoi["official"]

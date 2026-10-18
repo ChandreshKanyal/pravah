@@ -18,7 +18,7 @@ const STATUS: Record<string, { label: string; tag: string; icon: string }> = {
 /** OSM-unnamed candidate buildings get a findable description. */
 export const niceName = (s: { name: string; place?: string }) =>
   /^(large building|unnamed|candidate)/i.test(s.name) && s.place ? `Large building ${s.place.startsWith("near ") ? s.place : "at " + s.place}` : s.name;
-const pretty = (s: string) => s.replace(/^verified_/, "verified ").replace(/_/g, " ").replace(/^likely /, "likely ") + (s.startsWith("verified_") ? " (field photo)" : " (proxy)");
+const pretty = (s: string) => s.replace(/_/g, " ") + " (proxy)";
 
 function Metric({ label, value, tip, alert, icon, wide, sub }: { label: string; value: string; tip: string; alert?: boolean; icon: string; wide?: boolean; sub?: string }) {
   return (
@@ -171,7 +171,7 @@ export default function Results({ run, hour, onFly, previous, onChoose }: { run:
                 <div key={d.id} className="li dense clickable sl" onClick={() => onFly(d.lon, d.lat)} role="button" tabIndex={0}>
                   <span className="label-l" style={{ width: 28, color: "var(--primary)" }}>{d.id}</span>
                   <span className="txt"><span className="t" style={{ fontSize: 14 }}>{d.name || d.type}</span>
-                    <span className="s" style={{ display: "block" }}>{d.type} · {nf(d.exposed_people_300m)} exposed within 300 m{d.photo_condition ? ` · photo: ${d.photo_condition.replace("_", " ")}` : ""}</span></span>
+                    <span className="s" style={{ display: "block" }}>{d.type} · {nf(d.exposed_people_300m)} exposed within 300 m</span></span>
                   <span className={`tag ${d.priority >= 0.6 ? "crit" : d.priority >= 0.4 ? "high" : ""}`}>{d.priority.toFixed(2)}</span>
                 </div>
               ))}

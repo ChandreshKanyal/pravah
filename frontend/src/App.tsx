@@ -128,7 +128,6 @@ export default function App() {
                   <Pill end to={`/area/${aoiId}${q}`} icon="map" label="Map" />
                   <Pill to={`/area/${aoiId}/3d${q}`} icon="view_in_ar" label="3D" />
                   <Pill to={`/area/${aoiId}/drill${q}`} icon="sports_score" label="Drill" />
-                  <Pill to={`/area/${aoiId}/verify`} icon="photo_camera" label="Field check" />
                 </nav>
               </>
             )}

@@ -228,10 +228,8 @@ def build_facts(run: dict, area_extra: dict | None = None) -> dict:
         "crowding": [{"id": x["id"], "score": x["score"], "attractors": x.get("top_attractors", []),
                       "lonlat": [x["lon"], x["lat"]]} for x in area_extra.get("crowding", [])[:5]],
         "drains": [{"id": d["id"], "type": d["type"], "name": d.get("name", ""), "priority": d["priority"],
-                    "exposed_people_300m": d.get("exposed_people_300m"), "photo_condition": d.get("photo_condition"),
+                    "exposed_people_300m": d.get("exposed_people_300m"), 
                     "lonlat": [d["lon"], d["lat"]]} for d in (run.get("drains") or area_extra.get("drains", []))[:10]],
-        "verification_queue": [{"id": f"V{k}", "bid": v["bid"], "current_class": human(v["current_class"]), "people": v["people"],
-                                "lonlat": [v["lon"], v["lat"]]} for k, v in enumerate(area_extra.get("verification", [])[:10], 1)],
         "forecast": area_extra.get("forecast", {}),
         "history": area_extra.get("history", {}),
         "warnings": run.get("warnings", [])[:10],
@@ -242,7 +240,7 @@ def build_facts(run: dict, area_extra: dict | None = None) -> dict:
 
 def _trim(facts: dict) -> None:
     """Keep the facts under ~12 KB by shortening the longest lists first."""
-    for k in ("verification_queue", "closed_roads", "routes", "shelters", "clusters", "warnings"):
+    for k in ("closed_roads", "routes", "shelters", "clusters", "warnings"):
         while len(json.dumps(facts)) > MAX_FACTS_BYTES and len(facts.get(k, [])) > 3:
             facts[k] = facts[k][:-1]
 
@@ -422,8 +420,8 @@ def rules_advisory(facts: dict) -> list[Recommendation]:
                                   why=f"{k['K3']['value']} people unplaced; {c['id']} has {c['people']} exposed.",
                                   confidence="low"))
     if not any(r.horizon == "seasonal" for r in out):
-        out.append(Recommendation(horizon="seasonal", priority="P3", action="Verify the highest-ranked buildings in the field",
-                                  location_label="Verification queue", evidence_ids=["K2"], owner="Block Development Officer",
+        out.append(Recommendation(horizon="seasonal", priority="P3", action="Inspect the buildings at high or critical estimated risk before the monsoon",
+                                  location_label="High-risk buildings", evidence_ids=["K2"], owner="Block Development Officer",
                                   why=f"{k['K2']['value']} buildings at high or critical estimated risk.", confidence="low"))
     if not any(r.horizon == "structural" for r in out):
         out.append(Recommendation(horizon="structural", priority="P3",
@@ -436,7 +434,7 @@ def rules_advisory(facts: dict) -> list[Recommendation]:
 RULE_LIMITATIONS = [
     "Flood depths come from HAND mapping and rational-method runoff: uncalibrated, no channel routing, water never recedes.",
     "Pravah models floods only: landslides, which often come with heavy rain in hill areas, are not assessed.",
-    "Building classes are proxies from footprints and heights until verified by field photos.",
+    "Building classes are proxies from footprints and heights, not confirmed on the ground.",
     "Population is residential and night-time-like (WorldPop); daytime crowds may differ.",
     "Roads and shelters come from OpenStreetMap, which is incomplete in hill towns.",
 ]
