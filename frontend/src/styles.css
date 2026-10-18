@@ -267,6 +267,8 @@ p { margin: 0; }
   height: 3px; border-radius: 3px 3px 0 0; background: var(--primary); animation: tabin var(--d-med) var(--ease); }
 .tabs button .badge-dot { position: absolute; top: 10px; right: calc(50% - 22px); min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px;
   background: var(--error); color: var(--on-error); font: 500 11px/16px var(--font); }
+.tabs:not(.with-icons) button { flex-direction: row; gap: 6px; }  /* text tabs: the count sits after the label, not on it */
+.tabs:not(.with-icons) button .badge-dot { position: static; }
 @keyframes tabin { from { width: 0; } }
 
 /* ---------- progress ---------- */
@@ -347,6 +349,13 @@ p { margin: 0; }
 .navpill .ms { font-size: 20px; }
 .area-title { display: flex; align-items: center; gap: 8px; margin-left: 8px; padding-left: 16px; border-left: 1px solid var(--outline-variant);
   font: 400 16px/24px var(--font); color: var(--on-surface); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+button.area-title { background: none; border-top: 0; border-right: 0; border-bottom: 0; cursor: pointer; height: 40px; border-radius: 0 20px 20px 0; padding-right: 10px; }
+button.area-title:hover { background: var(--surface-container); }
+.area-title .area-edit { opacity: 0; color: var(--on-surface-variant); transition: opacity var(--d-short); }
+button.area-title:hover .area-edit, button.area-title:focus-visible .area-edit { opacity: 1; }
+.area-title.editing input { font: inherit; color: inherit; background: var(--surface-container-high); border: 0; border-bottom: 2px solid var(--primary);
+  border-radius: 4px 4px 0 0; padding: 6px 8px; width: 220px; outline: none; }
+.area-title.editing input.err { border-bottom-color: var(--error); }
 .page { flex: 1; min-height: 0; position: relative; }
 .powered { display: inline-flex; align-items: center; gap: 6px; font: 500 12px/16px var(--font); color: var(--on-surface-variant); }
 .powered .spark { background: var(--gemini); -webkit-background-clip: text; background-clip: text; color: transparent; }
@@ -848,7 +857,29 @@ p { margin: 0; }
 .area-profile { display: flex; gap: 8px; align-items: flex-start; margin: 0 0 4px; padding: 8px 12px; border-radius: 12px;
   background: var(--surface-container-low); color: var(--on-surface-variant); }
 .area-profile .ms { color: var(--primary); margin-top: 1px; }
-.prep-models { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: 12px; background: var(--surface-container-low); }
-.prep-models .ms { color: var(--primary); margin-top: 2px; }
 .drain-found { display: flex; flex-direction: column; gap: 6px; padding: 12px; border-radius: 12px; background: var(--surface-container-low); }
 .drain-found .src { display: flex; flex-wrap: wrap; gap: 4px 12px; font: 500 12px/16px var(--font); }
+
+/* ---------- the side panel while an area is prepared (PrepThinking.tsx) ---------- */
+.prep-think { display: flex; flex-direction: column; gap: 16px; padding: 8px 4px; animation: pt-in var(--d-long) var(--ease); }
+.prep-think .pt-head { display: flex; gap: 14px; align-items: center; }
+.prep-think .pt-spark { position: relative; display: grid; place-items: center; width: 48px; height: 48px; flex: none; }
+.prep-think .pt-spark::before { content: ""; position: absolute; inset: 0; border-radius: 50%; padding: 2px;
+  background: conic-gradient(from 0deg, #4285f4, #9b72cb, #d96570, #4285f4); animation: asst-spin 2.4s linear infinite;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; opacity: .8; }
+.prep-think .pt-spark svg { animation: asst-pulse 1.8s ease-in-out infinite, pt-turn 6s ease-in-out infinite; }
+.prep-think .pt-now { font: 500 14px/20px var(--font); margin-top: 2px; animation: asst-shine 1.8s linear infinite, pt-in var(--d-med) var(--ease); }
+.prep-think .pt-bars { display: flex; flex-direction: column; gap: 10px; }
+.prep-think .pt-bars i { display: block; height: 14px; border-radius: 7px;
+  background: linear-gradient(90deg, #4285f414 0%, #4285f455 25%, #9b72cb66 50%, #d9657055 75%, #4285f414 100%); background-size: 300% 100%;
+  animation: pt-flow 2.2s linear infinite; }
+.prep-think .pt-bars i:nth-child(2) { width: 86%; animation-delay: -.4s; } .prep-think .pt-bars i:nth-child(3) { width: 62%; animation-delay: -.8s; }
+.prep-think .pt-steps { list-style: none; margin: 0; padding: 4px 0 4px 14px; border-left: 2px solid var(--outline-variant); display: flex; flex-direction: column; gap: 8px; }
+.prep-think .pt-steps li { display: flex; gap: 8px; align-items: center; font: 400 13px/18px var(--font); color: var(--on-surface-variant); animation: pt-in var(--d-med) var(--ease); }
+.prep-think .pt-steps li.done .ms { color: var(--tertiary); } .prep-think .pt-steps li.err .ms { color: var(--error); }
+.prep-think .pt-steps li.todo { color: var(--on-surface); } .prep-think .pt-steps li.todo .ms { color: var(--primary); }
+.prep-think .spin { animation: asst-spin 1s linear infinite; }
+@keyframes pt-flow { from { background-position: 100% 0; } to { background-position: -200% 0; } }
+@keyframes pt-turn { 0%, 100% { transform: rotate(0); } 50% { transform: rotate(90deg) scale(.9); } }
+@keyframes pt-in { from { opacity: 0; transform: translateY(4px); } }
+@media (prefers-reduced-motion: reduce) { .prep-think *, .prep-think *::before { animation: none !important; } }

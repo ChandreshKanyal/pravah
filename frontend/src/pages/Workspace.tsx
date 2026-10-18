@@ -3,6 +3,7 @@ import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useMap } from "@vis.gl/react-google-maps";
 import type { Layer, PickingInfo } from "@deck.gl/core";
 import { createRun, setRunMeta, getAoiStatus, getForecast, getGeoJson, getImprovements, getRun, getStaticLayers, refreshImprovements } from "../api/client";
+import PrepThinking from "../components/PrepThinking";
 import ImprovementsPanel from "../components/ImprovementsPanel";
 import { reportRun, takePendingCommand, type AppCommand } from "../components/Assistant";
 import DrawControl, { type DrawMode } from "../components/DrawControl";
@@ -510,7 +511,8 @@ export default function Workspace() {
         ]} />
         {running ? <Linear indeterminate /> : <div style={{ height: 4 }} />}
         <div className="panel-body">
-          {!ready && <div className="stack-s"><div className="shimmer" style={{ height: 120 }} /><div className="shimmer" style={{ height: 200 }} /></div>}
+          {!ready && (status ? <PrepThinking stages={STAGES} stateOf={stageState} name={status.name} />
+            : <div className="stack-s"><div className="shimmer" style={{ height: 120 }} /><div className="shimmer" style={{ height: 200 }} /></div>)}
           {ready && st && tab === "scenario" && profileOf(status) && (
             <p className="area-profile body-s" title={`Built-up ${Math.round(100 * profileOf(status)!.built_share)}% · median slope ${profileOf(status)!.slope_p50}° · largest river catchment ${profileOf(status)!.largest_river_km2.toLocaleString("en-IN")} km² (worked out from the data; no mode)`}>
               <Icon name="travel_explore" className="sm" />{profileOf(status)!.summary}</p>

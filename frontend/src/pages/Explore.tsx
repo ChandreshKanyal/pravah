@@ -201,11 +201,6 @@ export default function Explore() {
             <Field label="Area name" support="Shown in reports, e.g. the town or ward">
               <input value={draft.name} autoFocus onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder=" " />
             </Field>
-            <div className="prep-models">
-              <Icon name="auto_awesome_motion" className="sm" />
-              <span className="body-s">No mode to choose: every area gets <b>river flooding</b> and <b>street waterlogging</b>.
-                Which applies where is worked out from the terrain, rivers and built-up land.</span>
-            </div>
             <div className={`notice ${tooBig ? "error" : "info"}`}>
               <Icon name={tooBig ? "error" : "straighten"} />
               <span>{size[0].toFixed(1)} km × {size[1].toFixed(1)} km{tooBig ? ` — too large (max ${LIMIT_KM} × ${LIMIT_KM} km). Draw a smaller area.` : ` · within the ${LIMIT_KM} km limit`}</span>

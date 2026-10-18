@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, NavLink, Outlet, useLocation, useMatch } from "react-router-dom";
-import { getAoiStatus } from "./api/client";
+import { getAoiStatus, renameAoi } from "./api/client";
 import { authConfigured, signIn, signOut, useUser } from "./auth";
 import Disclaimer from "./components/Disclaimer";
 import { Icon, IconButton, Segmented, SnackbarProvider } from "./components/m3";
@@ -9,6 +9,34 @@ import Assistant from "./components/Assistant";
 import { setTheme, useTheme, type Theme } from "./theme";
 
 const names: Record<string, string> = {};
+
+/** The open area's name in the top bar; click to rename it (Enter or leaving the field saves, Esc cancels). */
+function AreaTitle({ aoiId, name, onRenamed }: { aoiId: string; name: string; onRenamed: (n: string) => void }) {
+  const [edit, setEdit] = useState<string | null>(null);
+  const [err, setErr] = useState(false);
+  const done = useRef(false);
+  const save = async () => {
+    if (done.current || edit == null) return;
+    done.current = true;
+    const n = edit.trim();
+    if (!n || n === name) { setEdit(null); return; }
+    try { onRenamed((await renameAoi(aoiId, n)).name); setEdit(null); }
+    catch { setErr(true); done.current = false; }
+  };
+  if (edit != null) return (
+    <span className="area-title editing">
+      <Icon name="location_on" className="sm" />
+      <input autoFocus value={edit} maxLength={80} aria-label="Area name" className={err ? "err" : ""}
+        onFocus={(e) => e.currentTarget.select()} onChange={(e) => { setEdit(e.target.value); setErr(false); }} onBlur={save}
+        onKeyDown={(e) => { if (e.key === "Enter") save(); if (e.key === "Escape") { done.current = true; setEdit(null); } }} />
+    </span>
+  );
+  return (
+    <button className="area-title sl" title="Rename this area" onClick={() => { done.current = false; setErr(false); setEdit(name); }}>
+      <Icon name="location_on" className="sm" />{name || "Area"}<Icon name="edit" className="sm area-edit" />
+    </button>
+  );
+}
 
 function Pill({ to, icon, label, end }: { to: string; icon: string; label: string; end?: boolean }) {
   return <NavLink end={end} to={to} className={({ isActive }) => `navpill sl ${isActive ? "active" : ""}`}><Icon name={icon} /><span className="lbl">{label}</span></NavLink>;
@@ -94,7 +122,7 @@ export default function App() {
             </Link>
             {aoiId && (
               <>
-                <span className="area-title"><Icon name="location_on" className="sm" />{name || "Area"}</span>
+                <AreaTitle aoiId={aoiId} name={name} onRenamed={(n) => { names[aoiId] = n; setName(n); }} />
                 <nav className="navpills" aria-label="Area">
                   <Pill to={runId ? `/area/${aoiId}/run/${runId}/advisory` : `/area/${aoiId}/advisory`} icon="assignment" label="Brief" />
                   <Pill end to={`/area/${aoiId}${q}`} icon="map" label="Map" />

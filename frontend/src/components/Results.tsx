@@ -108,7 +108,7 @@ export default function Results({ run, hour, onFly, previous }: { run: RunResult
 
       <div className="card outlined" style={{ padding: 0 }}>
         <Tabs value={tab} onChange={setTab} tabs={[
-          { value: "shelters", label: "Shelters" }, { value: "routes", label: "Routes", badge: run.routes.filter((r) => r.use_now_gone_soon).length || undefined },
+          { value: "shelters", label: "Shelters" }, { value: "routes", label: "Routes", badge: run.routes.slice(0, 15).filter((r) => r.use_now_gone_soon && r.passable_until_h != null && !routeClosed(r.passable_until_h, hour)).length || undefined },  // the rows tagged "use now" below, at this hour
           ...(run.drains?.length ? [{ value: "drains" as const, label: "Drains" }] : [{ value: "bridges" as const, label: "Bridges" }]),
           { value: "buildings", label: "Buildings" },
         ]} />

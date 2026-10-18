@@ -144,6 +144,24 @@ def archive_aoi(aoi_id: str, body: Archive, user: dict = Depends(require("analys
     return {"aoi_id": aoi_id, "archived": body.archived}
 
 
+class Rename(BaseModel):
+    name: str
+
+
+@router.put("/api/aoi/{aoi_id}/name")
+def rename_aoi(aoi_id: str, body: Rename, user: dict = Depends(require("analyst"))):
+    """Rename an area (shown in the top bar, Projects and reports)."""
+    name = " ".join(body.name.split())[:80]
+    if not name:
+        raise HTTPException(422, "Name cannot be empty")
+    if not fs.get_aoi(aoi_id):
+        raise HTTPException(404, "Unknown AOI")
+    fs.update_aoi(aoi_id, {"name": name})
+    from app.api.runs import audit
+    audit("rename", user, aoi_id=aoi_id)
+    return {"aoi_id": aoi_id, "name": name}
+
+
 def _runs(aoi_id: str) -> list[dict]:
     return [fs.decode(d.to_dict()) for d in fs.get_db().collection("runs").where("aoi_id", "==", aoi_id).limit(300).stream()]
 
