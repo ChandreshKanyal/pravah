@@ -1,6 +1,7 @@
-// Light / dark / system theme (top-bar toggle). Stored per browser in localStorage "pravah-theme"; "system" (the default)
-// follows the operating system through the prefers-color-scheme rules in styles.css. index.html applies a stored choice
-// before the first paint; this module keeps <html data-theme>, the browser chrome colour and the Google map in step.
+// Light / dark / system theme (top-bar toggle). Stored per browser in localStorage "pravah-theme"; light is the default
+// (human request 18 Oct), "system" follows the operating system through the prefers-color-scheme rules in styles.css.
+// index.html applies it before the first paint; this module keeps <html data-theme>, the browser chrome colour and the
+// Google map in step.
 import { useEffect, useState } from "react";
 
 export type Theme = "light" | "dark" | "system";
@@ -12,8 +13,8 @@ const media = typeof window !== "undefined" && window.matchMedia ? window.matchM
 function read(): Theme {
   try {
     const v = localStorage.getItem(KEY);
-    return v === "light" || v === "dark" ? v : "system";
-  } catch { return "system"; }
+    return v === "dark" || v === "system" ? v : "light";
+  } catch { return "light"; }
 }
 
 let current: Theme = read();

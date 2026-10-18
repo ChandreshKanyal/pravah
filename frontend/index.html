@@ -7,8 +7,9 @@
   <meta name="theme-color" content="#131314" media="(prefers-color-scheme: dark)" />
   <meta name="description" content="Pravah: flood and landslide decision support for district officials, built on Google Cloud and Gemini." />
   <title>Pravah</title>
-  <script>/* apply a stored light/dark choice before the first paint (src/theme.ts keeps it in sync) */
-    try { var t = localStorage.getItem("pravah-theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) { /* storage blocked */ }</script>
+  <script>/* apply the theme before the first paint: light unless dark or system was chosen (src/theme.ts keeps it in sync) */
+    var t = "light"; try { t = localStorage.getItem("pravah-theme") || "light"; } catch (e) { /* storage blocked */ }
+    if (t !== "system") document.documentElement.dataset.theme = t === "dark" ? "dark" : "light";</script>
   <link rel="icon" href="/pravah.svg" type="image/svg+xml" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />

@@ -48,7 +48,7 @@ export default function Explore() {
     if (sp.get("label")) setQ(sp.get("label")!);
   }, [sp]);
   const [areas, setAreas] = useState<AoiListItem[] | null>(null);
-  const [mapType, setMapType] = useState<MapType>("terrain");
+  const [mapType, setMapType] = useState<MapType>("hybrid");  // satellite by default (human request 18 Oct)
   const timer = useRef<number>();
   // a prepared area opens on the map with its current run shown (human request 18 Oct); a new one on the live map
   const open = (a: AoiListItem) => nav(a.latest_run_id ? `/area/${a.aoi_id}?run=${a.latest_run_id}` : `/area/${a.aoi_id}`);
