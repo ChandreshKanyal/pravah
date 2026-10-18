@@ -197,7 +197,7 @@ export default function Advisory() {
           </div>
           <div className="stack-s no-print" style={{ alignItems: "flex-end" }}>
             <Segmented label="Language" value={lang} onChange={setLang} options={[{ value: "en", label: "English" }, { value: "hi", label: "हिन्दी" }]} />
-            <div className="row" style={{ gap: 4 }}>
+            <div className="row" style={{ gap: 4 }} data-tour="adv-actions">
               <Button variant="tonal" icon="share" onClick={() => setShareOpen(true)} disabled={!cur}>Share</Button>
               <Button variant="tonal" icon="campaign" onClick={() => setAlertOpen(true)} disabled={!runId}>Public alert</Button>
               <Button variant="text" icon="print" onClick={() => window.print()} disabled={!adv}>Print</Button>

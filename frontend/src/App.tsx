@@ -6,6 +6,7 @@ import Disclaimer from "./components/Disclaimer";
 import { Icon, IconButton, Segmented, SnackbarProvider } from "./components/m3";
 import { MapProvider } from "./components/MapCanvas";
 import Assistant from "./components/Assistant";
+import Tour, { startTour } from "./components/Tour";
 import { setTheme, useTheme, type Theme } from "./theme";
 
 const names: Record<string, string> = {};
@@ -134,6 +135,7 @@ export default function App() {
             <span className="spacer" />
             <Pill to="/projects" icon="folder_open" label="Projects" />
             <span className="wide-only"><Pill to="/methods" icon="menu_book" label="Methods" /></span>
+            <span data-tour="help"><IconButton icon="help" label="Take the guided tour" onClick={startTour} /></span>
             <ThemeMenu />
             <Account />
           </header>
@@ -141,6 +143,7 @@ export default function App() {
           <main id="main" className="page"><Outlet /></main>
         </div>
         <Assistant />
+        <Tour aoiId={aoiId} runId={runId} />
       </SnackbarProvider>
     </MapProvider>
   );

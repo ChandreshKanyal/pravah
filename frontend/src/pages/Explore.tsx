@@ -135,13 +135,13 @@ export default function Explore() {
           <div className="intro">
             <h1>Plan for floods</h1>
             <p>Draw an area in India to see flood depth, who is exposed and where people can go, hour by hour.</p>
-            <div className="row">
+            <div className="row" data-tour="draw">
               <Button icon={drawing ? "close" : "crop_free"} onClick={toggleDraw}>{drawing ? "Cancel drawing" : "Draw an area"}</Button>
               <Button variant="text" onClick={() => nav("/methods")}>How it works</Button>
             </div>
           </div>
 
-          <div className="group">
+          <div className="group" data-tour="demos">
             <div className="group-label">Try a prepared area</div>
             {DEMOS.map((d) => {
               const a = demoArea(d);

@@ -897,3 +897,17 @@ button.area-title:hover .area-edit, button.area-title:focus-visible .area-edit {
 .choice-card .cc-foot { margin: 0; }
 .v3d-choice { position: absolute; z-index: 8; top: 12px; right: 12px; max-height: calc(100% - 120px); width: min(380px, calc(100% - 24px)); }
 @media (max-width: 720px) { .v3d-choice { top: auto; bottom: 90px; max-height: 55%; } }
+
+/* guided tour (components/Tour.tsx): the page dims around the highlighted part; clicks wait for the card */
+.tour { position: fixed; inset: 0; z-index: 900; }
+.tour-dim { position: absolute; inset: 0; background: rgba(0, 0, 0, .45); }
+.tour-spot { position: fixed; border-radius: 12px; box-shadow: 0 0 0 9999px rgba(0, 0, 0, .45), 0 0 0 2px var(--primary);
+  transition: left var(--d-short) var(--ease), top var(--d-short) var(--ease), width var(--d-short) var(--ease), height var(--d-short) var(--ease);
+  pointer-events: none; }
+.tour-card { position: fixed; padding: 16px 16px 12px; display: flex; flex-direction: column; gap: 8px; background: var(--surface-container-lowest);
+  border-radius: 16px; animation: tour-in var(--d-short) var(--ease); }
+.tour-card p { margin: 0; color: var(--on-surface-variant); }
+.tour-top { display: flex; align-items: center; justify-content: space-between; min-height: 32px; }
+.tour-actions { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; }
+@keyframes tour-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .tour-spot { transition: none; } .tour-card { animation: none; } }

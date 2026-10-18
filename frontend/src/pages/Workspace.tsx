@@ -617,7 +617,7 @@ export default function Workspace() {
               <button className="btn btn-text small sl" onClick={() => setShownRun(null)}>Live</button>
             </span>
           ) : (
-            <span className="fc-chip scen-chip" title="Roads, water and routes are this simulated storm, not live conditions">
+            <span className="fc-chip scen-chip" data-tour="scen-chip" title="Roads, water and routes are this simulated storm, not live conditions">
               <Icon name="science" className="sm" />What-if: {scenLabel(run!)}
               <button className="btn btn-text small sl" onClick={() => setShownRun(null)} title="Back to live roads">Live</button>
             </span>
