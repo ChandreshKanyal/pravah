@@ -495,6 +495,8 @@ def _prepare(aoi: AOI, force: frozenset[str]) -> dict:
         else:
             status["buildings"] = "ready"
         F["osm"] = ex.submit(run, "osm", _osm, aoi_id, grid, warnings)
+        from app.api import view3d
+        view3d.start_imagery(aoi_id)  # the 3D view's satellite picture (30 s-3 min), in the background: not a step
         merit = ex.submit(_merit, grid) if todo("hydrology") else None
         fab = ex.submit(ees.fetch_fabdem, grid) if todo("urban") else None
         tables = after(["osm", "terrain"], lambda: _road_tables(aoi_id, grid)) if todo("network") else None

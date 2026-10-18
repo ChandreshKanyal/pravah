@@ -74,6 +74,7 @@ export default function View3D() {
   const [frames, setFrames] = useState<Frames | null>(null);
   const [busy, setBusy] = useState("");
   const [imagery, setImagery] = useState(false);
+  const [tex, setTex] = useState<{ img: HTMLImageElement; sat: boolean } | null>(null);  // ground picture for the terrain
   const [color, setColor] = useState<ColorMode>("depth");
   const [style, setStyle] = useState<WaterStyle>("real");
   const [lines, setLines] = useState(true);
@@ -121,6 +122,27 @@ export default function View3D() {
     fetch(apiUrl(`/api/runs/${run.run_id}/3d/overlays.json`)).then((r) => (r.ok ? r.json() : Promise.reject())).then(setOvl).catch(() => setOvl(null));
   }, [run]);
 
+  // ground pictures, asked for as the page opens (not after the terrain arrives): shaded terrain first, then the
+  // satellite picture (made at preparation; 202 while Earth Engine still makes it), which the shading never replaces
+  useEffect(() => {
+    let alive = true, sat = false;
+    setTex(null);
+    loadImage(apiUrl(`/api/aoi/${aoiId}/3d/base.jpg`)).then((img) => alive && !sat && setTex({ img, sat: false })).catch(() => undefined);
+    (async () => {
+      for (let i = 0; i < 60 && alive; i++) {
+        const r = await fetch(apiUrl(`/api/aoi/${aoiId}/3d/imagery.jpg`)).catch(() => null);
+        if (r?.status === 200) {
+          const img = await loadImage(URL.createObjectURL(await r.blob())).catch(() => null);
+          if (img && alive) { sat = true; setTex({ img, sat: true }); setImagery(true); }
+          return;
+        }
+        if (!r || r.status !== 202) return;
+        await new Promise((ok) => setTimeout(ok, 3000));
+      }
+    })();
+    return () => { alive = false; };
+  }, [aoiId]);
+
   // scene
   useEffect(() => {
     if (!host.current || !meta || !dem || sc.current) return;
@@ -133,26 +155,11 @@ export default function View3D() {
     s.flyTo(0, 0, span_ * 0.85, 48, -20, true);
     s.onTime = (t) => setTimeS(t);
     s.rate = RATES[rate];
-    let alive = true, haveImagery = false;
-    // shaded terrain first; it must never replace the satellite picture if that arrives sooner
-    loadImage(apiUrl(`/api/aoi/${aoiId}/3d/base.jpg`)).then((img) => alive && !haveImagery && !s.isDisposed && s.setTexture(img)).catch(() => undefined);
-    // satellite picture: made once per area (202 while Earth Engine prepares it)
-    (async () => {
-      for (let i = 0; i < 20 && alive; i++) {
-        const r = await fetch(apiUrl(`/api/aoi/${aoiId}/3d/imagery.jpg`)).catch(() => null);
-        if (r?.status === 200) {
-          const url = URL.createObjectURL(await r.blob());
-          const img = await loadImage(url).catch(() => null);
-          if (img && alive) { haveImagery = true; s.setTexture(img); setImagery(true); }
-          return;
-        }
-        if (!r || r.status !== 202) return;
-        await new Promise((ok) => setTimeout(ok, 4000));
-      }
-    })();
-    return () => { alive = false; s.dispose(); sc.current = null; };
+    if (tex) s.setTexture(tex.img);
+    return () => { s.dispose(); sc.current = null; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [meta, dem]);
+  useEffect(() => { if (tex && sc.current && !sc.current.isDisposed) sc.current.setTexture(tex.img); }, [tex]);
 
   useEffect(() => { sc.current?.setBuildings(blds, risk); sc.current?.setBuildingsVisible(showB); }, [blds, risk, meta, dem]);  // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { sc.current?.setBuildingsVisible(showB); }, [showB]);

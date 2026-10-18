@@ -134,11 +134,28 @@ def base_texture(aoi_id: str):
     return Response(_jpeg(rgb), media_type="image/jpeg", headers={"Cache-Control": "public, max-age=3600"})
 
 
+def make_imagery(aoi_id: str, grid=None) -> None:
+    """The 3D view's Sentinel-2 picture (~30 s of Earth Engine). Area preparation makes it alongside its downloads, so
+    the first 3D visit does not wait for it."""
+    from app.services import earth_engine as ees
+    rgb = ees.s2_rgb(grid or storage.load_grid(aoi_id), TEX_K)
+    storage.put_bytes(aoi_id, S2_KEY, _jpeg(rgb, 88), "image/jpeg")
+
+
+def start_imagery(aoi_id: str) -> None:
+    """Make the picture in the background unless it exists or is being made (the 3D page answers 202 meanwhile)."""
+    if storage.exists(aoi_id, S2_KEY):
+        return
+    with _tex_guard:  # one maker per area: preparation and the page can ask together
+        if aoi_id in _s2_busy:
+            return
+        _s2_busy.add(aoi_id)
+    threading.Thread(target=_make_s2, args=(aoi_id,), daemon=True).start()
+
+
 def _make_s2(aoi_id: str) -> None:
     try:
-        from app.services import earth_engine as ees
-        rgb = ees.s2_rgb(storage.load_grid(aoi_id), TEX_K)
-        storage.put_bytes(aoi_id, S2_KEY, _jpeg(rgb, 88), "image/jpeg")
+        make_imagery(aoi_id)
     finally:
         _s2_busy.discard(aoi_id)
 
@@ -151,9 +168,7 @@ def imagery(aoi_id: str):
         return Response(storage.get_bytes(aoi_id, S2_KEY), media_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
     except NotFound:
         pass
-    if aoi_id not in _s2_busy:
-        _s2_busy.add(aoi_id)
-        threading.Thread(target=_make_s2, args=(aoi_id,), daemon=True).start()
+    start_imagery(aoi_id)
     return Response(status_code=202, headers={"Retry-After": "5"})
 
 
