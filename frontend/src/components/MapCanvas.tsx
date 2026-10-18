@@ -122,7 +122,7 @@ export function StreetViewWatch({ onChange, closeT }: { onChange: (on: boolean) 
   useEffect(() => {
     if (!map) return;
     const sv = map.getStreetView();
-    sv.setOptions({ enableCloseButton: true, addressControl: true, fullscreenControl: false, panControl: true, zoomControl: true });
+    sv.setOptions({ enableCloseButton: false, addressControl: false, fullscreenControl: false, panControl: true, zoomControl: true });
     const l = sv.addListener("visible_changed", () => onChange(!!sv.getVisible()));
     return () => l.remove();
   }, [map, onChange]);
