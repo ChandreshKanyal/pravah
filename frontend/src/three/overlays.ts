@@ -109,7 +109,7 @@ export class OverlayLayer {
       const { pts } = this.drape(rt.p, 5);
       if (pts.length < 2) continue;
       const pos = pts.flat();
-      const w = 4 + Math.min(6, Math.sqrt(rt.people || 1));
+      const w = 2 + Math.min(3, Math.sqrt(rt.people || 1) / 4);  // 2-5 px by the people on it
       const mk = (width: number, color: number, under = false) => {
         const g = new LineGeometry(); g.setPositions(pos);
         // opaque: a transparent wide line draws twice where its segments meet and looks beaded
@@ -118,7 +118,7 @@ export class OverlayLayer {
         l.renderOrder = under ? 4 : 5;  // the casing writes no depth, so the line on top never fights it
         return l;
       };
-      const casing = mk(w + 4, 0x0b3d36, true), line = mk(w, ROUTE);
+      const casing = mk(w + 2, 0x0b3d36, true), line = mk(w, ROUTE);
       this.routesG.add(casing, line);
       this.routes.push({ line, casing, until: rt.until });
     }
