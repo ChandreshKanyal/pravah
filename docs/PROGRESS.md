@@ -21,6 +21,12 @@ All work is **committed** on `main` (no git remote is configured, so nothing is 
   no longer pays ~20 s of compiling. The cache is not baked into the image (Cloud Build's CPU may differ from Cloud Run's).
   Why steps are ~1 s: the explicit solver's stability limit (CFL 0.45) set by the fastest water (the river), not detail
   wanted; future options: local-inertial solver, river left to HAND, local time stepping (not for the deadline).
+- **Fixes in the brief (18 Oct ~15:40 IST, human request; breaks the feature freeze by agreement; needs a backend deploy).**
+  `area_extra` reads the area's `improvements.json`; `build_facts` adds the top 8 fixes as `FX1..` (FX so they never
+  clash with run ids); the prompt asks for 2-4 of them as seasonal/structural actions; the rules brief uses the top 3
+  fixes instead of the drains when the list exists. Checked locally on Kurla's showcase run (read-only, nothing saved):
+  3 fixes became seasonal actions, none dropped by the validator. After deploying, re-draft the five showcase briefs
+  (`POST /api/runs/{run}/advisory?refresh=true`; a new version, history kept).
 - **Showcase areas ready (18 Oct ~15:15 IST; checklist item 3 done; website change `Explore.tsx` committed, NOT yet
   deployed).** Five areas, each with a titled run made current, flow model, Gemini brief, 3D pictures/frames, shelter and
   route explanations and the fixes list cached: Rudraprayag cloudburst, Chennai Adyar-Velachery live forecast (new area),
