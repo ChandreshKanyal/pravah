@@ -21,6 +21,32 @@ All work is **committed** on `main` (no git remote is configured, so nothing is 
   no longer pays ~20 s of compiling. The cache is not baked into the image (Cloud Build's CPU may differ from Cloud Run's).
   Why steps are ~1 s: the explicit solver's stability limit (CFL 0.45) set by the fastest water (the river), not detail
   wanted; future options: local-inertial solver, river left to HAND, local time stepping (not for the deadline).
+- **HAND-OFF, 18 Oct 14:35 IST (read first). Feature freeze: no new features (human decision). Everything below up to
+  `6190df1` is committed AND deployed (backend and website, ~14:16 IST); git tree clean apart from the other agent's .pptx.**
+  Competition (AI Builder Cup 2026, JAPAC, hack2skill): **prototype submission closes Sun 18 Oct 23:59 IST**; prototype
+  evaluation **19 Oct - 6 Nov** (judges unknown, timing unknown, "must remain functional throughout", no retries); top 50
+  on 7 Nov. Submission needs: pitch deck in the prescribed template, 3-4 min video showing the working app, deployed
+  link, accessible GitHub repo, brief description saying how Firebase, Firestore, Cloud Run and Gemini are used.
+  Tonight's checklist:
+  1. DONE: deploy backend + website.
+  2. **GitHub: there is NO git remote yet.** Human creates a public repo on github.com and sends the URL; then
+     `git remote add origin <url> && git push -u origin main` (never stage the root .pptx files). History scanned 18 Oct:
+     the only key is the Maps browser key in docs/CONFIG.md, verified referrer-restricted (server APIs refuse it) and
+     already public in the website bundle; the server key lives only in Secret Manager. Safe to publish.
+  3. Showcase areas (awaiting human's pick; suggested Rudraprayag, Kurla, Jalpaiguri `41404a01b80a`, Ghazipur
+     `b37bd41e21bc`, Puri `0b23a1a9f059`; and whether to add them to Explore's "Try a prepared area"): per area a fresh
+     run through `POST /api/run-jobs` (so the brief auto-drafts), set as current, then wait for flow model, brief, 3D
+     picture/frames, and pre-call `/explain` for used shelters and top routes; check the fixes list is ready. All cached
+     in GCS/Firestore, so any cold instance serves them.
+  4. Human: budget alert on the Cloud billing account.
+  5. Draft the brief description (Firebase Hosting + Auth-ready, Firestore, Cloud Run, Gemini on Vertex AI + ADK).
+  6. Draft the 3-4 min video script (must show working functionality).
+  7. Deck: the root .pptx files belong to another agent; give slide content as text only unless the human says otherwise.
+  Evaluation-period decisions: no min instances (8 CPU always-on ~ $13-14/day, ~$260 for 19 days of the $300 credit);
+  accept one cold start per judge visit (13-20 s to "startup complete", startup CPU boost on; flow model compiles 12-20 s
+  in the background, delaying only new runs); freeze deploys during evaluation. Sign-in stays off (anyone with the link
+  can run scenarios, rename areas and trigger Gemini; costs bounded only by the budget alert). Google AI Studio instead of
+  Vertex was considered and rejected (paid rates similar; free tier uses data for Google's products and has low limits).
 - **Field check removed (18 Oct, human decision). NOTE(spec-drift): S12 field photo verification is gone.** No photo
   upload (`/api/photos`), no Gemini photo classifier, no verification queue (`/api/aoi/{id}/verification-queue`,
   `verification.json`), no "Check in the field" on fixes, no Field check page or top-bar pill, no assistant `field`
