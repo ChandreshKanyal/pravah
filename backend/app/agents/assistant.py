@@ -52,7 +52,8 @@ bullets. End answers about risk or actions with: "Decision-support draft for off
 ACTION_KINDS = {
     "go_to_place": "move the map to a place: args {lat, lng, zoom, label} (zoom 11-16)",
     "open_area": "open a prepared area: args {aoi_id, view} with view one of map, brief, 3d, drill, field, projects",
-    "prepare_area": "prepare a new area for analysis: args {name, west, south, east, north} (box at most 10 km a side)",
+    "prepare_area": "prepare a new area for analysis: args {name, lat, lng, size_km} (box centre from find_place; size_km 3-10, "
+                    "default 8) or {name, west, south, east, north}; a box over 10 km a side is shrunk to fit",
     "run_scenario": "run a scenario in the open area: args are only the changed settings: rain_source "
                     "(forecast|worst|best|historical_extreme|observed|manual), forecast_day_index (0-9), "
                     "worst_multiplier, duration_h (1-24), river_offset_m (-1..5), manual_intensity_mm_h (with manual), "
@@ -145,6 +146,21 @@ def propose_action(tool_context: ToolContext, kind: str, label: str, args_json: 
             ScenarioParams(aoi_id=tool_context.state["aoi_id"], **args)
         except Exception as e:
             return {"error": f"invalid settings: {str(e)[:300]}"}
+    if kind == "prepare_area":  # checked here, so the button cannot fail on the size or coverage
+        from app.models.aoi import AOIRequest, bbox_size_km, build_aoi, fit_bbox
+        try:
+            if all(k in args for k in ("west", "south", "east", "north")):
+                w, s, e, n = (float(args[k]) for k in ("west", "south", "east", "north"))
+            else:  # a centre and a size
+                lat, lng, km = float(args["lat"]), float(args["lng"]), float(args.get("size_km", 8))
+                w, s, e, n = fit_bbox((lng - 0.5, lat - 0.5, lng + 0.5, lat + 0.5), max(1.0, min(km, 10.0)) * 0.98)
+            bbox = fit_bbox((w, s, e, n))
+            build_aoi(AOIRequest(bbox=bbox, name=str(args.get("name") or label)))
+        except (KeyError, TypeError, ValueError) as ex:
+            return {"error": f"invalid area: {str(ex)[:300]}"}
+        wkm, hkm = bbox_size_km(bbox)
+        args = {"name": str(args.get("name") or label)[:80], "west": bbox[0], "south": bbox[1], "east": bbox[2], "north": bbox[3]}
+        label = f"{label.split('(')[0].strip()} ({wkm:.0f} x {hkm:.0f} km)"
     props = list(tool_context.state.get("proposals") or [])
     props.append({"kind": kind, "label": label[:80], "args": args})
     tool_context.state["proposals"] = props[-4:]

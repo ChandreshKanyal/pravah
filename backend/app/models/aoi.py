@@ -42,6 +42,21 @@ def bbox_size_km(bbox: tuple[float, float, float, float]) -> tuple[float, float]
     return (e - w) * 111.32 * math.cos(lat_c), (n - s) * 110.57
 
 
+def fit_bbox(bbox: tuple[float, float, float, float], limit_km: float = MAX_KM_ALL * 0.98) -> tuple[float, float, float, float]:
+    """The box shrunk about its centre so neither side exceeds `limit_km` (a box the assistant wrote in degrees: 0.1
+    degrees of latitude is 11.1 km)."""
+    w, s, e, n = bbox
+    wkm, hkm = bbox_size_km(bbox)
+    cx, cy = (w + e) / 2, (s + n) / 2
+    if wkm > limit_km:
+        hw = (e - w) / 2 * limit_km / wkm
+        w, e = cx - hw, cx + hw
+    if hkm > limit_km:
+        hh = (n - s) / 2 * limit_km / hkm
+        s, n = cy - hh, cy + hh
+    return tuple(round(v, 5) for v in (w, s, e, n))
+
+
 def build_aoi(req: AOIRequest) -> AOI:
     w, s, e, n = req.bbox
     if not (-180 <= w < e <= 180 and -90 <= s < n <= 90):
