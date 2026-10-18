@@ -33,3 +33,5 @@ build/
 backend/cache/*.json
 cache/*.json
 *.tsbuildinfo
+# OSMnx download cache (local only)
+backend/cache/
